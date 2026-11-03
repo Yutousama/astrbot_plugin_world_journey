@@ -14,7 +14,10 @@ const PNG_B64 =
 test('时间描述词覆盖凌晨、正午、黄昏、午夜前', () => {
   assert.equal(describeTime('00:10').label, '午夜');
   assert.equal(describeTime('01:30').label, '凌晨');
+  assert.equal(describeTime('03:45').label, '黎明前');
   assert.equal(describeTime('04:45').label, '拂晓');
+  assert.equal(describeTime('05:05').label, '黎明');
+  assert.equal(describeTime('05:20').label, '破晓');
   assert.equal(describeTime('06:10').label, '晨光初现');
   assert.equal(describeTime('08:00').label, '早晨');
   assert.equal(describeTime('11:45').label, '正午');
