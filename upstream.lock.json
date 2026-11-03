@@ -1,12 +1,12 @@
 {
   "package": "coopani-world-journey",
   "version": "0.5.26",
-  "sha256": "b29d0657fdf32e0181b108df77524fe64d5fc120d92bc2e7bbec4696f1f924ef",
+  "sha256": "ef9d58254583fbe7f5ae3372a9a949c1b9dfd8d3c600b9d754194bafe04b187b",
   "fileCount": 36,
   "files": {
     "CHANGELOG.md": "4e00ae0bee34e5857f5eef60acf0579083c4d80ff959239b37780f4c19f6394d",
     "ENV_PROMPT.md": "bf2f476a7ac40bbdb7fb886c49480cf85c6291c0cd4650d222f3f13648ebcb35",
-    "README.md": "f6bbc39ec1a92c62d0808aac05267b294217976bd0c9bfa0a74ecb49c60f55b2",
+    "README.md": "ad45eed2bfd1177be11b2e8e12208a036e853d11fbb6c10c95206f41ac6899fc",
     "assets/icon.png": "61b1e02f52da71f28e404c0c8b51e926021cb115d5881af11bd17cacdc230abe",
     "describe.json": "c2ba7fd18e8c2649fa3b8d4d7469a7dc43236998015c4137c916f572490f7f0e",
     "dist/webui.css": "2f2614e64fa766dcde0eff51229d6c939ba0607a80128310366f725d1b87e310",
@@ -30,7 +30,7 @@
     "src/music-peer.ts": "69722ae3b9982dcfc978bccda0600a5dbad2280ac4bd0b81f064d0a184cc6731",
     "src/pet-vocab.ts": "bc5bdeb9acaf1fa648c2556e3b9663fc380de0113bf6d5652e68029135f3da25",
     "src/photo-book.ts": "e5db4425284a569566ed18b13eb1ac0e7fad59e79ab67d087d36e7530b7f4bb1",
-    "src/photo.ts": "a2c21d95248072daa813c7b013af63fc9235b49a4012c28cabcb7b6318c2c4d0",
+    "src/photo.ts": "3aecd41ee22c61f2e2b49602506d851447a997aac2c7ec2bc836dc31934c9791",
     "src/plan/dayplan.ts": "e7d1fba73d4fc577ff2fbd05cb4502b75e8bcef068dbdfda3f97a1a66e21b3c7",
     "src/plan/holidays.ts": "04c6e8ac2f7a6bb5908d2bff379739d7be1d4a84df13fce2965f99dd89944c6f",
     "src/plan/journey.ts": "8ccf5efd395798a41aeda503a2ade1aac67a047d37b036b9a3e3964ef4ae79b4",
@@ -41,5 +41,5 @@
     "src/ui.ts": "b0032e6fb42c8d571e693da674fd12f689ad423aaf03ca49fef198b23aead2e7",
     "src/world.ts": "6154a2887665cdc61474a3e589b341aa0ab2db669e40a2dc4e3a91b835b1bf5b"
   },
-  "recordedAt": "2026-11-03T12:42:45.706Z"
+  "recordedAt": "2026-11-03T17:09:35.117Z"
 }
