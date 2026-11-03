@@ -19,7 +19,7 @@
   "scripts": {
     "build": "node scripts/build-engine.mjs",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "tsx --test test/upstream.test.ts test/host.test.ts test/bridge.test.ts test/config.test.ts test/prompt.test.ts test/server.test.ts test/sim.test.ts test/selfie.test.ts",
+    "test": "tsx --test test/upstream.test.ts test/host.test.ts test/bridge.test.ts test/config.test.ts test/prompt.test.ts test/server.test.ts test/sim.test.ts test/selfie.test.ts test/photo-proxy.test.ts",
     "check": "npm run typecheck && npm test && npm run upstream:check",
     "upstream:check": "node scripts/upstream-check.mjs",
     "upstream:accept": "node scripts/upstream-check.mjs --accept",

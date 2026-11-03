@@ -44,9 +44,12 @@ plugin/         AstrBot Python 插件
   Python 从 `/media/<file>` 取图。
 - 配置：Python 写 `engine-config.json`（`{engine:...,wrapper:{offline}}`），sidecar 每请求检查 mtime
   并合并到 raw 的活配置对象。
-- 自拍：`selfie.ts` 在 sidecar 进程内包一层 `fetch`，只拦截 `POST .../images/generations`：
-  把空镜提示词换成自拍模板，用 `selfie_reference` 走 `/images/edits` 或带 `image_url` 的
-  generations，再把结果包成上游认识的 `{data:[...]}`。关闭 `selfie_enabled` 时完全不介入。
+- 生图代理：`selfie.ts` 在 sidecar 进程内包一层 `fetch`，只拦截 `POST .../images/generations`：
+  - **模型降级**：`image_model` 是列表，Python 写成 `imageModels`，代理按顺序换 `model` 重发，
+    全部失败才把错误交回上游；尺寸/字段不兼容的 400 不换模型，留给上游自己的兼容阶梯。
+  - **自拍**：把空镜提示词换成自拍模板，用 `selfie_reference` 走 `/images/edits` 或带
+    `image_url` 的 generations，再把结果包成上游认识的 `{data:[...]}`。
+  - 自拍关闭且没配模型列表时完全不介入；关闭自拍、只配模型列表时只做降级。
 
 ## 生命周期
 

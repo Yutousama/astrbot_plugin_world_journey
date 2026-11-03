@@ -9,7 +9,7 @@
 raw/          上游 coopani-world-journey 源码（只读基线，当前 0.5.26）
 adapter/      TypeScript 套壳：宿主、配置、事件、媒体、提示词、HTTP、模拟
 scripts/      构建、部署、npm 源码更新、校验
-test/         23 项测试
+test/         28 项测试
 docs/         架构与上游更新文档
 plugin/       本地构建/联调目录（.gitignore 排除，不提交到本仓库）
 ```
@@ -52,7 +52,7 @@ git status
 ## 开发
 
 ```bash
-npm run check          # typecheck + 23 项测试 + upstream hash/契约
+npm run check          # typecheck + 28 项测试 + upstream hash/契约
 npm run sim -- --days 7 --speed 24 --seed 42 --data ./data/sim --offline
 npm run status -- --data ./data/sim --offline
 npm run prompt -- --data ./data/sim --offline

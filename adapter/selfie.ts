@@ -1,15 +1,16 @@
 /**
- * 自拍生图套壳。
+ * 生图代理（自拍套壳 + 模型名降级）。
  *
- * 上游 `photo.ts` 明确只拍空镜：提示词里写「画面里没有人物」，请求走
- * `/images/generations` 的纯文生图。这里在 AstrBot 侧套一层 fetch 代理：
+ * 上游 `photo.ts` 只认**一个**模型 id，而且它属于只读基线，套壳不能改。
+ * 所以这里在 AstrBot 侧套一层 fetch 代理，拦上游的 `POST /images/generations`：
  *
  *   上游请求 /images/generations
- *      → 换掉提示词（自拍 + 参考图身份约束）
- *      → 用参考图走 /images/edits（或配置成带 image_url 的 generations）
+ *      → 配置了多个模型名时，按顺序逐个重发：前一个报错就换下一个
+ *      → 自拍开启时，先把空镜提示词换成自拍提示词，再走参考图接口
  *      → 把结果包成上游认识的 {data:[{b64_json|url}]}
  *
- * 不改 raw；关闭 selfie_enabled 时完全不介入。
+ * 只有**所有**模型都失败，才把失败回给上游（上游再照常写日志/报错）。
+ * 关闭自拍、也没配模型列表时完全不介入。
  */
 import { readFile } from 'node:fs/promises';
 import { extname } from 'node:path';
@@ -19,7 +20,11 @@ export interface SelfieOptions {
   readonly references: readonly string[];
   readonly api: string;
   readonly key: string;
-  readonly model: string;
+  /**
+   * 模型 id。可以是**按优先顺序排的列表**：前一个报错就换下一个，全都失败才抛错。
+   * 自拍模型留空时，桥接层会把「生图模型名」的整个列表传进来。
+   */
+  readonly model: string | readonly string[];
   readonly mode: 'edit' | 'generation' | 'native';
   readonly nativeUrl?: string;
   readonly size: string;
@@ -31,6 +36,31 @@ export interface SelfieOptions {
 export interface SelfieLogger {
   info(message: string): void;
   warn(message: string): void;
+}
+
+/** 代理要做的两件事；`selfie` 为空 = 只做模型降级。 */
+export interface PhotoProxyOptions {
+  /** 生图模型名列表，按顺序降级。空 = 不介入普通空镜请求。 */
+  readonly models: readonly string[];
+  /** 自拍套壳；`null` = 关闭。 */
+  readonly selfie: SelfieOptions | null;
+}
+
+export interface PhotoProxy {
+  readonly uninstall: () => void;
+  /** 装代理之前的 fetch —— 主动汇报自己发请求时用它，免得被自己的代理再拦一次。 */
+  readonly fetch: typeof fetch;
+}
+
+interface SelfieImage {
+  b64_json?: string;
+  url?: string;
+}
+
+interface ReferenceImage {
+  bytes: Uint8Array;
+  mime: string;
+  name: string;
 }
 
 const DEFAULT_PROMPT = [
@@ -60,13 +90,27 @@ export function buildSelfiePrompt(original: string, opts: Pick<SelfieOptions, 's
     .trim();
 }
 
-export function installSelfieProxy(
-  opts: SelfieOptions,
+/**
+ * 安装生图代理。
+ *
+ * 普通空镜：把上游请求体里的 `model` 换成列表中的下一个重发，成功就原样返回；
+ * 自拍：每个候选模型都走一遍参考图接口，成功就包成上游认识的结构。
+ *
+ * 什么时候**不**降级：
+ * - 401/403：密钥/权限问题，换模型不会好，保留原响应；
+ * - 400 且错误点名 size / image_size / response_format / watermark：这是请求形状
+ *   不兼容，上游有自己的换字段重试阶梯，抢在它前面换模型会把阶梯弄丢。
+ */
+export function installPhotoProxy(
+  opts: PhotoProxyOptions,
   log: SelfieLogger,
   fetchImpl: typeof fetch = globalThis.fetch,
-): () => void {
-  if (!opts.enabled) return () => {};
-  if (opts.references.length === 0) {
+): PhotoProxy {
+  const models = modelListOf(opts.models);
+  const selfie = opts.selfie?.enabled === true ? opts.selfie : null;
+  // 只有自拍，或真正配了「第二个模型」时才需要拦请求；单个模型上游自己就发对了。
+  if (!selfie && models.length < 2) return { uninstall: () => {}, fetch: fetchImpl };
+  if (selfie && selfie.references.length === 0) {
     log.warn('自拍已开启，但没有参考图；照片会失败而不是退回空镜。请在插件配置里上传 selfie_reference。');
   }
   const original = fetchImpl;
@@ -75,20 +119,67 @@ export function installSelfieProxy(
     if (!isGenerationRequest(url, init)) return original(input, init);
     const body = parseJsonBody(init?.body);
     const prompt = typeof body?.prompt === 'string' ? body.prompt : '';
-    if (!prompt) return original(input, init);
-    try {
-      const result = await generateSelfie(opts, body ?? {}, prompt, original, log);
-      return jsonResponse({ data: [result] });
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      log.warn(`自拍生图失败：${message}`);
-      return jsonResponse({ error: { message } }, 502);
+    if (!body || !prompt) return original(input, init);
+
+    // 自拍模型留空时，用上游请求里的 model（= 生图模型名的第一个）兜底。
+    const selfieModels = selfie ? modelListOf(selfie.model) : [];
+    const candidates = selfie
+      ? (selfieModels.length ? selfieModels : [stringOf(body.model).trim() || 'gpt-image-1'])
+      : models;
+    if (candidates.length === 0) return original(input, init);
+
+    let reference: ReferenceImage | null = null;
+    if (selfie) {
+      try {
+        reference = await loadSelfieReference(selfie, original);
+      } catch (e) {
+        const message = errText(e);
+        log.warn(`自拍生图失败：${message}`);
+        return jsonResponse({ error: { message } }, 502);
+      }
     }
+
+    const failures: string[] = [];
+    for (const model of candidates) {
+      try {
+        if (selfie) {
+          const result = await generateSelfieWithModel(selfie, model, body, prompt, original, log, reference!);
+          return jsonResponse({ data: [result] });
+        }
+        const res = await replayWithModel(original, url, init ?? {}, body, model);
+        if (res.ok) return res;
+        const detail = await peekError(res);
+        if (shouldKeepResponse(res.status, detail)) return res;
+        failures.push(`${model}：HTTP ${res.status}${detail ? `：${detail}` : ''}`);
+      } catch (e) {
+        const why = errText(e);
+        failures.push(`${model}：${why}`);
+        // 连不上/超时不是模型的问题，换下一个也是同一个结果；交回上游按原样报错。
+        if (!selfie) throw e;
+      }
+    }
+    const message = candidates.length > 1
+      ? `所有生图模型都失败了（${failures.join('；')}）`
+      : failures[0] ?? '生图失败';
+    log.warn(`生图失败：${message}`);
+    return jsonResponse({ error: { message } }, 502);
   };
   globalThis.fetch = wrapper as typeof fetch;
-  return () => {
-    if (globalThis.fetch === wrapper) globalThis.fetch = original;
+  return {
+    fetch: original,
+    uninstall: () => {
+      if (globalThis.fetch === wrapper) globalThis.fetch = original;
+    },
   };
+}
+
+/** 兼容旧入口：只装自拍套壳，不做普通空镜的模型降级。 */
+export function installSelfieProxy(
+  opts: SelfieOptions,
+  log: SelfieLogger,
+  fetchImpl: typeof fetch = globalThis.fetch,
+): () => void {
+  return installPhotoProxy({ models: [], selfie: opts }, log, fetchImpl).uninstall;
 }
 
 /** 给主动汇报生成一张自拍，返回字节；不经过上游 photo 事件。 */
@@ -98,7 +189,26 @@ export async function generateSelfieBytes(
   fetchImpl: typeof fetch = globalThis.fetch,
   log: SelfieLogger = { info: () => {}, warn: () => {} },
 ): Promise<{ bytes: Uint8Array; mime: string }> {
-  const result = await generateSelfie(opts, {}, prompt, fetchImpl, log);
+  const reference = await loadSelfieReference(opts, fetchImpl);
+  const models = modelListOf(opts.model);
+  const candidates = models.length ? models : ['gpt-image-1'];
+  const failures: string[] = [];
+  let result: SelfieImage | null = null;
+  for (const model of candidates) {
+    try {
+      result = await generateSelfieWithModel(opts, model, {}, prompt, fetchImpl, log, reference);
+      break;
+    } catch (e) {
+      const why = errText(e);
+      failures.push(candidates.length > 1 ? `${model}：${why}` : why);
+      log.warn(`自拍模型 ${model} 失败：${why}`);
+    }
+  }
+  if (!result) {
+    throw new Error(candidates.length > 1
+      ? `自拍所有模型都失败了（${failures.join('；')}）`
+      : failures[0] ?? '自拍失败');
+  }
   if (result.b64_json) {
     const bytes = new Uint8Array(Buffer.from(result.b64_json, 'base64'));
     const mime = sniffImage(bytes);
@@ -115,30 +225,29 @@ export async function generateSelfieBytes(
   throw new Error('自拍接口没有返回图片');
 }
 
-async function generateSelfie(
+/** 用一个模型生成一张自拍。失败会抛错，由调用方决定要不要换下一个模型。 */
+async function generateSelfieWithModel(
   opts: SelfieOptions,
+  model: string,
   upstreamBody: Record<string, unknown>,
   originalPrompt: string,
   fetchImpl: typeof fetch,
   log: SelfieLogger,
-): Promise<{ b64_json?: string; url?: string }> {
+  reference: ReferenceImage,
+): Promise<SelfieImage> {
   const api = opts.api.trim().replace(/\/+$/, '');
   if (!api) throw new Error('自拍生图接口没填（selfie_api / image_api）');
-  const references = opts.references.filter(Boolean);
-  if (!references.length) throw new Error('没有参考图：请在插件配置里上传 selfie_reference');
-  const first = await loadReference(references[0]!, fetchImpl);
   const prompt = buildSelfiePrompt(originalPrompt, opts);
   const size = opts.size.trim() || stringOf(upstreamBody.size) || '1024x1024';
-  const model = opts.model.trim() || stringOf(upstreamBody.model) || 'gpt-image-1';
   const headers: Record<string, string> = {};
   if (opts.key.trim()) headers.authorization = `Bearer ${opts.key.trim()}`;
 
   if (opts.mode === 'native') {
-    return await generateNative(opts, api, model, size, prompt, first, headers, fetchImpl, log);
+    return await generateNative(opts, api, model, size, prompt, reference, headers, fetchImpl, log);
   }
 
   if (opts.mode === 'generation') {
-    const dataUrl = `data:${first.mime};base64,${Buffer.from(first.bytes).toString('base64')}`;
+    const dataUrl = `data:${reference.mime};base64,${Buffer.from(reference.bytes).toString('base64')}`;
     const payload: Record<string, unknown> = {
       model,
       prompt,
@@ -146,7 +255,7 @@ async function generateSelfie(
       size,
       response_format: 'b64_json',
       [opts.imageField.trim() || 'image_url']: opts.imageField.trim() === 'image'
-        ? Buffer.from(first.bytes).toString('base64')
+        ? Buffer.from(reference.bytes).toString('base64')
         : dataUrl,
     };
     const res = await postJson(`${api}/images/generations`, headers, payload, fetchImpl);
@@ -162,13 +271,13 @@ async function generateSelfie(
   form.set('n', '1');
   form.set('size', size);
   form.set('response_format', 'b64_json');
-  form.set('image', new Blob([first.bytes], { type: first.mime }), first.name);
+  form.set('image', new Blob([reference.bytes], { type: reference.mime }), reference.name);
   let res = await fetchImpl(`${api}/images/edits`, { method: 'POST', headers, body: form });
   if (res.status === 400 || res.status === 415) {
     const peek = (await res.clone().text()).slice(0, 500);
     // 有些中转站不收 multipart，只认 JSON 的 data URL；再试一次。
     if (/multipart|content-type|image|图片/i.test(peek)) {
-      const dataUrl = `data:${first.mime};base64,${Buffer.from(first.bytes).toString('base64')}`;
+      const dataUrl = `data:${reference.mime};base64,${Buffer.from(reference.bytes).toString('base64')}`;
       res = await postJson(`${api}/images/edits`, headers, {
         model,
         prompt,
@@ -187,6 +296,77 @@ async function generateSelfie(
   const image = parseImagePayload(await readJson(res, log));
   logSelfieImage(image, log);
   return image;
+}
+
+async function loadSelfieReference(opts: SelfieOptions, fetchImpl: typeof fetch): Promise<ReferenceImage> {
+  const references = opts.references.filter(Boolean);
+  if (!references.length) throw new Error('没有参考图：请在插件配置里上传 selfie_reference');
+  return loadReference(references[0]!, fetchImpl);
+}
+
+/**
+ * 把原请求体里的 model 换成候选模型重发。
+ *
+ * 只重发 JSON 请求体（上游 `photo.ts` 就是这么发的）；multipart 之类的原样放过。
+ */
+function replayWithModel(
+  original: typeof fetch,
+  url: string,
+  init: RequestInit,
+  body: Record<string, unknown>,
+  model: string,
+): Promise<Response> {
+  const headers = new Headers(init.headers ?? {});
+  if (!headers.has('content-type')) headers.set('content-type', 'application/json');
+  return original(url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ ...body, model }),
+    signal: init.signal ?? undefined,
+  });
+}
+
+/** 请求形状问题（尺寸/字段名）留给上游自己的兼容阶梯，不算「模型不可用」。 */
+function shouldKeepResponse(status: number, detail: string): boolean {
+  if (status === 401 || status === 403) return true;
+  if (status === 400 && /image_size|response_format|watermark|水印|尺寸|分辨率|\bsize\b/i.test(detail)) {
+    return true;
+  }
+  return false;
+}
+
+async function peekError(res: Response): Promise<string> {
+  try {
+    const text = (await res.clone().text()).slice(0, 500);
+    try {
+      const o = JSON.parse(text) as { error?: { message?: unknown } | string; message?: unknown };
+      const msg = typeof o.error === 'object' && o.error ? o.error.message : o.message ?? o.error;
+      if (typeof msg === 'string' && msg.trim()) return msg.trim().slice(0, 200);
+    } catch {
+      // 不是 JSON，按纯文本处理。
+    }
+    return text.replace(/\s+/g, ' ').trim().slice(0, 200);
+  } catch {
+    return '';
+  }
+}
+
+function errText(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+/** 把模型配置归一成数组：兼容单个字符串，去空白、去空项、去重、保持顺序。 */
+function modelListOf(value: string | readonly string[] | null | undefined): string[] {
+  const raw = typeof value === 'string'
+    ? value.split(/[\n,，;；]+/)
+    : Array.isArray(value) ? value : [];
+  const out: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== 'string') continue;
+    const id = item.trim();
+    if (id && !out.includes(id)) out.push(id);
+  }
+  return out;
 }
 
 async function generateNative(

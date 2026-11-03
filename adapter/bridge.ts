@@ -21,7 +21,7 @@ import { EventLog, type EventRecord } from './events.ts';
 import { RawHost, SILENT_LOGGER, withHostFallback, type Logger } from './host.ts';
 import { LocalMediaStore } from './media.ts';
 import { buildPrompt, sanitizePlatformText } from './prompt.ts';
-import { generateSelfieBytes, installSelfieProxy, type SelfieOptions } from './selfie.ts';
+import { generateSelfieBytes, installPhotoProxy, type SelfieOptions } from './selfie.ts';
 
 export interface ToolResult {
   readonly text: string;
@@ -89,6 +89,8 @@ export class RawBridge {
   private rawDefaults: JourneyConfigSection | null = null;
   private watcher: ConfigWatcher | null = null;
   private uninstallSelfie: (() => void) | null = null;
+  /** 装代理之前的 fetch；主动汇报自己发请求时用它，避免被自己的代理再拦一次。 */
+  private proxyFetch: typeof fetch = globalThis.fetch;
 
   constructor(opts: RawBridgeOptions) {
     this.opts = opts;
@@ -139,6 +141,7 @@ export class RawBridge {
   async stop(): Promise<void> {
     this.uninstallSelfie?.();
     this.uninstallSelfie = null;
+    this.proxyFetch = globalThis.fetch;
     const world = this.world;
     this.world = null;
     this.raw = null;
@@ -293,12 +296,14 @@ export class RawBridge {
       .filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
       .map((ref) => this.resolveReference(ref.trim()));
     const modeRaw = stringOf(cfg.selfieMode).toLowerCase();
+    const selfieModel = stringOf(cfg.selfieModel).trim();
     return {
       enabled: true,
       references,
       api: stringOf(cfg.selfieApi) || stringOf(cfg.imageApi),
       key: stringOf(cfg.selfieKey) || stringOf(cfg.imageKey),
-      model: stringOf(cfg.selfieModel) || stringOf(cfg.imageModel),
+      // 自拍模型没单独填时，用「生图模型名」的整个列表按顺序降级。
+      model: selfieModel ? [selfieModel] : this.imageModels(),
       mode: modeRaw === 'generation' || modeRaw === 'native' ? modeRaw : 'edit',
       nativeUrl: stringOf(cfg.selfieNativeUrl),
       size: stringOf(cfg.selfieSize),
@@ -308,15 +313,33 @@ export class RawBridge {
     };
   }
 
+  /**
+   * 「生图模型名」列表。上游只认一个字符串，所以列表由套壳维护：
+   * Python 侧写成 `imageModels`，老的 `imageModel` 字符串也兼容。
+   */
+  private imageModels(): string[] {
+    const cfg = this.cfg as unknown as Record<string, unknown> | null;
+    if (!cfg) return [];
+    return modelListOf(cfg.imageModels ?? cfg.imageModel);
+  }
+
   private installSelfie(): void {
     this.uninstallSelfie?.();
     this.uninstallSelfie = null;
-    const options = this.selfieOptions();
-    if (!options) return;
-    this.uninstallSelfie = installSelfieProxy(options, this.log);
-    this.log.info(
-      `自拍套壳已启用：${options.mode} 模式，参考图 ${options.references.length} 张${options.references.length ? '' : '（缺失，照片会失败）'}`,
-    );
+    const selfie = this.selfieOptions();
+    const models = this.imageModels();
+    if (!selfie && models.length === 0) return;
+    const proxy = installPhotoProxy({ models, selfie }, this.log);
+    this.uninstallSelfie = proxy.uninstall;
+    this.proxyFetch = proxy.fetch;
+    if (selfie) {
+      this.log.info(
+        `自拍套壳已启用：${selfie.mode} 模式，参考图 ${selfie.references.length} 张${selfie.references.length ? '' : '（缺失，照片会失败）'}`,
+      );
+    }
+    if (models.length > 1) {
+      this.log.info(`生图模型降级已启用：${models.join(' → ')}`);
+    }
   }
 
   /** 主动汇报附图：用汇报文本 + 当前状态生成，不写上游 photo 事件。 */
@@ -328,7 +351,7 @@ export class RawBridge {
       ? `${reportText}\n\n此刻：${this.now()}`
       : this.now();
     try {
-      const image = await generateSelfieBytes(prompt, options, globalThis.fetch, this.log);
+      const image = await generateSelfieBytes(prompt, options, this.proxyFetch, this.log);
       return image.bytes;
     } catch (e) {
       this.log.warn(`汇报配图失败：${e instanceof Error ? e.message : String(e)}`);
@@ -369,4 +392,21 @@ function normalizeToolResult(value: unknown): ToolResult {
 
 function stringOf(value: unknown): string {
   return typeof value === 'string' ? value : '';
+}
+
+/**
+ * 把 `imageModel` 归一成数组：兼容老配置的单个字符串，去空白、去空项、去重。
+ * 数组本身可能是运行时从 `engine-config.json` 读进来的，类型上只是 `unknown`。
+ */
+function modelListOf(value: unknown): string[] {
+  const raw = typeof value === 'string'
+    ? value.split(/[\n,，;；]+/)
+    : Array.isArray(value) ? value : [];
+  const out: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== 'string') continue;
+    const id = item.trim();
+    if (id && !out.includes(id)) out.push(id);
+  }
+  return out;
 }
