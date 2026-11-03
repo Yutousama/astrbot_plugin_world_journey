@@ -5,7 +5,7 @@
   "type": "module",
   "description": "大肥鱼环游世界 AstrBot 插件：以 raw/ 上游源码为只读引擎，通过 TypeScript 套壳与回环 HTTP 接入 AstrBot。",
   "author": {
-    "name": "Mr.Q"
+    "name": "yutou"
   },
   "license": "MIT",
   "os": [

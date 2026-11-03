@@ -1,6 +1,7 @@
 # 大肥鱼环游世界 · AstrBot 套壳（开发仓库）
 
 插件发布仓库：<https://github.com/Yutousama/astrbot_plugin_world_journey_release>
+插件作者：**yutou**
 
 本仓库是**开发仓库**，维护：
 

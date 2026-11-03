@@ -11,5 +11,5 @@
 
 ## 本项目
 
-- `adapter/`、`plugin/`、`scripts/` 由本项目作者维护，MIT。
+- AstrBot 套壳、插件与脚本由 **yutou** 维护，MIT。
 - 如果上游后续提供独立 LICENSE 文件，以 `raw/LICENSE` 为准并替换本节说明。
