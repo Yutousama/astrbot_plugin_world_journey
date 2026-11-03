@@ -1,8 +1,0 @@
-name: astrbot_plugin_world_journey
-display_name: 大肥鱼环游世界
-desc: 让她真的出门旅行：自己挑目的地和交通方式，路上耗真实时间；到了按当地时间吃饭、看日出、写日记。上游引擎在 raw/，AstrBot 侧只是套壳。
-short_desc: 她会自己出门旅行，按当地时间过日子，还会写日记。
-help: /journey 看她在哪；/journey_depart 让她出发；/journey_photo 拍一张；/journey_diary 读日记；/journey_reset confirm 重置旅行；/journey_update 更新上游源码。
-version: v1.0.0
-author: Mr.Q
-astrbot_version: ">=4.16"

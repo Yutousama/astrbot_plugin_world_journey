@@ -4,18 +4,12 @@ node_modules/
 
 # Build artifacts (regenerate with `npm run build` / `npm run pack`)
 dist-astrbot/
-plugin/astrbot_plugin_world_journey/engine/
-plugin/astrbot_plugin_world_journey/raw/
-plugin/astrbot_plugin_world_journey/ENV_PROMPT.md
+plugin/
 ENV_PROMPT.md
 *.tsbuildinfo
 
 # Runtime data / local config
 data/
-plugin/astrbot_plugin_world_journey/data/
-plugin/astrbot_plugin_world_journey/files/
-plugin/astrbot_plugin_world_journey/plugin_state.json
-plugin/astrbot_plugin_world_journey/engine-config.json
 *.log
 
 # Upstream update / deploy temp
