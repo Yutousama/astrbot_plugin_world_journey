@@ -40,3 +40,5 @@ Thumbs.db
 chat-body.json
 target-sse.txt
 upd*.txt
+# Local agent instructions (keep local, do not commit)
+AGENTS.md
