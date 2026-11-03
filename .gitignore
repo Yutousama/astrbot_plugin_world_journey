@@ -1,0 +1,48 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build artifacts (regenerate with `npm run build` / `npm run pack`)
+dist-astrbot/
+plugin/astrbot_plugin_world_journey/engine/
+plugin/astrbot_plugin_world_journey/raw/
+plugin/astrbot_plugin_world_journey/ENV_PROMPT.md
+ENV_PROMPT.md
+*.tsbuildinfo
+
+# Runtime data / local config
+data/
+plugin/astrbot_plugin_world_journey/data/
+plugin/astrbot_plugin_world_journey/files/
+plugin/astrbot_plugin_world_journey/plugin_state.json
+plugin/astrbot_plugin_world_journey/engine-config.json
+*.log
+
+# Upstream update / deploy temp
+.raw.bak-*
+.raw.update-*
+*.tmp
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Secrets / local environment
+.env
+.env.*
+!.env.example
+secrets.json
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local scratch files
+chat-body.json
+target-sse.txt
+upd*.txt

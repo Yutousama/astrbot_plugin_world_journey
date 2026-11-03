@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "strict": true,
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "forceConsistentCasingInFileNames": true,
+    "noUncheckedIndexedAccess": false,
+    "baseUrl": ".",
+    "paths": {
+      "cortico/*": ["./shim/cortico/*"]
+    }
+  },
+  "include": [
+    "adapter/**/*.ts",
+    "test/**/*.ts",
+    "raw/src/**/*.ts",
+    "shim/**/*.ts"
+  ]
+}

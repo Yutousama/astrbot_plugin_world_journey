@@ -1,0 +1,315 @@
+{
+  "enabled": {
+    "description": "启用旅行引擎",
+    "type": "bool",
+    "default": true
+  },
+  "node_path": {
+    "description": "Node 可执行文件路径",
+    "type": "string",
+    "default": "",
+    "hint": "留空自动从 PATH 找 node。需要 Node 22.7+；可填 C:\\Program Files\\nodejs\\node.exe 或所在目录。"
+  },
+  "allow_upstream_update": {
+    "description": "允许从 npm 更新上游源码",
+    "type": "bool",
+    "default": true,
+    "hint": "/journey_update 会下载并替换插件目录下的 raw/；失败会自动回滚。只有管理员能执行。"
+  },
+  "upstream_package": {
+    "description": "上游 npm 包名",
+    "type": "string",
+    "default": "coopani-world-journey"
+  },
+  "upstream_registry": {
+    "description": "npm registry",
+    "type": "string",
+    "default": "https://registry.npmjs.org"
+  },
+  "upstream_source": {
+    "description": "上游源码页面（展示用）",
+    "type": "string",
+    "default": "https://www.npmjs.com/package/coopani-world-journey"
+  },
+  "home_city": {
+    "description": "从哪儿出发",
+    "type": "string",
+    "default": "",
+    "hint": "城市名：兰州、西安、成都。留空按日记最近城市或兰州兜底。"
+  },
+  "speed": {
+    "description": "时间倍速",
+    "type": "float",
+    "default": 1.0,
+    "hint": "1 = 真实速度；24 = 一天压成一小时。建议 1 或 4，别长期 240。"
+  },
+  "beat_gap": {
+    "description": "路上消息间隔",
+    "type": "float",
+    "default": 2.0,
+    "hint": "路上隔多久冒一句话（小时）。0 = 一路安静，只在出发和到站开口。"
+  },
+  "rest_days": {
+    "description": "回家后歇几天",
+    "type": "int",
+    "default": 3,
+    "hint": "0 = 当天就能再走。"
+  },
+  "ask_before_depart": {
+    "description": "出门等你点头",
+    "type": "bool",
+    "default": false,
+    "hint": "打开后她不会自己走，需要 /journey_depart。"
+  },
+  "max_trip_months": {
+    "description": "一次最多在外多久",
+    "type": "int",
+    "default": 6,
+    "hint": "到点强制回家。"
+  },
+  "with_user": {
+    "description": "叙事上让你同行",
+    "type": "bool",
+    "default": false,
+    "hint": "日记里会用「我们」；她并不知道你此刻在做什么。"
+  },
+  "money_enabled": {
+    "description": "记花销",
+    "type": "bool",
+    "default": false
+  },
+  "budget": {
+    "description": "预算",
+    "type": "int",
+    "default": 0,
+    "hint": "0 = 不限；只在记花销打开时有效。"
+  },
+  "memory_dir": {
+    "description": "日记/旅行记忆保存位置",
+    "type": "string",
+    "default": "",
+    "hint": "留空跟插件数据目录；填同步盘则日记和旅行记忆跟着人走。state.json 永远只在本机。"
+  },
+  "amap_key": {
+    "description": "高德密钥",
+    "type": "string",
+    "default": "",
+    "secret": true,
+    "hint": "留空自动用 Open-Meteo；填了天气更准，也能查真酒店名。"
+  },
+  "image_api": {
+    "description": "生图接口地址",
+    "type": "string",
+    "default": "",
+    "hint": "OpenAI 兼容根地址，填到 /v1 为止。留空不拍照。"
+  },
+  "image_key": {
+    "description": "生图密钥",
+    "type": "string",
+    "default": "",
+    "secret": true
+  },
+  "image_model": {
+    "description": "生图模型名",
+    "type": "string",
+    "default": "",
+    "hint": "各家不同；留空按 gpt-image-1 试。"
+  },
+  "image_style": {
+    "description": "画面风格",
+    "type": "string",
+    "default": "",
+    "hint": "留空真实旅行照片；none = 不指定风格。"
+  },
+  "selfie_enabled": {
+    "description": "生图必须含自拍",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后所有照片改走自拍套壳：需要参考图；没有参考图时照片会失败，而不是退回空镜。"
+  },
+  "selfie_reference": {
+    "description": "自拍参考图",
+    "type": "file",
+    "default": [],
+    "file_types": [
+      "png",
+      "jpg",
+      "jpeg",
+      "webp"
+    ],
+    "hint": "上传角色参考图（正脸清晰、无遮挡最好）。生图时作为 image-to-image 的参考，保持同一张脸。"
+  },
+  "selfie_reference_path": {
+    "description": "自拍参考图路径（可选）",
+    "type": "string",
+    "default": "",
+    "hint": "不上传文件时，可直接填绝对路径或 http(s) URL；会追加到上传文件之后。"
+  },
+  "selfie_subject": {
+    "description": "自拍主体称呼",
+    "type": "string",
+    "default": "她本人",
+    "hint": "提示词里的 {subject}，例如「她本人」「大肥鱼」。"
+  },
+  "selfie_prompt": {
+    "description": "自拍提示词模板",
+    "type": "text",
+    "default": "一张自拍照片：{subject}在画面里，手机前置镜头近距离自拍，脸和上半身清晰，眼睛看着镜头，表情自然。\n背景：{scene}\n参考图是{subject}的长相参考：保持五官、脸型、发型、肤色、年龄和气质一致；不要换脸，不要变成陌生人，不要照搬参考图的背景和衣服。\n真实手机自拍质感，自然光，轻微手持感；画面里只有{subject}一个人，没有文字、水印、边框。",
+    "hint": "默认就是内置模板；留空保存会自动回填默认模板。可用 {scene} 和 {subject}。"
+  },
+  "selfie_api": {
+    "description": "自拍接口地址",
+    "type": "string",
+    "default": "",
+    "hint": "留空用 image_api；需要支持 /images/edits（edit 模式）或带 image_url 的 /images/generations。"
+  },
+  "selfie_key": {
+    "description": "自拍接口密钥",
+    "type": "string",
+    "default": "",
+    "secret": true,
+    "hint": "留空用 image_key。"
+  },
+  "selfie_model": {
+    "description": "自拍模型名",
+    "type": "string",
+    "default": "",
+    "hint": "留空用 image_model。"
+  },
+  "selfie_mode": {
+    "description": "自拍接口模式",
+    "type": "string",
+    "default": "edit",
+    "options": [
+      "edit",
+      "generation",
+      "native"
+    ],
+    "hint": "edit = /images/edits multipart；generation = OpenAI /images/generations 带 image_url；native = 阿里百炼万相原生 multimodal-generation（data URL）。"
+  },
+  "selfie_native_url": {
+    "description": "万相原生接口地址（native 模式）",
+    "type": "string",
+    "default": "",
+    "hint": "留空从 selfie_api 的 origin 拼 /api/v1/services/aigc/multimodal-generation/generation；也可直接填完整 URL。"
+  },
+  "selfie_image_field": {
+    "description": "generation 模式的图片字段",
+    "type": "string",
+    "default": "image_url",
+    "hint": "常用 image_url；有的中转站要 image。仅 generation 模式生效。"
+  },
+  "selfie_size": {
+    "description": "自拍尺寸",
+    "type": "string",
+    "default": "1024x1024",
+    "hint": "留空跟随上游；自拍用方图或竖图更像手机。"
+  },
+  "inject_prompt": {
+    "description": "把旅行状态注入 LLM 提示词",
+    "type": "bool",
+    "default": true,
+    "hint": "关闭后模型不知道她在哪；一般保持开启。"
+  },
+  "inject_recent_reports": {
+    "description": "把最近主动汇报注入主聊天提示词",
+    "type": "bool",
+    "default": true,
+    "hint": "只注入给收到汇报的那个会话，方便用户接着刚汇报的旅行话题聊。"
+  },
+  "recent_report_count": {
+    "description": "保留最近几条汇报",
+    "type": "int",
+    "default": 5,
+    "hint": "1-20 条；太多会占 token。"
+  },
+  "proactive_enabled": {
+    "description": "主动发旅行事件",
+    "type": "bool",
+    "default": false,
+    "hint": "打开后会把 journey.depart/beat/photo 发到 event_target 或最近会话。"
+  },
+  "event_target": {
+    "description": "主动消息发给谁 / 控制目标",
+    "type": "string",
+    "default": "",
+    "_special": "umo",
+    "hint": "选一个会话；留空则用最近跟机器人说话的人/群。控制范围选 target 时，这里也是唯一允许使用插件的会话。"
+  },
+  "access_scope": {
+    "description": "控制范围",
+    "type": "string",
+    "default": "all",
+    "options": [
+      "all",
+      "target"
+    ],
+    "hint": "all = 所有好友/群组可用；target = 只有「主动消息发给谁」选中的个人/群组可用（命令、工具、提示词注入都限制）。target 但未选目标时全部拒绝。"
+  },
+  "debounce_seconds": {
+    "description": "路上事件的合并窗口",
+    "type": "int",
+    "default": 60,
+    "hint": "journey.beat/road/photo 在这段时间内只发最新一条。"
+  },
+  "report_image_mode": {
+    "description": "主动汇报配图",
+    "type": "string",
+    "default": "off",
+    "options": [
+      "off",
+      "always",
+      "probability"
+    ],
+    "hint": "always = 每条主动汇报都生成一张自拍；probability = 按概率。用 selfie 配置出图，失败只发文字。"
+  },
+  "report_image_probability": {
+    "description": "汇报配图概率",
+    "type": "float",
+    "default": 0.3,
+    "hint": "0.3 = 约 30%；只在 report_image_mode=probability 时生效。"
+  },
+  "admin_only_controls": {
+    "description": "出发/拍照/同步仅管理员",
+    "type": "bool",
+    "default": true
+  },
+  "allow_reset": {
+    "description": "允许重置旅行数据",
+    "type": "bool",
+    "default": true,
+    "hint": "重置会清空行程、事件、照片、日记和跨设备旅行记忆；配置和参考图保留。始终只有管理员能执行。"
+  },
+  "offline": {
+    "description": "离线模式",
+    "type": "bool",
+    "default": false,
+    "hint": "不查天气/酒店/生图；旅行和作息照常。"
+  },
+  "request_timeout": {
+    "description": "sidecar 请求超时（秒）",
+    "type": "int",
+    "default": 10
+  },
+  "sidecar_port": {
+    "description": "sidecar 端口",
+    "type": "int",
+    "default": 0,
+    "hint": "0 = 自动选空闲端口；调试时可固定。"
+  },
+  "extra_config": {
+    "description": "额外引擎配置（JSON）",
+    "type": "text",
+    "default": "",
+    "hint": "上游新增字段的兜底入口，例如 {\"someNewField\": 123}。会覆盖上面的映射。"
+  },
+  "log_level": {
+    "description": "日志级别",
+    "type": "string",
+    "default": "info",
+    "options": [
+      "info",
+      "debug"
+    ]
+  }
+}

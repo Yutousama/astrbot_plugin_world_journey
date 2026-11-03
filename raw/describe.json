@@ -1,0 +1,197 @@
+{
+  "tools": [
+    {
+      "name": "journey_now",
+      "description": "Where she is right now: which city, which day of the trip, what she is doing at this hour, where she is staying tonight, and - if she is on the road - how far along she is. Use it when the person asks where she is, how the trip is going, or when you need her current situation before answering something about it. It also carries, when they apply: which of today's stops have appeared in a film or series, and - for the first day or two in a new place - the thought of hearing something local.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "tags": [
+        "read"
+      ],
+      "summary": {
+        "zh": "她现在在哪、第几天、这个点该做什么；顺带今天的地方在哪些作品里出现过。",
+        "en": "Where she is, what this hour is for, and which of today's stops are in a film or series."
+      }
+    },
+    {
+      "name": "journey_diary_write",
+      "description": "Write the diary entry for a day of the trip, in her own voice. Call it once at the end of a local day, after the evening beats have happened. The entry is appended to the Markdown file for that month (one file per month, e.g. 2026-11.md), which follows the person across machines. Write what actually happened that day - the city, the road, what she ate, how the room was - not a summary of the extension.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "type": "string",
+            "description": "The entry itself, first person, a few short paragraphs. Do not add a title; the date and city are already recorded."
+          },
+          "dateKey": {
+            "type": "string",
+            "description": "Local date to write for, YYYY-MM-DD. Leave it out to use the current local day at her location."
+          }
+        },
+        "required": [
+          "body"
+        ]
+      },
+      "tags": [
+        "write"
+      ],
+      "summary": {
+        "zh": "写某一天的旅行日记，存成文件。",
+        "en": "Writes the diary entry for a day of the trip."
+      }
+    },
+    {
+      "name": "journey_diary_read",
+      "description": "Read back the diary. Three ways in, pick one: dateKey for a single day in full; month for that month's list of days with a one-line gist each; days for the most recent N (max 60). Use month when the question reaches further back than the recent window - the diary can hold hundreds of days and the recent window is short on purpose.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "days": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 60,
+            "description": "How many recent days. Default 7."
+          }
+        }
+      },
+      "tags": [
+        "read"
+      ],
+      "summary": {
+        "zh": "读最近几天的日记。",
+        "en": "Reads back recent diary entries."
+      }
+    },
+    {
+      "name": "journey_stats",
+      "description": "The long view: how many days she has been travelling in total, how many cities she has reached, how many diary entries exist, and whether the diary folder is actually writable. Use it when the person asks how long she has been away or whether her memory is syncing.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "tags": [
+        "read"
+      ],
+      "summary": {
+        "zh": "走了多少天、去过多少城、日记存在哪。",
+        "en": "Total days, cities reached, and where the diary lives."
+      }
+    },
+    {
+      "name": "journey_draw_to",
+      "description": "Record a place she now wants to go to because of something - a song that was playing, a line someone said, a photo she remembers. The place joins her wish list and weighs heavily next time she picks where to go. Use it when a song or a moment actually pulls her somewhere; do not use it to log every city she mentions.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "city": {
+            "type": "string",
+            "description": "Which place, by name - 成都 / 拉萨 / 巴黎. Must be somewhere real."
+          },
+          "why": {
+            "type": "string",
+            "description": "One short line on what pulled her there. At most 50 characters."
+          }
+        },
+        "required": [
+          "city"
+        ]
+      },
+      "tags": [
+        "write"
+      ],
+      "summary": {
+        "zh": "记下「因为某首歌想去某地」，下次挑地方时会优先。",
+        "en": "Adds a place to her wish list after something pulled her there."
+      }
+    }
+  ],
+  "events": [
+    {
+      "type": "journey.depart",
+      "description": {
+        "zh": "动身了，说明去哪、坐什么、要走多久、路上会经过哪一带。",
+        "en": "She set off: destination, mode, duration, and the region she passes through."
+      },
+      "trigger": "flush"
+    },
+    {
+      "type": "journey.arrive",
+      "description": {
+        "zh": "到站了，当地时间几点、这段走了多久、今晚住哪。",
+        "en": "She arrived: local time, how long the leg took, where she stays tonight."
+      },
+      "trigger": "flush"
+    },
+    {
+      "type": "journey.day",
+      "description": {
+        "zh": "在目的地的第 N 天早上，附当天日出日落。",
+        "en": "A new local day at the destination, with sunrise and sunset."
+      },
+      "trigger": "flush"
+    },
+    {
+      "type": "journey.beat",
+      "description": {
+        "zh": "当地的一个作息节点：起床、早饭、出门、午饭、回酒店、夜里。",
+        "en": "A local beat: waking, meals, going out, back to the hotel, the evening."
+      },
+      "trigger": "debounce"
+    },
+    {
+      "type": "journey.photo",
+      "description": {
+        "zh": "她路上拍的一张风景照：只有景，没有她自己。附在事件后面。",
+        "en": "A scenery photo she took on the road. Scenery only, never herself. Attached to the event."
+      },
+      "trigger": "debounce"
+    },
+    {
+      "type": "journey.mishap",
+      "description": {
+        "zh": "小意外：坐过站了。到站时间顺延，不用用户出手。",
+        "en": "A small mishap: she missed her stop. Arrival is pushed back; no action needed."
+      },
+      "trigger": "flush"
+    },
+    {
+      "type": "journey.work",
+      "description": {
+        "zh": "钱见底了，在当地找了份短工，或者干满收工。只在她填了预算、记账开着时才会出现。",
+        "en": "Money ran low and she took a short job nearby, or finished it. Only happens when a budget is set and spending is tracked."
+      },
+      "trigger": "flush"
+    },
+    {
+      "type": "journey.home",
+      "description": {
+        "zh": "回家了，说清是待够了自己回来的，还是到了上限被迫回的。",
+        "en": "She is home, saying whether the trip simply ended or hit the limit."
+      },
+      "trigger": "flush"
+    },
+    {
+      "type": "journey.road",
+      "description": {
+        "zh": "路上的一段：服务区、过站、餐车、甲板、夜里的车灯。",
+        "en": "A stretch on the road: a service area, a station passing by, the dining car, the deck, headlights at night."
+      },
+      "trigger": "debounce"
+    },
+    {
+      "type": "journey.trouble",
+      "description": {
+        "zh": "稀有的麻烦，她自己办不完，需要用户出手（不到千分之一）。",
+        "en": "A rare trouble she cannot handle alone and needs the person to step in (under one in a thousand)."
+      },
+      "trigger": "flush"
+    }
+  ]
+}

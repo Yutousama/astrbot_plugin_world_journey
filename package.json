@@ -1,0 +1,41 @@
+{
+  "name": "astrbot-plugin-world-journey",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "大肥鱼环游世界 AstrBot 插件：以 raw/ 上游源码为只读引擎，通过 TypeScript 套壳与回环 HTTP 接入 AstrBot。",
+  "author": {
+    "name": "Mr.Q"
+  },
+  "license": "MIT",
+  "os": [
+    "win32",
+    "darwin",
+    "linux"
+  ],
+  "engines": {
+    "node": ">=22.7"
+  },
+  "scripts": {
+    "build": "node scripts/build-engine.mjs",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "tsx --test test/upstream.test.ts test/host.test.ts test/bridge.test.ts test/config.test.ts test/prompt.test.ts test/server.test.ts test/sim.test.ts test/selfie.test.ts",
+    "check": "npm run typecheck && npm test && npm run upstream:check",
+    "upstream:check": "node scripts/upstream-check.mjs",
+    "upstream:accept": "node scripts/upstream-check.mjs --accept",
+    "upstream:update": "tsx adapter/update.ts --target raw --version latest --install",
+    "sim": "tsx adapter/cli.ts sim",
+    "status": "tsx adapter/cli.ts status",
+    "prompt": "tsx adapter/cli.ts prompt",
+    "serve": "tsx adapter/cli.ts serve",
+    "deploy": "node scripts/deploy-plugin.mjs",
+    "pack": "node scripts/pack-plugin.mjs",
+    "verify:astrbot": "node scripts/verify-astrbot.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "esbuild": "^0.28.2",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3"
+  }
+}

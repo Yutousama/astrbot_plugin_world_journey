@@ -1,0 +1,418 @@
+/*
+ * 面板样式：暖色纸张 + 一点赤陶。
+ *
+ * 配色跟扩展自己的暖色主题（journey-warm）是一路的：米白底、赭石强调、
+ * 细边线、没有阴影。**不用宿主的组件类** —— 那样一换主题就跟着漂，
+ * 而这一页的调子是「一本旅行手账」，不该漂。
+ *
+ * 暗色只改变量，不改结构。
+ */
+.jr-app {
+  --jr-bg: #faf5ee;
+  --jr-card: #fffdf8;
+  --jr-ink: #33291f;
+  --jr-soft: #8a7a68;
+  --jr-line: #e8ddcc;
+  --jr-accent: #c06a35;
+  --jr-accent-soft: #f6e7da;
+  --jr-ok: #5f7d5a;
+
+  box-sizing: border-box;
+  max-width: 880px;
+  margin: 0 auto;
+  padding: clamp(16px, 3vw, 34px);
+  border: 1px solid var(--jr-line);
+  border-radius: 18px;
+  background: var(--jr-bg);
+  color: var(--jr-ink);
+  font-family: ui-sans-serif, system-ui, "Microsoft YaHei", "PingFang SC", sans-serif;
+  line-height: 1.65;
+  font-size: 14px;
+}
+.jr-app * { box-sizing: border-box; }
+.jr-app h1, .jr-app h2, .jr-app h3, .jr-app p, .jr-app figure { margin: 0; }
+.jr-app button { font: inherit; cursor: pointer; }
+
+@media (prefers-color-scheme: dark) {
+  .jr-app {
+    --jr-bg: #171310;
+    --jr-card: #211b17;
+    --jr-ink: #f0e6da;
+    --jr-soft: #a99684;
+    --jr-line: #3a2f27;
+    --jr-accent: #e39b62;
+    --jr-accent-soft: #38291e;
+    --jr-ok: #9dbba0;
+  }
+}
+:root[style*="color-scheme: dark"] .jr-app,
+:root[style*="color-scheme:dark"] .jr-app {
+  --jr-bg: #171310;
+  --jr-card: #211b17;
+  --jr-ink: #f0e6da;
+  --jr-soft: #a99684;
+  --jr-line: #3a2f27;
+  --jr-accent: #e39b62;
+  --jr-accent-soft: #38291e;
+  --jr-ok: #9dbba0;
+}
+
+/* ---------- 头部 ---------- */
+.jr-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--jr-line);
+}
+.jr-eyebrow {
+  font-size: 10px;
+  letter-spacing: .26em;
+  text-transform: uppercase;
+  color: var(--jr-soft);
+  margin-bottom: 6px !important;
+}
+.jr-city {
+  font-family: ui-serif, "Noto Serif SC", "Songti SC", serif;
+  font-size: clamp(26px, 4vw, 38px);
+  font-weight: 500;
+  letter-spacing: .06em;
+}
+.jr-sub { color: var(--jr-soft); font-size: 12.5px; margin-top: 4px !important; }
+.jr-head-right { text-align: right; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.jr-clock {
+  font-size: clamp(24px, 3.4vw, 34px);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .04em;
+  color: var(--jr-accent);
+  line-height: 1.1;
+}
+.jr-pill {
+  display: inline-block;
+  padding: 2px 10px;
+  border: 1px solid var(--jr-line);
+  border-radius: 999px;
+  font-size: 11.5px;
+  color: var(--jr-soft);
+  background: var(--jr-card);
+  white-space: nowrap;
+}
+.jr-pill[data-mode="traveling"] { color: var(--jr-accent); border-color: var(--jr-accent); }
+.jr-pill[data-mode="staying"] { color: var(--jr-ok); border-color: var(--jr-ok); }
+
+/*
+ * 她那边的钟离你多远。一行小字加一个小按钮，不抢上面那个大钟的戏。
+ *
+ * 选择器带 `.jr-app` 前缀不是随手写的：上面的 `.jr-app button { font: inherit }`
+ * 特异性比单个类高，不加前缀的话这里的字号会被它盖掉。
+ */
+.jr-gap {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--jr-soft);
+}
+.jr-gap-drift { color: var(--jr-accent); }
+.jr-app .jr-sync {
+  padding: 1px 9px;
+  border: 1px solid var(--jr-line);
+  border-radius: 999px;
+  background: var(--jr-card);
+  color: var(--jr-accent);
+  font-size: 11.5px;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+.jr-app .jr-sync:hover { border-color: var(--jr-accent); background: var(--jr-accent-soft); }
+.jr-app .jr-sync:disabled { opacity: .55; cursor: default; }
+.jr-app .jr-sync:focus-visible { outline: 2px solid var(--jr-accent); outline-offset: 2px; }
+
+/* ---------- 引导 ---------- */
+.jr-guide {
+  margin-top: 20px;
+  padding: 18px;
+  border: 1px dashed var(--jr-accent);
+  border-radius: 14px;
+  background: var(--jr-accent-soft);
+}
+.jr-guide[hidden] { display: none; }
+.jr-guide-title { font-size: 15px; font-weight: 600; margin-bottom: 12px !important; }
+.jr-guide-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+.jr-guide-card { position: relative; padding: 12px 14px 12px 14px; border-radius: 10px; background: var(--jr-card); }
+.jr-guide-card h3 { font-size: 13.5px; font-weight: 600; margin-bottom: 4px !important; }
+.jr-guide-card p { font-size: 12.5px; color: var(--jr-soft); }
+.jr-guide-num {
+  display: inline-block;
+  font-size: 10px;
+  letter-spacing: .1em;
+  color: var(--jr-accent);
+  border: 1px solid var(--jr-accent);
+  border-radius: 999px;
+  width: 18px;
+  height: 18px;
+  line-height: 16px;
+  text-align: center;
+  margin-bottom: 6px;
+}
+.jr-btn {
+  margin-top: 14px;
+  padding: 7px 18px;
+  border-radius: 999px;
+  border: 1px solid var(--jr-line);
+  background: var(--jr-card);
+  color: var(--jr-ink);
+}
+.jr-btn-primary { background: var(--jr-accent); border-color: var(--jr-accent); color: #fff; }
+.jr-btn:disabled { opacity: .55; cursor: default; }
+.jr-btn:focus-visible, .jr-photo:focus-visible { outline: 2px solid var(--jr-accent); outline-offset: 3px; }
+
+/* ---------- 在路上 ---------- */
+.jr-leg { margin-top: 20px; }
+.jr-leg[hidden] { display: none; }
+.jr-leg-top { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+.jr-leg-route { font-size: 15px; font-weight: 600; letter-spacing: .02em; }
+.jr-leg-mode { font-size: 12px; color: var(--jr-soft); }
+.jr-bar { height: 6px; border-radius: 999px; background: var(--jr-line); overflow: hidden; }
+.jr-bar-fill { height: 100%; border-radius: 999px; background: var(--jr-accent); transition: width .6s ease; }
+.jr-leg-meta { display: flex; justify-content: space-between; gap: 8px; margin-top: 7px; font-size: 12px; color: var(--jr-soft); font-variant-numeric: tabular-nums; }
+
+/* ---------- 接下来 ---------- */
+.jr-next { margin-top: 24px; }
+.jr-next-title { font-size: 11px; letter-spacing: .22em; text-transform: uppercase; color: var(--jr-soft); margin-bottom: 10px !important; }
+.jr-next-empty { font-size: 12.5px; color: var(--jr-soft); }
+.jr-tl { list-style: none; margin: 0; padding: 0 0 0 4px; }
+.jr-tl-item {
+  position: relative;
+  display: flex;
+  gap: 14px;
+  align-items: baseline;
+  padding: 7px 0 7px 18px;
+  border-left: 1px solid var(--jr-line);
+}
+.jr-tl-item::before {
+  content: "";
+  position: absolute;
+  left: -4px;
+  top: 15px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--jr-line);
+}
+.jr-tl-item[data-kind="arrive"]::before,
+.jr-tl-item[data-kind="sunrise"]::before { background: var(--jr-accent); }
+.jr-tl-item[data-kind="hotel"]::before { background: var(--jr-ok); }
+.jr-tl-at { font-variant-numeric: tabular-nums; font-size: 12.5px; color: var(--jr-accent); min-width: 52px; }
+.jr-tl-what { font-size: 13.5px; }
+
+/* ---------- 脚注 ---------- */
+.jr-foot { margin-top: 26px; padding-top: 14px; border-top: 1px solid var(--jr-line); font-size: 12px; color: var(--jr-soft); }
+.jr-foot p + p { margin-top: 4px !important; }
+.jr-linkbtn {
+  margin-top: 10px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--jr-soft);
+  font-size: 11.5px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.jr-linkbtn:hover { color: var(--jr-accent); }
+.jr-warn { color: #b4562f; font-size: 12px; }
+
+/* ---------- 相册 ---------- */
+.jr-album .jr-head { padding-bottom: 16px; }
+/* 原图在哪：一行路径 + 一个复制钮。字号压到最小，别抢照片的重心。 */
+/*
+ * 照片墙**下面**的注解行（Mr.Q 2026-11-01：放下面比放上面好）。
+ * 摆在了照片后面，所以用一条虚线跟照片隔开，否则看着像又一张图的说明。
+ */
+.jr-dir {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 20px !important;
+  padding-top: 14px;
+  border-top: 1px dashed var(--jr-line);
+  font-size: 11.5px;
+  color: var(--jr-soft);
+}
+.jr-dir-v {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11px;
+  padding: 2px 7px;
+  border: 1px solid var(--jr-line);
+  border-radius: 6px;
+  background: var(--jr-card);
+  color: var(--jr-ink);
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+/* 文件名：缩略图点不出原图，这个名字是唯一线索 */
+.jr-file {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 10.5px;
+  color: var(--jr-soft);
+  opacity: .75;
+  overflow-wrap: anywhere;
+}
+
+.jr-photos {
+  margin-top: 18px;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+}
+.jr-photo {
+  border: 1px solid var(--jr-line);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--jr-card);
+}
+.jr-photo img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+  background: var(--jr-accent-soft);
+}
+.jr-photo figcaption {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px 10px;
+  font-size: 11.5px;
+  color: var(--jr-soft);
+}
+.jr-photo figcaption b { color: var(--jr-ink); font-size: 12.5px; font-weight: 600; }
+
+/* ---------- 天气 / 今晚 / 日出 ---------- */
+.jr-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin-top: 18px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--jr-card);
+  border: 1px solid var(--jr-line);
+}
+.jr-facts[hidden] { display: none; }
+.jr-fact { display: flex; gap: 7px; align-items: baseline; font-size: 12.5px; }
+.jr-fact-k { color: var(--jr-soft); font-size: 11px; letter-spacing: .08em; }
+.jr-fact-v { color: var(--jr-ink); }
+
+/* 身后的那个节点：灰掉但还在，时间轴才像「走到这儿了」而不是待办清单 */
+.jr-tl-item[data-past="true"] { opacity: .42; }
+.jr-tl-item[data-past="true"]::before { background: var(--jr-ink); }
+
+/* ---------- 她在家：开关 + 出发按钮 ---------- */
+.jr-home {
+  margin-top: 20px;
+  padding: 14px 16px 16px;
+  border: 1px solid var(--jr-line);
+  border-radius: 14px;
+  background: var(--jr-card);
+}
+.jr-home[hidden] { display: none; }
+.jr-home .jr-next-title { margin-bottom: 0 !important; }
+
+.jr-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
+}
+/* 真 checkbox 藏起来但保留可聚焦、可读屏 */
+.jr-toggle input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+.jr-toggle-knob {
+  position: relative;
+  flex: 0 0 auto;
+  width: 36px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--jr-line);
+  transition: background .18s ease;
+}
+.jr-toggle-knob::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .18);
+  transition: transform .18s ease;
+}
+.jr-toggle input:checked + .jr-toggle-knob { background: var(--jr-accent); }
+.jr-toggle input:checked + .jr-toggle-knob::after { transform: translateX(16px); }
+.jr-toggle input:focus-visible + .jr-toggle-knob { outline: 2px solid var(--jr-accent); outline-offset: 3px; }
+.jr-toggle-text { color: var(--jr-ink); }
+
+.jr-home-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+.jr-home-actions .jr-btn { margin-top: 0; }
+.jr-hint { font-size: 12.5px; color: var(--jr-soft); }
+
+/* ---------- 反馈 ---------- */
+/*
+ * 单独一段，跟脚注用小一号的字和一条更淡的线分开：
+ * 脚注说的是「她走了多少路」，这一栏说的是「跟作者讲话」，两件事。
+ */
+.jr-fb {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px dashed var(--jr-line);
+}
+.jr-fb-lead { font-size: 12.5px; color: var(--jr-ink); margin-bottom: 10px !important; }
+.jr-fb-row { display: flex; gap: 8px; flex-wrap: wrap; }
+/*
+ * `.jr-btn` 是给 button 写的，带了 `margin-top: 14px`（那是引导那块要的间距）。
+ * 这里改成 a，margin-top 会把两个按钮顶得跟标题不对齐，所以清掉。
+ */
+.jr-fb-row .jr-fb-btn {
+  margin-top: 0;
+  padding: 5px 14px;
+  font-size: 12.5px;
+  text-decoration: none;
+  display: inline-block;
+}
+.jr-fb-btn:hover { border-color: var(--jr-accent); background: var(--jr-accent-soft); }
+.jr-fb-why { font-size: 11.5px; color: var(--jr-soft); margin-top: 9px !important; line-height: 1.7; }
+.jr-fb-addr {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+/* 复制按钮在地址旁边，跟地址同一条基线；`.jr-linkbtn` 自带的 margin-top 会把它顶下去 */
+.jr-fb-addr .jr-linkbtn { margin-top: 0; }
+.jr-fb-mail {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  color: var(--jr-soft);
+  word-break: break-all;
+}
