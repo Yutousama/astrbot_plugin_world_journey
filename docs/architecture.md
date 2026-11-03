@@ -56,6 +56,10 @@ plugin/         AstrBot Python 插件
 - 主动汇报配图：Python 调 `POST /api/report-image`（`bridge.py` → `adapter/server.ts` →
   `bridge.reportImage()`），用自拍配置生成一张图、base64 回传；不写上游 photo 事件、不进相册，
   失败只丢配图、文字照发。
+- 日记：上游只提供 `journey_diary_write/read` 工具和文件存储。插件侧的 `diary_view.py`
+  只读月文件/旧日文件，合并同步盘与本机目录、同一天取文件更新的那份；`/journey_note` 用它
+  按日期倒序输出纯文本。`diary_write_time`（默认 23:00，她当地）到点后，若当天未写，
+  用 AstrBot 当前 LLM provider 生成正文，再调 `journey_diary_write` 落盘；失败 10 分钟后重试。
 
 ## 生命周期
 
