@@ -86,7 +86,7 @@ writeFileSync(
     sha256: beforeHash,
     fileCount: Object.keys(before).length,
     builtAt: new Date().toISOString(),
-    bridgeVersion: '1.0.0',
+    bridgeVersion: '1.0.1',
   }, null, 2)}\n`,
   'utf8',
 );

@@ -1,6 +1,14 @@
 # 更新日志
 
-## 1.0.0 — 2026-11-03
+## 1.0.1 — 2026-11-03
+
+- 插件作者改为 **yutou**，原项目 Mr.Q 仅在 README/第三方声明中保留致谢与版权；
+- 拆分开发仓库与发布仓库：发布仓库根目录直接作为 AstrBot 插件根目录；
+- 发布仓库补齐 `logo.png`、`engine/`、`raw/`，可直接安装；
+- 修正发布元数据 `repo` 指向 release 仓库；
+- 同步版本号到 `package.json`、sidecar、`metadata.yaml`、README。
+
+### 1.0.0 — 2026-11-03
 
 首个稳定版。感谢 **Mr.Q** 的原项目
 [`coopani-world-journey`](https://www.npmjs.com/package/coopani-world-journey)：

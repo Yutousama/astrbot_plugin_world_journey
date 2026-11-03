@@ -5,8 +5,8 @@
 - 原项目：<https://www.npmjs.com/package/coopani-world-journey>
 - 作者：Mr.Q
 - 许可：MIT（见 `raw/package.json` 的 `license` 字段）
-- 说明：`raw/` 为只读上游源码。本项目的 `adapter/` 与 `plugin/` 只做宿主适配与 AstrBot 接入，
-  不修改上游逻辑；安装后的插件把上游源码复制到 `plugin/raw/`，由 sidecar 在运行时动态加载。
+- 说明：`raw/` 为只读上游源码。本项目的 AstrBot 接入层只做宿主适配与插件封装，
+  不修改上游逻辑；发布包把上游源码放在 `raw/`，由 sidecar 在运行时动态加载。
   感谢原项目提供的旅行引擎。
 
 ## 本项目
