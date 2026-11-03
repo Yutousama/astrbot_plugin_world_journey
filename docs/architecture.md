@@ -50,6 +50,9 @@ plugin/         AstrBot Python 插件
   - **自拍**：把空镜提示词换成自拍模板，用 `selfie_reference` 走 `/images/edits` 或带
     `image_url` 的 generations，再把结果包成上游认识的 `{data:[...]}`。
   - 自拍关闭且没配模型列表时完全不介入；关闭自拍、只配模型列表时只做降级。
+- 主动汇报配图：Python 调 `POST /api/report-image`（`bridge.py` → `adapter/server.ts` →
+  `bridge.reportImage()`），用自拍配置生成一张图、base64 回传；不写上游 photo 事件、不进相册，
+  失败只丢配图、文字照发。
 
 ## 生命周期
 

@@ -13,6 +13,17 @@
   401/403 也原样返回，避免把鉴权错误变成一串重试。
 - 旧配置里的字符串值在插件启动时自动迁移成单元素列表；配置页的列表控件不再把字符串按字符拆开。
 
+### 修复：主动汇报配图没有接通 sidecar
+
+- 症状：`report_image_mode` 开着时，每次主动汇报都只发文字，日志里一行
+  `汇报配图异常：'SidecarBridge' object has no attribute 'reportImage'`。
+- 根因：`main.py` 调了 `bridge.reportImage()`，但 Python 客户端没有这个方法；
+  sidecar 也没有对应的 HTTP 路由。
+- 修法（仍然只改壳，`raw/` 零改动）：`adapter/server.ts` 增加 `POST /api/report-image`，
+  把 `bridge.reportImage()` 产出的字节包成 base64；`bridge.py` 增加 `reportImage()`
+  客户端方法并解码回字节。失败时返回 `image: null`，调用方只发文字，不丢整条汇报。
+- 新增 sidecar 接口测试（base64 往返、空图分支），共 29 项测试。
+
 ### 修复：Node 26 起跑不了上游源码
 
 - Node 26.0.0 移除了 `--experimental-transform-types`（`process.features.typescript` 也不再返回

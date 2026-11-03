@@ -181,6 +181,23 @@ async function handle(req: IncomingMessage, res: ServerResponse, opts: ServerOpt
     return;
   }
 
+  /*
+   * 主动汇报配图：和 `/api/photo` 不同，它不走上游的 photo 事件，只借自拍配置生成
+   * 一张图交给 Python 随汇报发出去。失败时返回 `image: null` —— 调用方只发文字，
+   * 不因为配图失败而丢整条汇报。
+   */
+  if (method === 'POST' && path === '/api/report-image') {
+    const raw = await readJsonBody(req);
+    const body = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
+    const scene = typeof body.text === 'string' ? body.text : '';
+    const bytes = await opts.bridge.reportImage(scene);
+    json(res, 200, {
+      ok: Boolean(bytes),
+      image: bytes ? Buffer.from(bytes).toString('base64') : null,
+    });
+    return;
+  }
+
   if (method === 'POST' && path === '/api/heartbeat') {
     opts.touchHeartbeat?.();
     json(res, 200, { ok: true });
