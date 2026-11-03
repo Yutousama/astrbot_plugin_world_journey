@@ -44,6 +44,11 @@ export interface PhotoProxyOptions {
   readonly models: readonly string[];
   /** 自拍套壳；`null` = 关闭。 */
   readonly selfie: SelfieOptions | null;
+  /**
+   * 她所在城市的当地时间 `HH:MM`。每次生图前取一次；
+   * 拿不到（或没传）时用本机时间兜底。
+   */
+  readonly clock?: () => Promise<string | null>;
 }
 
 export interface PhotoProxy {
@@ -65,6 +70,7 @@ interface ReferenceImage {
 
 const DEFAULT_PROMPT = [
   '一张自拍照片：{subject}在画面里，手机前置镜头近距离自拍，脸和上半身清晰，眼睛看着镜头，表情自然。',
+  '时间：{time}（{clock}）。',
   '背景：{scene}',
   '参考图是{subject}的长相参考：保持五官、脸型、发型、肤色、年龄和气质一致；不要换脸，不要变成陌生人，不要照搬参考图的背景和衣服。',
   '真实手机自拍质感，自然光，轻微手持感；画面里只有{subject}一个人，没有文字、水印、边框。',
@@ -74,7 +80,87 @@ const NO_PEOPLE = /画面里没有人物[^。]*。/g;
 const PASSERBY = /视角像路过的人[^。]*。/g;
 const FILM = /胶片质感[^。]*。/g;
 
-export function buildSelfiePrompt(original: string, opts: Pick<SelfieOptions, 'subject' | 'promptTemplate'>): string {
+/**
+ * 时段描述表：`[起始分钟, 描述词]`，从 00:00 一直铺到 23:59。
+ *
+ * 分得比「早/中/晚」细，是因为自拍的光线全靠这一段文字：
+ * 05:00 和 06:40 都是「早上」，但一个是天刚亮、一个是太阳已经起来。
+ * 边界取整分钟，描述词保持一个词，方便模型直接当成画面条件。
+ */
+const TIME_OF_DAY: ReadonlyArray<readonly [number, string]> = [
+  [0, '午夜'],
+  [90, '凌晨'],
+  [180, '深夜'],
+  [270, '拂晓'],
+  [300, '黎明'],
+  [330, '破晓'],
+  [360, '晨光初现'],
+  [390, '清晨'],
+  [450, '早晨'],
+  [510, '上午'],
+  [600, '上午将尽'],
+  [660, '临近正午'],
+  [690, '正午'],
+  [780, '午后'],
+  [840, '下午'],
+  [930, '下午将尽'],
+  [990, '傍晚'],
+  [1050, '黄昏'],
+  [1095, '暮色'],
+  [1140, '入夜'],
+  [1200, '夜晚'],
+  [1320, '深夜'],
+  [1410, '午夜前'],
+];
+
+function pad2(value: number): string {
+  return String(value).padStart(2, '0');
+}
+
+/** 解析 `HH:MM` / `H:MM` / `HH:MM:SS`；不合法返回 null。 */
+function parseClock(value?: string): { minutes: number; text: string } | null {
+  const m = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec((value ?? '').trim());
+  if (!m) return null;
+  const hour = Number(m[1]);
+  const minute = Number(m[2]);
+  const second = m[3] ? Number(m[3]) : 0;
+  if (hour > 23 || minute > 59 || second > 59) return null;
+  return { minutes: hour * 60 + minute, text: `${pad2(hour)}:${pad2(minute)}` };
+}
+
+function systemClock(): { minutes: number; text: string } {
+  const now = new Date();
+  return {
+    minutes: now.getHours() * 60 + now.getMinutes(),
+    text: `${pad2(now.getHours())}:${pad2(now.getMinutes())}`,
+  };
+}
+
+function labelFor(minutes: number): string {
+  let label = TIME_OF_DAY[0]![1];
+  for (const [start, text] of TIME_OF_DAY) {
+    if (minutes >= start) label = text;
+    else break;
+  }
+  return label;
+}
+
+/**
+ * 把当地时间换算成「时段描述词 + HH:MM」。
+ *
+ * 传空或格式不对时用本机时间兜底 —— 兜底只影响描述，不会让生图失败。
+ * 秒参与不了分段（raw 的世界时钟是分钟精度），所以描述按整分钟取。
+ */
+export function describeTime(clock?: string): { label: string; clock: string } {
+  const parsed = parseClock(clock) ?? systemClock();
+  return { label: labelFor(parsed.minutes), clock: parsed.text };
+}
+
+export function buildSelfiePrompt(
+  original: string,
+  opts: Pick<SelfieOptions, 'subject' | 'promptTemplate'>,
+  clock?: string,
+): string {
   const scene = original
     .replace(/^一张真实旅行照片：/, '')
     .replace(NO_PEOPLE, '')
@@ -84,10 +170,17 @@ export function buildSelfiePrompt(original: string, opts: Pick<SelfieOptions, 's
     .trim();
   const subject = opts.subject.trim() || '她本人';
   const template = opts.promptTemplate.trim() || DEFAULT_PROMPT;
-  return template
+  const time = describeTime(clock);
+  let prompt = template
     .replaceAll('{scene}', scene)
     .replaceAll('{subject}', subject)
-    .trim();
+    .replaceAll('{time}', time.label)
+    .replaceAll('{clock}', time.clock);
+  // 老模板没有这两个占位符：把时间补在末尾，保证升级后立刻生效。
+  if (!template.includes('{time}') && !template.includes('{clock}')) {
+    prompt += `\n时间：${time.label}（${time.clock}）。`;
+  }
+  return prompt.trim();
 }
 
 /**
@@ -129,6 +222,7 @@ export function installPhotoProxy(
     if (candidates.length === 0) return original(input, init);
 
     let reference: ReferenceImage | null = null;
+    let clock: string | undefined;
     if (selfie) {
       try {
         reference = await loadSelfieReference(selfie, original);
@@ -137,13 +231,19 @@ export function installPhotoProxy(
         log.warn(`自拍生图失败：${message}`);
         return jsonResponse({ error: { message } }, 502);
       }
+      try {
+        clock = (await opts.clock?.()) ?? undefined;
+      } catch {
+        // 取不到当地时间只影响描述词，用本机时间兜底即可，不让生图失败。
+        clock = undefined;
+      }
     }
 
     const failures: string[] = [];
     for (const model of candidates) {
       try {
         if (selfie) {
-          const result = await generateSelfieWithModel(selfie, model, body, prompt, original, log, reference!);
+          const result = await generateSelfieWithModel(selfie, model, body, prompt, original, log, reference!, clock);
           return jsonResponse({ data: [result] });
         }
         const res = await replayWithModel(original, url, init ?? {}, body, model);
@@ -188,6 +288,7 @@ export async function generateSelfieBytes(
   opts: SelfieOptions,
   fetchImpl: typeof fetch = globalThis.fetch,
   log: SelfieLogger = { info: () => {}, warn: () => {} },
+  clock?: string,
 ): Promise<{ bytes: Uint8Array; mime: string }> {
   const reference = await loadSelfieReference(opts, fetchImpl);
   const models = modelListOf(opts.model);
@@ -196,7 +297,7 @@ export async function generateSelfieBytes(
   let result: SelfieImage | null = null;
   for (const model of candidates) {
     try {
-      result = await generateSelfieWithModel(opts, model, {}, prompt, fetchImpl, log, reference);
+      result = await generateSelfieWithModel(opts, model, {}, prompt, fetchImpl, log, reference, clock);
       break;
     } catch (e) {
       const why = errText(e);
@@ -234,10 +335,11 @@ async function generateSelfieWithModel(
   fetchImpl: typeof fetch,
   log: SelfieLogger,
   reference: ReferenceImage,
+  clock?: string,
 ): Promise<SelfieImage> {
   const api = opts.api.trim().replace(/\/+$/, '');
   if (!api) throw new Error('自拍生图接口没填（selfie_api / image_api）');
-  const prompt = buildSelfiePrompt(originalPrompt, opts);
+  const prompt = buildSelfiePrompt(originalPrompt, opts, clock);
   const size = opts.size.trim() || stringOf(upstreamBody.size) || '1024x1024';
   const headers: Record<string, string> = {};
   if (opts.key.trim()) headers.authorization = `Bearer ${opts.key.trim()}`;

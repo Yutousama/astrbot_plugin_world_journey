@@ -329,7 +329,7 @@ export class RawBridge {
     const selfie = this.selfieOptions();
     const models = this.imageModels();
     if (!selfie && models.length === 0) return;
-    const proxy = installPhotoProxy({ models, selfie }, this.log);
+    const proxy = installPhotoProxy({ models, selfie, clock: () => this.localClock() }, this.log);
     this.uninstallSelfie = proxy.uninstall;
     this.proxyFetch = proxy.fetch;
     if (selfie) {
@@ -342,6 +342,23 @@ export class RawBridge {
     }
   }
 
+  /**
+   * 她所在城市的当地时间 `HH:MM`（来自 raw 的 UI 快照）。
+   *
+   * 自拍模板里的 `{time}` / `{clock}` 用它：不能用本机时间 —— 她可能在
+   * 另一个时区，本机中午对她那边可能是深夜。取不到时返回空串，
+   * 由 `describeTime()` 退回本机时间，只影响描述词，不影响生图。
+   */
+  private async localClock(): Promise<string | null> {
+    try {
+      const snap = await this.snapshot();
+      const clock = typeof snap.clock === 'string' ? snap.clock.trim() : '';
+      return /^([01]\d|2[0-3]):[0-5]\d$/.test(clock) ? clock : null;
+    } catch {
+      return null;
+    }
+  }
+
   /** 主动汇报附图：用汇报文本 + 当前状态生成，不写上游 photo 事件。 */
   async reportImage(scene?: string): Promise<Uint8Array | null> {
     const options = this.selfieOptions();
@@ -351,7 +368,8 @@ export class RawBridge {
       ? `${reportText}\n\n此刻：${this.now()}`
       : this.now();
     try {
-      const image = await generateSelfieBytes(prompt, options, this.proxyFetch, this.log);
+      const clock = await this.localClock();
+      const image = await generateSelfieBytes(prompt, options, this.proxyFetch, this.log, clock ?? undefined);
       return image.bytes;
     } catch (e) {
       this.log.warn(`汇报配图失败：${e instanceof Error ? e.message : String(e)}`);

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { buildSelfiePrompt, installSelfieProxy } from '../adapter/selfie.ts';
+import { buildSelfiePrompt, describeTime, installSelfieProxy } from '../adapter/selfie.ts';
 import { RawBridge } from '../adapter/bridge.ts';
 import { tempDir } from './helpers.ts';
 
@@ -11,10 +11,45 @@ import { tempDir } from './helpers.ts';
 const PNG_B64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 
+test('时间描述词覆盖凌晨、正午、黄昏、午夜前', () => {
+  assert.equal(describeTime('00:10').label, '午夜');
+  assert.equal(describeTime('01:30').label, '凌晨');
+  assert.equal(describeTime('04:45').label, '拂晓');
+  assert.equal(describeTime('06:10').label, '晨光初现');
+  assert.equal(describeTime('08:00').label, '早晨');
+  assert.equal(describeTime('11:45').label, '正午');
+  assert.equal(describeTime('13:10').label, '午后');
+  assert.equal(describeTime('16:40').label, '傍晚');
+  assert.equal(describeTime('18:20').label, '暮色');
+  assert.equal(describeTime('21:00').label, '夜晚');
+  assert.equal(describeTime('23:45').label, '午夜前');
+  assert.equal(describeTime('18:20').clock, '18:20');
+});
+
+test('自拍模板替换 {time}/{clock}，老模板自动补时间', () => {
+  const scene = '一张真实旅行照片：大理，黄昏的金色光线。画面里没有人物。';
+  const withPlaceholders = buildSelfiePrompt(scene, {
+    subject: '大肥鱼',
+    promptTemplate: '自拍。\n时间：{time}（{clock}）。\n背景：{scene}',
+  }, '18:20');
+  assert.match(withPlaceholders, /暮色/);
+  assert.match(withPlaceholders, /18:20/);
+  assert.doesNotMatch(withPlaceholders, /\{time\}|\{clock\}/);
+
+  // 老模板没有占位符：时间仍然要补进去，否则升级后不生效。
+  const oldTemplate = buildSelfiePrompt(scene, {
+    subject: '大肥鱼',
+    promptTemplate: '自拍。背景：{scene}',
+  }, '05:05');
+  assert.match(oldTemplate, /黎明/);
+  assert.match(oldTemplate, /05:05/);
+});
+
 test('自拍提示词去掉空镜约束，加入参考图身份约束', () => {
   const prompt = buildSelfiePrompt(
     '一张真实旅行照片：大理，黄昏的金色光线。天气晴。画面里没有人物，没有文字，没有水印。视角像路过的人随手举起手机拍的。胶片质感。',
     { subject: '大肥鱼', promptTemplate: '' },
+    '18:20',
   );
   assert.match(prompt, /自拍/);
   assert.match(prompt, /大肥鱼/);
@@ -211,6 +246,8 @@ test('RawBridge 配置 selfieEnabled 后，上游 album.shoot 真的走参考图
     assert.equal(bodies.length, 1);
     assert.match(bodies[0]!, /自拍/);
     assert.match(bodies[0]!, /参考图/);
+    // 桥接层把 raw 的当地时钟（兰州 08:00）带进模板，而不是本机时间。
+    assert.match(bodies[0]!, /时间：早晨（08:00）/);
     assert.ok(bridge.events.lastSeq >= 1);
   } finally {
     await bridge.stop();

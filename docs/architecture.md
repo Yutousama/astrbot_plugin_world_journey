@@ -48,7 +48,10 @@ plugin/         AstrBot Python 插件
   - **模型降级**：`image_model` 是列表，Python 写成 `imageModels`，代理按顺序换 `model` 重发，
     全部失败才把错误交回上游；尺寸/字段不兼容的 400 不换模型，留给上游自己的兼容阶梯。
   - **自拍**：把空镜提示词换成自拍模板，用 `selfie_reference` 走 `/images/edits` 或带
-    `image_url` 的 generations，再把结果包成上游认识的 `{data:[...]}`。
+    `image_url` 的 generations，再把结果包成上游认识的 `{data:[...]}`。模板支持
+    `{scene}` / `{subject}` / `{time}` / `{clock}`；其中时间取自 raw 的 UI 快照
+    （`clock`，她所在城市），换算成 23 档时段描述词，取不到时才退回本机时间。
+    老模板没有时间占位符时自动把时间补在末尾。
   - 自拍关闭且没配模型列表时完全不介入；关闭自拍、只配模型列表时只做降级。
 - 主动汇报配图：Python 调 `POST /api/report-image`（`bridge.py` → `adapter/server.ts` →
   `bridge.reportImage()`），用自拍配置生成一张图、base64 回传；不写上游 photo 事件、不进相册，
