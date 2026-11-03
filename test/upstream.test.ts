@@ -19,9 +19,10 @@ test('raw/ 与 upstream.lock.json 一致', () => {
   assert.equal(lock.files && Object.keys(lock.files).length, Object.keys(files).length);
 });
 
-test('raw 仍是 0.5.16 且带月文件/旅行记忆', () => {
+test('raw 版本与 lock 一致，且带月文件/旅行记忆', () => {
   const pkg = readJson(join(root, 'raw', 'package.json')) as { version?: string };
-  assert.equal(pkg.version, '0.5.16');
+  const lock = readJson(join(root, 'upstream.lock.json')) as { version?: string };
+  assert.equal(pkg.version, lock.version, 'raw 版本与 lock 不一致；先跑 npm run upstream:check 再 accept');
   const world = readFileSync(join(root, 'raw', 'src', 'world.ts'), 'utf8');
   assert.ok(world.includes('TravelMemoryStore'));
   assert.ok(readFileSync(join(root, 'raw', 'src', 'diary.ts'), 'utf8').includes('readMonthFile'));
@@ -29,5 +30,6 @@ test('raw 仍是 0.5.16 且带月文件/旅行记忆', () => {
 
 test('readUpstreamInfo 能读到版本', () => {
   const info = readUpstreamInfo();
-  assert.equal(info.version, '0.5.16');
+  const pkg = readJson(join(root, 'raw', 'package.json')) as { version?: string };
+  assert.equal(info.version, pkg.version);
 });

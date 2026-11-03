@@ -175,7 +175,7 @@ export function journeyConfigGroups(): ConfigGroup[] {
           'worlds.journey.beatGap': {
             type: 'number',
             title: '路上消息间隔',
-            description: '路上隔多久冒一句话。0 = 一路安静，只在出发和到站开口；一趟最多三条。',
+            description: '路上隔多久冒一句话。0 = 一路安静，只在出发和到站开口。条数上限看行程长短：短途 3、中程 6、长途 10。',
             minimum: 0,
             maximum: 12,
             multipleOf: 0.5,
@@ -228,8 +228,16 @@ export function journeyConfigGroups(): ConfigGroup[] {
           },
           'worlds.journey.memoryDir': {
             type: 'string',
-            title: '日记保存位置',
-            description: '留空＝只跟着这台机器。填同步盘里的一个专用子目录，换台电脑还是同一份日记。',
+            title: '多设备同步（日记与旅行记忆）',
+            /*
+             * 2026-11-03 Mr.Q：「多设备同步还是不知道怎么设置」。
+             *
+             * 原来标题叫「日记保存位置」—— 两个问题：
+             *   ① 只提日记，没人会想到「去过哪、想去哪、花了多少」也一起走；
+             *   ② 最要紧的那句没说：**两台电脑要填同一个路径**。
+             * 只在一台上填，另一台看到的还是本机那份，表现就是「同步没生效」。
+             */
+            description: '两台电脑共用同一份：填同一个同步盘子目录，两台填完全一样的路径。注意别两台同时开着（会互相覆盖）。留空＝只在这台机器上。',
             'x-path': { kind: 'directory' },
           },
         },

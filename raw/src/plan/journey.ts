@@ -543,8 +543,24 @@ export function citiesOf(j: Journey): { from: City | null; to: City | null } {
 export const BEAT_GAP_DEFAULT = 2;
 /** 低于这个时长这一趟不算「在路上」，一个中途节点都不插。 */
 export const BEAT_MIN_HOURS = 1.5;
-/** 一趟最多三条。文案只有早/中/晚三档，再多就只能重复同一句。 */
-export const BEAT_MAX_MARKS = 3;
+/**
+ * 一趟最多几个路上节点 —— **按行程长短分档**。
+ *
+ * 2026-11-03 Mr.Q：「长途 10 条、中程 6 条、短途 3 条」。
+ *
+ * 原来是一个固定上限（先是 3，后来 6）—— 短途和长途被同一个数管着：
+ * 短途给 6 条显得絮叨，长途给 6 条又不够。分成三档才和「这趟有多长」对上。
+ *
+ * 阈值取 8 小时（半天）和 30 小时（一天多）。
+ *
+ * 文案档位没跟着加：调用方把节点归一化成「第一段 / 中间 / 最后一段」，
+ * 中间那种可以重复，因为「还在路上」本来就该重复。
+ */
+export function maxMarksFor(durationHours: number): number {
+  if (durationHours < 8) return 3;
+  if (durationHours < 30) return 6;
+  return 10;
+}
 
 /**
  * 路上那几个节点落在整段行程的哪个进度上。
@@ -557,7 +573,7 @@ export const BEAT_MAX_MARKS = 3;
  * 2. 行程不到 1.5 小时 → 一个都不发。这不是间隔问题，是这趟本来就不是「在路上」。
  *    门槛**不跟着间隔走**：间隔调到 8 小时时，三小时的行程仍然该有一个中途消息，
  *    否则等于顺手把短途全静音了。
- * 3. 最多三个。再多就只能拿同一段文案充数，听起来像报幕机。
+ * 3. 条数上限按行程长短分档（见 maxMarksFor）：短途 3、中程 6、长途 10。
  *
  * 节点均匀铺在 1/(n+1) … n/(n+1) —— **不贴头也不贴尾**：
  * 刚出发的那条跟「出发了」那条撞车，快到站的那条跟「到了」撞车。
@@ -566,7 +582,7 @@ export function beatMarks(durationHours: number, gapHours: number): number[] {
   const gap = Number.isFinite(gapHours) ? gapHours : BEAT_GAP_DEFAULT;
   if (!(gap > 0)) return [];
   if (!(durationHours >= BEAT_MIN_HOURS)) return [];
-  const n = Math.min(BEAT_MAX_MARKS, Math.max(1, Math.round(durationHours / gap)));
+  const n = Math.min(maxMarksFor(durationHours), Math.max(1, Math.round(durationHours / gap)));
   return Array.from({ length: n }, (_, i) => (i + 1) / (n + 1));
 }
 

@@ -3,12 +3,14 @@
  * 构建 sidecar 与更新器。
  *
  * 重要：sidecar **不再把 raw 打包进去**。安装后的插件用 `plugin/raw/` 的上游源码
- * 运行时加载（Node 的 --experimental-transform-types），所以更新源码只需换 `raw/`
- * 并重启 sidecar，不用重新打包 adapter。
+ * 运行时加载，所以更新源码只需换 `raw/` 并重启 sidecar，不用重新打包 adapter。
+ * 跑 TS 的能力由两个来源提供：Node 22.7–25 自带 `--experimental-transform-types`；
+ * Node 26 起该 flag 被移除，改用随包发布的 `engine/amaro` 转换器（见 bridge.py）。
  *
  * 产物：
  *   plugin/.../engine/sidecar.mjs   adapter 套壳（动态 import raw）
  *   plugin/.../engine/update.mjs    npm registry 更新器
+ *   plugin/.../engine/amaro/        TS 转换器（Node 26+ 用；纯 WASM，无原生二进制）
  *   plugin/.../raw/                 上游源码副本（运行时加载/更新目标）
  *   plugin/.../engine/upstream.json 版本/hash
  */
@@ -24,6 +26,8 @@ const engineDir = join(pluginDir, 'engine');
 const pluginRaw = join(pluginDir, 'raw');
 const pkg = readJson(join(rawDir, 'package.json'));
 const version = typeof pkg.version === 'string' ? pkg.version : 'unknown';
+const selfPkg = readJson(join(root, 'package.json'));
+const selfVersion = typeof selfPkg.version === 'string' ? selfPkg.version : 'unknown';
 
 const before = fileHashes(rawDir);
 const beforeHash = hashOfFiles(before);
@@ -42,6 +46,8 @@ const baseOptions = {
   legalComments: 'inline',
   logLevel: 'info',
   absWorkingDir: root,
+  // 版本号只在构建时注入一次，避免 adapter 里再写死一份。
+  define: { __BRIDGE_VERSION__: JSON.stringify(selfVersion) },
 };
 try {
   await build({
@@ -69,6 +75,22 @@ rmSync(join(pluginDir, 'package.json'), { force: true });
 const notice = join(root, 'THIRD_PARTY_NOTICES.md');
 if (existsSync(notice)) cpSync(notice, join(pluginDir, 'THIRD_PARTY_NOTICES.md'));
 
+// Node 26 起没有内置 TS 转换（--experimental-transform-types 被移除），随包带一份 amaro。
+// 它只在 import .ts 时现场转换，raw/ 仍是 TS，热更新和更新器都不受影响。
+const amaroSrc = join(root, 'node_modules', 'amaro', 'dist');
+const amaroDst = join(engineDir, 'amaro');
+if (!existsSync(amaroSrc)) {
+  rmSync(engineDir, { recursive: true, force: true });
+  console.error('[build] 找不到 node_modules/amaro（先 npm install）；Node 26+ 会起不来。');
+  process.exit(1);
+}
+cpSync(amaroSrc, amaroDst, { recursive: true });
+// dist/LICENSE 是打包进去的 SWC（Apache-2.0）；amaro 本身是 MIT，单独再放一份。
+const amaroLicense = join(root, 'node_modules', 'amaro', 'LICENSE.md');
+if (existsSync(amaroLicense)) cpSync(amaroLicense, join(amaroDst, 'LICENSE-amaro.md'));
+const amaroFiles = Object.keys(fileHashes(amaroDst)).length;
+console.log(`[build] 转换器 engine/amaro：${amaroFiles} 个文件`);
+
 const after = fileHashes(rawDir);
 const afterHash = hashOfFiles(after);
 if (afterHash !== beforeHash) {
@@ -86,7 +108,7 @@ writeFileSync(
     sha256: beforeHash,
     fileCount: Object.keys(before).length,
     builtAt: new Date().toISOString(),
-    bridgeVersion: '1.0.2',
+    bridgeVersion: selfVersion,
   }, null, 2)}\n`,
   'utf8',
 );

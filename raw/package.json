@@ -1,8 +1,8 @@
 {
   "name": "coopani-world-journey",
-  "version": "0.5.16",
+  "version": "0.5.26",
   "type": "module",
-  "description": "陪着她真的出门旅行（需 Coopani 0.2.17+）：一百二十四座城、每城都有真地标，从你家出发自己挑去哪、坐什么去，路上耗掉真实的时间；到了按当地时间吃饭、看日出、住店、写日记，路线在地图上连得起来。没有机场的地方她会先落到能飞的城市再转过去。装了「一起听歌」，你放的歌会跟着她走，她也会惦记当地的歌。",
+  "description": "陪着她真的出门旅行（需 Coopani 0.2.17+）。一百二十四座城，每座都有真实地标，不是随机抽地名。从你设定的家出发，她自己挑去哪、坐什么去，路上真的耗掉那么久——选了火车就在车上待十一小时，中间不打扰你。到了按当地时间吃饭、看日出、住店、写日记；路线是一条线，连着几天说的地名在地图上连得起来。雨天取消日出，钱不够会停下来打几天工，回家是一站一站走回去。没有机场的地方先落到能飞的城市再转。装了「一起听歌」，你放的歌会跟着她走；也能拍照，但要自己填一个生图接口。",
   "author": {
     "name": "Mr.Q"
   },
@@ -31,6 +31,7 @@
     "kind": "world",
     "api": 6,
     "displayName": "大肥鱼环游世界",
+    "icon": "assets/icon.png",
     "describe": "describe.json",
     "webUiClient": "dist/webui.js",
     "webUiStyle": "dist/webui.css",
@@ -54,6 +55,7 @@
   "files": [
     "src",
     "dist",
+    "assets",
     "ENV_PROMPT.md",
     "README.md",
     "CHANGELOG.md",

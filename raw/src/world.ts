@@ -36,7 +36,7 @@ import { ActionWishes } from './action-wishes.ts';
 import { rollLodging, withHotel, lodgingLabel, type Lodging } from './plan/lodging.ts';
 import { HotelDirectory } from './geo/hotels.ts';
 import {
-  pickDestination, pickMode, buildJourney, progressOf, remainingRealHours, citiesOf,
+  pickDestination, pickMode, canTravel, buildJourney, progressOf, remainingRealHours, citiesOf,
   beatMarks, beatKey, sentProgress, beatGapText, BEAT_GAP_DEFAULT,
   type Journey,
 } from './plan/journey.ts';
@@ -94,11 +94,18 @@ const HOME_RADIUS_KM = 500;
  * 每公里大致多少钱。只用来让「这趟花了多少」有个量级，不是票价表。
  *
  * 校准过几组：火车 500km ≈ 250 元（二等座对得上）、自驾 1240km ≈ 990 元
- * （油费加过路费）、飞机 5000km ≈ 7500 元（长途全价票对得上）、公交 300km ≈ 120 元。
+ * （油费加过路费）、公交 300km ≈ 120 元。
+ *
+ * **飞机单算，不在这一行里。** 2026-11-03 Mr.Q 给的真实数字：兰州飞三亚淡季 800-900 元。
+ * 原来这里写 1.5 元/公里，是拿「5000 公里 7500 元」校准的 —— 那是**全价票**，
+ * 现实里没人按全价买。2057 公里算出 3085 元，是他实际花费的四倍。
+ * 见 `fareOf()` 里的分段算法。
  */
 const FARE_PER_KM: Record<ModeId, number> = {
   walk: 0, bike: 0, scooter: 0.1, motorcycle: 0.3,
-  car: 0.8, bus: 0.4, train: 0.5, ship: 0.7, plane: 1.5,
+  car: 0.8, bus: 0.4, train: 0.5, ship: 0.7,
+  /** 飞机正常走 `fareOf()` 的分段公式，这里只是兜底，不会实际用到。 */
+  plane: 0.4,
 };
 
 /** 一天三顿的大致开销。 */
@@ -229,6 +236,14 @@ const TOOL_DECLS = [
     tags: ['write'] as const,
     summary: { zh: '记下「因为某首歌想去某地」，下次挑地方时会优先。', en: 'Adds a place to her wish list after something pulled her there.' },
   },
+  {
+    name: 'journey_return_home',
+    description:
+      'Turn her trip around and start home, because the person asked her to come back. She walks back stop by stop - arriving somewhere, spending a night, moving on - not a teleport; it can take days. Only call it when the person actually asks her back. Deciding to go home is otherwise hers alone, and leaving early costs her the part of the trip she has not seen.',
+    parameters: { type: 'object', additionalProperties: false, properties: {} },
+    tags: ['write'] as const,
+    summary: { zh: '他说回来吧，就结束这一趟往回走。', en: 'Starts her trip back home, because the person asked.' },
+  },
 ] as const;
 
 export interface JourneyWorldOptions {
@@ -281,6 +296,8 @@ export class JourneyWorld implements World {
    * （那天已经有一张，被判重静默跳过），他只能以为按钮坏了。
    */
   private photoError: string | null = null;
+  /** 出发地认不出来时那句话。启动时算一次，面板上显示出来。 */
+  private homeProblem: string | null = null;
   /** 上一次看到的歌名。用来判断「换歌了」—— 同一个歌名不重复处理。 */
   private lastSongTitle: string | null = null;
   /** 当天的作息表。跨天重排；`staying` 之外为 null。 */
@@ -507,6 +524,18 @@ export class JourneyWorld implements World {
     this.log = host.log;
 
     const home = this.resolveHome();
+    /*
+     * 出发地认不出来，要**说出来**。
+     *
+     * 2026-11-03 一位读者来信：「我尝试加了城市（常熟），发现城市里面没有这个城市，
+     * 于是它默认设置成了兰州」。查下来：`resolveHome()` 早就准备好了这句话，
+     * 但**没有一个调用点读过 `problem`** —— 全都只用 `.city`。
+     * 结果是设置里写着常熟、面板上写着兰州，中间一句解释都没有。
+     */
+    if (home.problem) {
+      host.log.warn(home.problem);
+      this.homeProblem = home.problem;
+    }
     const loaded = this.store.load(home.city.id);
     this.st = loaded.state;
     if (loaded.problem) host.log.warn(loaded.problem);
@@ -621,6 +650,14 @@ export class JourneyWorld implements World {
     if (fromDiary) return { city: fromDiary, problem: null };
     const c = cityByName('兰州') ?? CITIES[0];
     return { city: c, problem: `还没设「从哪儿出发」，先按${c.name}算。在设置里填一个城市名就改过来了。` };
+  }
+
+  /** 这一段跨不跨国。票价按这个加价，所以要和 `fareOf` 一起看。 */
+  private legCrossBorder(leg: Journey): boolean {
+    const a = this.cityOrNull(leg.fromId);
+    const b = this.cityOrNull(leg.toId);
+    if (!a || !b) return false;
+    return a.country !== b.country;
   }
 
   private cityName(id: string): string {
@@ -762,14 +799,14 @@ export class JourneyWorld implements World {
       heading: this.st.heading,
       lastKm: this.st.lastKm,
       home,
-      maxKm: this.nearOnly() ? LOW_KM : undefined,
+      maxKm: this.nearOnly() ? Math.min(LOW_KM, this.purseRangeKm()) : this.purseRangeKm(),
     });
     if (!picked) {
       this.log?.warn('没有可去的地方，这一趟不出发。');
       return;
     }
     const to = picked.city;
-    const mode = pickMode(from, to, picked.km, Math.random, this.isTight(), this.noFly(), this.affordMode(picked.km));
+    const mode = pickMode(from, to, picked.km, Math.random, this.isTight(), this.noFly(), this.affordMode(picked.km, 0.5, from.country !== to.country));
     if (!mode) {
       this.log?.warn(`${from.name} → ${to.name} 没有可用交通方式，换一个目的地。`);
       return;
@@ -947,12 +984,35 @@ export class JourneyWorld implements World {
      * - 两个节点 → 早段 + 晚段
      * - 三个节点 → 直接对应
      */
-    const idx = marks.length === 1 ? 1 : marks.length === 2 ? due * 2 : due;
+    /*
+     * 文案只有三段（早 / 中 / 晚），节点数最多六个 —— 所以归一化：
+     * 第一个算早段，最后一个算晚段，中间全算中段。
+     * 「还在路上」本来就该重复，不需要给每段单独写词。
+     */
+    const idx = marks.length === 1 ? 1
+      : due === 0 ? 0
+      : due === marks.length - 1 ? 2
+      : 1;
     // 只在中间那个节点提歌 —— 每个节点都挂一句就成了报幕。
     const song = idx === 1 ? songLine(this.currentSong()) : '';
     // 剩余时间按**真实进度**算，不再用 idx 反推（短途用 idx=1 反推会差一截）。
     const text = roadText(mode.id, idx, leg, from, to, hour, p) + song;
     await this.push('journey.road', `road-${key}`, text, 'debounce');
+
+    /*
+     * 路上也拍一张。
+     *
+     * 2026-11-03 一位读者来信：「生成的图片一直都是几个出发的城市中的图片，
+     * 不会显示火车、乡间的照片」—— 因为拍照只挂在「出去逛」那个节点上。
+     *
+     * 只在中段拍（`idx === 1`）：一次行程最多一张，不然长途会连拍好几张。
+     * 不 await —— 生图要十几秒，等它会把后面该推的节点全推迟。
+     */
+    if (idx === 1) {
+      void this.maybePhoto(
+        to, hour, localMoment(now, to.tz).dateKey, '', null, false, true, mode.name,
+      );
+    }
   }
 
   private async arrive(now: Date, leg: Journey): Promise<void> {
@@ -984,7 +1044,15 @@ export class JourneyWorld implements World {
     };
     await this.rebuildPlan(now, 'arrival', moment.decimal, to);
     // 交通费在到站时结算 —— 票是出发前买的，但"花了多少"到站才成事实。
-    const fare = leg.km * (FARE_PER_KM[leg.modeId] ?? 0);
+    /*
+     * **必须和 `fareOf` 用同一个算式。**
+     *
+     * 原来是这里自己乘一遍 `FARE_PER_KM`：判断买不买得起走 `fareOf`（分段 + 跨国加价），
+     * 实际扣钱走这一行（单价 × 距离）—— 两个数从改价那一天起就不一样了。
+     * 表面看只是账不平，实际后果是「判她买不起、真扣的时候又没扣那么多」，
+     * 预算约束整个偏掉。
+     */
+    const fare = this.fareOf(leg.modeId, leg.km, this.legCrossBorder(leg));
     this.addSpent(fare);
     // 到了 = 那个念头兑现了，从「想去」里划掉。
     if (this.st.wishes.includes(to.id)) {
@@ -1350,6 +1418,15 @@ export class JourneyWorld implements World {
   private async maybePhoto(
     city: City, hour: number, dateKey: string, spot: string, weather: Forecast | null,
     replace = false,
+    /**
+     * 这一张是在**路上**拍的。路上没有景点可写，画面换成窗外。
+     *
+     * 2026-11-03 一位读者来信说生图永远是城里的景点、看不到火车和乡间 ——
+     * 因为拍照只挂在「出去逛」这一个节点上，路上一个节点都不拍。
+     */
+    onRoad = false,
+    /** 路上坐的是什么（火车 / 长途汽车…）。只有 onRoad 时才有意义。 */
+    mode = '',
   ): Promise<{ ok: boolean; reason?: string }> {
     /*
      * 跳过时给一句人话。**手动（replace）记 info，自动只记 debug** ——
@@ -1375,15 +1452,22 @@ export class JourneyWorld implements World {
      * 挡住的表现是点了没反应，比拍一张贵得多。所以 replace=true 时跳过判重，
      * 成功之后把当天那条旧记录摘掉。
      */
-    if (!replace && this.photos.has(dateKey, city.id)) return skip('这一天这个城市已经拍过');
+    /*
+     * 路上拍的那张按 `road` 这个伪城市记，每天最多一张。
+     * 不这么分的话，「今天在城里逛过」会把「今天路上那张」挡掉。
+     */
+    const sceneId = onRoad ? 'road' : city.id;
+    if (!replace && this.photos.has(dateKey, sceneId)) return skip(onRoad ? '今天在路上已经拍过' : '这一天这个城市已经拍过');
 
     // 标题要在 try 外面算好：catch 里要用它拼日志，写在里面就出作用域了。
-    const title = photoTitle(city.name, spot, hour);
+    const title = onRoad ? `${city.name}一带的路上` : photoTitle(city.name, spot, hour);
     this.shooting = true;
     try {
       const prompt = photoPrompt({
         city: city.name,
-        spot,
+        spot: onRoad ? undefined : spot,
+        onRoad,
+        mode,
         hour,
         weather: weather?.dayWeather,
         // 体感参与提示词：高原和湿热拍出来的调子不一样，那是她眼睛看到的东西。
@@ -1401,13 +1485,13 @@ export class JourneyWorld implements World {
       // 字节交给宿主：它算哈希、落 data/media/、回一个 log: 句柄。
       const env = await this.push(
         'journey.photo',
-        `photo-${dateKey}-${city.id}`,
+        `photo-${dateKey}-${sceneId}`,
         `她拍了张照片：${title}。`,
         'debounce',
         [{
           bytes: shot.bytes,
           mime: shot.mime,
-          name: `${city.id}-${dateKey}.png`,
+          name: `${sceneId}-${dateKey}.png`,
           fallbackText: `（一张${title}的照片）`,
         }],
       );
@@ -1415,11 +1499,11 @@ export class JourneyWorld implements World {
       this.photoOutcome = handle ? 'ok' : 'fail';
       if (!handle) return { ok: false, reason: '宿主没返回图片句柄' };
       this.photoError = null;
-      if (replace) this.photos.replaceDay(dateKey, city.id, handle);
+      if (replace) this.photos.replaceDay(dateKey, sceneId, handle);
       this.photos.add({
         handle,
-        cityId: city.id,
-        cityName: city.name,
+        cityId: sceneId,
+        cityName: onRoad ? '路上' : city.name,
         dateKey,
         title,
         spot,
@@ -1442,12 +1526,62 @@ export class JourneyWorld implements World {
 
   /* ---------------- 回家 / 换地方 ---------------- */
 
+  /**
+   * 让他把她叫回来。**面板按钮和聊天里的「回来吧」共用这一段。**
+   *
+   * 走的是正常返程：还远就一站一站往回走、路上照写日记照花钱，近了才一趟车到家。
+   * 不是传送 —— 那样中间那几天就白过了，日记也没有。
+   *
+   * 打工中途叫回来：工先撂下。工钱是按天结过的，不会少，只是没干满。
+   */
+  private async beginReturn(now: Date): Promise<{ ok: boolean; text: string }> {
+    const here = this.cityOrNull(this.st.hereId);
+    if (!here) return { ok: false, text: '不知道她此刻在哪，叫不回来' };
+    if (this.st.phase === 'home') return { ok: false, text: '她已经在家了' };
+    if (this.st.returning) return { ok: false, text: '她已经在往回走了' };
+    const home = this.resolveHome().city;
+    const km = Math.round(distanceKm(here, home));
+    if (this.st.work) this.st = { ...this.st, work: null };
+    await this.goHome(now, here, false);
+    /*
+     * 两种结果，回执要分开说。
+     *
+     * 一般是「往回走」——一站一站来。但**有些地方走不出去**：海岛、边远城市，
+     * 出岛只有飞机、而钱又不让坐飞机， 选不出路就会兜底直接到家。
+     * 那种情况下还说「往回走了」，第二天他一看她在兰州，会觉得这个按钮在骗人。
+     */
+    if (this.st.phase === 'home') {
+      return { ok: true, text: `好，回${home.name}了。这一趟到这儿。` };
+    }
+    return { ok: true, text: `好，往回走了。现在在${here.name}，离家 ${km} 公里。` };
+  }
+
   private async goHome(now: Date, from: City, forced: boolean): Promise<void> {
     const home = this.resolveHome().city;
     const km = distanceKm(from, home);
 
     // 够近了就一趟车到家。五百公里差不多是一段能当天到的路。
     if (km < HOME_RADIUS_KM) {
+      await this.settleHome(now, from, forced, km);
+      return;
+    }
+
+    /*
+     * **还远的时候，先问一句「买得起直达票吗」。**
+     *
+     * 2026-11-03 Mr.Q：「全部都走回去也太费事了，我淡季去三亚机票也就 800/900」。
+     * 他说得对 —— 赶着回家的人不会沿途每座城住一晚，有直达的票就买。
+     * 一站站挪是「穷得只能省路费」时的走法，不该是默认。
+     *
+     * 判据是票钱不超过余钱的八成；钱不够就还是走回去 —— 那不是啰嗦，是真买不起。
+     */
+    /*
+     * **这里不传 。** 它是给「中途选下一站」用的，上限是余钱的一半；
+     * 而回家是一次性的事，判据按「票钱不超过余钱的八成」——两条判据打架的话，
+     * 会出现「够钱回家却被拦下」。钱够不够统一由  说了算。
+     */
+    const direct = pickMode(from, home, km, Math.random, this.isTight(), this.noFly());
+    if (direct && this.canAffordTrip(km, from.country !== home.country)) {
       await this.settleHome(now, from, forced, km);
       return;
     }
@@ -1467,7 +1601,8 @@ export class JourneyWorld implements World {
   /** 真正到家：结掉这一趟，进休息期。 */
   private async settleHome(now: Date, from: City, forced: boolean, km: number): Promise<void> {
     const home = this.resolveHome().city;
-    const mode = km < 30 ? null : pickMode(from, home, km, Math.random, this.isTight(), this.noFly(), this.affordMode(km));
+    // 回家这一趟是一次性支出，钱的上限放宽到八成（`goHome` 已经先判过一遍）。
+    const mode = km < 30 ? null : pickMode(from, home, km, Math.random, this.isTight(), this.noFly(), this.affordMode(km, 0.8, from.country !== home.country));
     const restUntil = new Date(now.getTime() + Math.max(0, this.cfg.restDays) * 86_400_000);
     const visited = this.st.everVisited.length;
 
@@ -1512,7 +1647,7 @@ export class JourneyWorld implements World {
         ? `出门到上限了（${this.cfg.maxTripMonths} 个月），她回${home.name}了。这一趟去过 ${visited} 个地方。`
           + `\n先在家待 ${this.cfg.restDays} 天。`
         : `这一趟到头了。${from.name} → ${home.name}${mode ? `，坐${mode.name}` : ''}，回去了。`
-          + `\n一路走回来，最后一程 ${Math.round(km)} 公里。`
+          + `\n最后这一段 ${Math.round(km)} 公里。`
           + `\n在家歇 ${this.cfg.restDays} 天再动。`,
       'flush',
     );
@@ -1533,17 +1668,31 @@ export class JourneyWorld implements World {
       home,
       toward: target ?? undefined,
       // 钱只够走近处时，连「离家更近但隔着半个中国」的候选都不该出现。
-      maxKm: this.nearOnly() ? LOW_KM : undefined,
+      maxKm: this.nearOnly() ? Math.min(LOW_KM, this.purseRangeKm()) : this.purseRangeKm(),
     });
     if (!picked) {
-      // 往回走却选不出地方（孤岛、城市表覆盖不到），那就别再拖，直接到家的算法兜底。
-      if (target) await this.settleHome(now, from, false, distanceKm(from, target));
+      /*
+       * 选不出地方 —— 但**别急着传送**。
+       *
+       * 2026-11-03 查出来的：钱只够两百块的时候，可走的范围算出来只有两百多公里，
+       * 附近一座城都选不到，于是这里兜底直接把她放回家 —— 用户看到的是瞬移。
+       *
+       * 现在只在「真的没有路」时才兜底：canTravel 为假，说明她困在
+       * 孤岛或城市表覆盖不到的地方，除了算一趟到家没别的办法。
+       * 有路但走不动的（钱不够），就留在原地 —— 明天还能再试，或者去打工挣。
+       */
+      if (target && !canTravel(from, target)) {
+        await this.settleHome(now, from, false, distanceKm(from, target));
+      }
       return;
     }
     const to = picked.city;
-    const mode = pickMode(from, to, picked.km, Math.random, this.isTight(), this.noFly(), this.affordMode(picked.km));
+    const mode = pickMode(from, to, picked.km, Math.random, this.isTight(), this.noFly(), this.affordMode(picked.km, 0.5, from.country !== to.country));
     if (!mode) {
-      if (target) await this.settleHome(now, from, false, distanceKm(from, target));
+      // 同上面那条：买不起票不等于没有路。只有真的没路才传送回家。
+      if (target && !canTravel(from, target)) {
+        await this.settleHome(now, from, false, distanceKm(from, target));
+      }
       return;
     }
     const leg = buildJourney({ from, to, mode, km: picked.km, at: now, speed: this.speedNow() });
@@ -1680,6 +1829,24 @@ export class JourneyWorld implements World {
   }
 
   /**
+   * 手上的钱最远能走多远（公里）。
+   *
+   * 2026-11-03 查出来的：召回时她在三亚，返程选点会挑到「离家近、但要绕远路」的城市
+   * （三亚 → 张掖 2460 公里，因为张掖离兰州只有 500 公里）。然后票价超过余钱，
+   * `pickMode` 一个方式都给不出来，`moveOn` 兜底直接传送回家 ——
+   * 用户看到的是「按了一下，人瞬移了」。
+   *
+   * 所以**选点的时候就得知道「我买得起多远」**，不能等选完了才发现走不了。
+   * 按最便宜的地面方式（公交 0.4 元/公里）估，而且只用一半余钱买路 ——
+   * 剩一半留给到了之后的住和吃，和 `affordMode` 的判据保持一致。
+   */
+  private purseRangeKm(): number {
+    if (!this.cfg.moneyEnabled || this.cfg.budget <= 0) return Infinity;
+    const left = this.cfg.budget - (this.st.spent - this.st.earned);
+    if (left <= 0) return LOW_KM;
+    return Math.max(200, (left * 0.5) / 0.4);
+  }
+  /**
    * 钱只够走近处了：候选卡在 LOW_KM 以内。
    *
    * 和「不坐飞机」分开两个判据：见底才限距离，但**只要开始紧就不该买机票** ——
@@ -1701,9 +1868,48 @@ export class JourneyWorld implements World {
     return this.purseStage() !== 'ok';
   }
 
-  /** 这一段的票价。和 `addSpent` 用的是同一个算式，别让两处算出差。 */
-  private fareOf(modeId: string, km: number): number {
+  /**
+   * 这一段的票价。和 `addSpent` 用的是同一个算式，别让两处算出差。
+   *
+   * **飞机分段算。** 2026-11-03 Mr.Q 给的真实数字：兰州飞三亚淡季 800-900 元，
+   * 也就是两千公里八百块上下。原来按全价票校准（1.5 元/公里）差了四倍，
+   * 后果是「她明明买得起机票，系统却说她买不起」，只能一路走回去。
+   *
+   * 分段是因为国际长途确实贵：0.4 元/公里一路乘下去，一万公里才四千，
+   * 而实际洲际机票要六七千。三千公里以内按国内经济舱算，往上逐段加价。
+   */
+  private fareOf(modeId: string, km: number, crossBorder = false): number {
+    if (modeId === 'plane') {
+      /*
+       * 国内经济舱 0.4 元/公里，跨国贵一截。
+       *
+       * 2026-11-03 模拟抓到的：不分国内国际的话，兰州飞大阪 2600 公里只要 1040 块，
+       * 比现实便宜一半 —— 她于是动不动就飞出去，预算 3000 的人 48 天花掉四万七。
+       */
+      const per = crossBorder ? 0.85 : 0.4;
+      const base = crossBorder ? 2400 : 1200;
+      return km <= 3000 ? km * per : base + (km - 3000) * 0.9;
+    }
     return km * (FARE_PER_KM[modeId as ModeId] ?? 0);
+  }
+
+  /**
+   * 这一趟回不回得去。
+   *
+   * 按**最便宜的那种方式**算，不按 `pickMode` 恰好挑中的那种 ——
+   * 挑中火车（一千块）买不起、而飞机（八百块）买得起的时候，
+   * 答案应该是「回得去」，只是得坐飞机。
+   *
+   * 门槛是余钱的八成：留两成，到家之后还要过日子。
+   * 没记账、预算填 0 时一律算回得去。
+   */
+  private canAffordTrip(km: number, crossBorder = false): boolean {
+    if (!this.cfg.moneyEnabled || this.cfg.budget <= 0) return true;
+    const left = this.cfg.budget - (this.st.spent - this.st.earned);
+    if (left <= 0) return false;
+    const cheapest = Math.min(...(['bus', 'train', 'plane', 'ship', 'car'] as const)
+      .map((id) => this.fareOf(id, km, crossBorder)));
+    return cheapest <= left * 0.8;
   }
 
   /**
@@ -1715,14 +1921,30 @@ export class JourneyWorld implements World {
    * 回家路上例外：卡票钱她就永远回不来。只要还剩钱就按「买得起」算，
    * 真的一分不剩就不限制 —— 记账认了，人得回去。
    */
-  private affordMode(km: number): ((m: TravelMode) => boolean) | undefined {
+  private affordMode(km: number, share = 0.5, crossBorder = false): ((m: TravelMode) => boolean) | undefined {
     if (!this.cfg.moneyEnabled || this.cfg.budget <= 0) return undefined;
     const left = this.cfg.budget - (this.st.spent - this.st.earned);
+
+    /*
+     * **一分钱都不剩的时候，什么票都买不起。**
+     *
+     * 2026-11-03 查出来的：原来这里两边都在  时返回 ，
+     * 而  的意思是「不限制」—— 于是**钱花光了反而什么都能买**。
+     * 144 天模拟里，预算 3000 的那趟花掉三万三、净花一万八，全是这么滚出来的。
+     */
     if (this.st.returning) {
-      return left > 0 ? (m) => this.fareOf(m.id, km) <= left : undefined;
+      if (left > 0) return (m) => this.fareOf(m.id, km, crossBorder) <= left;
+      // 回家路上没钱：只留最便宜的两种，不能把人卡死在外地。
+      return (m) => m.id === 'bus' || m.id === 'walk';
     }
-    const cap = Math.max(200, left * 0.5);
-    return (m) => this.fareOf(m.id, km) <= cap;
+    if (left <= 0) return () => false;
+
+    /*
+     * `share` 默认一半：中途选下一站要留一半给到了之后的住和吃。
+     * 回家是一次性的事，`settleHome` 那边传 0.8 —— 到家就没下一站了。
+     */
+    const cap = Math.max(200, left * share);
+    return (m) => this.fareOf(m.id, km, crossBorder) <= cap;
   }
 
   /**
@@ -1855,6 +2077,16 @@ export class JourneyWorld implements World {
         handler: async (args) => {
           const a = (args ?? {}) as { city?: string; why?: string };
           return this.addWish(a.city ?? '', a.why);
+        },
+      },
+      {
+        name: decl[5].name,
+        description: decl[5].description,
+        parameters: decl[5].parameters,
+        tags: [...decl[5].tags],
+        handler: async () => {
+          const r = await this.beginReturn(this.worldNow());
+          return { text: r.text };
         },
       },
     ];
@@ -2234,6 +2466,17 @@ export class JourneyWorld implements World {
         }
         return this.uiSnapshot();
       }
+      /**
+       * 叫她回来。
+       *
+       * 面板上不给「去某地」的按钮（那是替她做决定），但「回来」不一样 ——
+       * 这一趟本来就是他从家里放出去的，他有权收回来。
+       */
+      if (method === 'returnHome') {
+        const r = await this.beginReturn(this.worldNow());
+        if (!r.ok) throw new Error(r.text);
+        return this.uiSnapshot();
+      }
       if (method === 'depart') {
         // 他按了「让她出发」。这里**不检查开关** —— 按钮只在开关打开时才出现，
         // 但真要绕过前端发这个请求也不该被静默吞掉：直接告诉他为什么不行。
@@ -2256,7 +2499,20 @@ export class JourneyWorld implements World {
         if (!api) throw new Error('还没配生图接口');
         const city = this.cityOrNull(this.st.hereId);
         if (!city) throw new Error('现在不知道她在哪');
-        const moment = localMoment(this.worldNow(), city.tz);
+        /*
+         * **在路上补拍 = 拍窗外，不是拍出发城市。**
+         *
+         * 2026-11-03 一位读者反馈：她在路上跑了一下午，点「现在补一张」出来的还是
+         * 出发城市晾衣服的照片 —— 原话「我人往东跑了一下午，照片还站在原地晾衣服」。
+         *
+         * 根因：`hereId` 在 traveling 时**还是出发城市**（要等 arrive 才更新），
+         * 所以这里一直拿着起点去拍。路上该拍目的地一带、而且要拍窗外。
+         */
+        const onRoad = this.st.phase === 'traveling' && !!this.st.leg;
+        const spot = onRoad ? '' : this.spotNow(localMoment(this.worldNow(), city.tz).decimal);
+        const target = onRoad ? (this.cityOrNull(this.st.leg!.toId) ?? city) : city;
+        // 时区跟着拍摄地走 —— 跨时区的时候，出发地和目的地的「下午」不是一个下午。
+        const moment = localMoment(this.worldNow(), target.tz);
         const hour = Math.round(moment.decimal);
         /*
          * **等他拍完再回话。**
@@ -2268,10 +2524,12 @@ export class JourneyWorld implements World {
          * 顺带把诊断一起带回去：他没地方看这几个值，只能瞎猜。
          */
         const res = await this.maybePhoto(
-          city, hour, moment.dateKey, this.spotNow(moment.decimal),
+          target, hour, moment.dateKey, spot,
           this.plan?.weather ?? null,
           // 他点的是「补一张」，那就换一张，不判重。
           true,
+          onRoad,
+          onRoad ? modeById(this.st.leg!.modeId).name : '',
         );
         return {
           ok: res.ok,
@@ -2360,11 +2618,17 @@ export class JourneyWorld implements World {
         budget: this.cfg.budget,
         moneyOn: this.cfg.moneyEnabled,
       },
+      /** 出发地认不出来时的一句话。用户看不到日志，得放在界面上。 */
+      homeProblem: this.homeProblem,
       diary: {
+        /** 填了同步目录没有。填了就在面板底部把路径显出来 —— 用户得能确认「设置生效了」。 */
+        shared: this.cfg.memoryDir.trim() !== '',
         dir: this.diary.current.dir,
         days: this.diary.count(),
         problem: this.diary.current.problem,
       },
+      /** 正在往回走。面板据此把按钮换成「正在回来」，不让连点。 */
+      returning: this.st.returning,
       work: this.st.work
         ? {
           city: this.cityName(this.st.work.cityId),

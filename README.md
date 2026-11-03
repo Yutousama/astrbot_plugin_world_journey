@@ -6,7 +6,7 @@
 本仓库是**开发仓库**，维护：
 
 ```text
-raw/          上游 coopani-world-journey 源码（只读基线，当前 0.5.16）
+raw/          上游 coopani-world-journey 源码（只读基线，当前 0.5.26）
 adapter/      TypeScript 套壳：宿主、配置、事件、媒体、提示词、HTTP、模拟
 scripts/      构建、部署、npm 源码更新、校验
 test/         23 项测试
@@ -31,7 +31,8 @@ plugin/       本地构建/联调目录（.gitignore 排除，不提交到本仓
 
 ## 本地准备
 
-需要 Node **22.7+**（运行时使用 `--experimental-transform-types`）。
+需要 Node **22.7+**。22.7–25.x 用 Node 自带的 `--experimental-transform-types` 跑上游 TS；
+**Node 26 起该 flag 被移除**，插件会自动改用随包发布的 `engine/amaro` 转换器，不需要你配置。
 
 ```bash
 git clone https://github.com/Yutousama/astrbot_plugin_world_journey_release.git \
@@ -129,8 +130,11 @@ main.py / bridge.py      AstrBot 命令、工具、提示词、主动消息、si
 | `WorldHost.log/pushEvent` | `adapter/host.ts` | 未知成员 no-op 兜底 |
 | 私有 `tick`/定时器 | 只在 `adapter/compat/private.ts` 的模拟里 | 只影响模拟，不影响插件 |
 
-安装后的 sidecar 用 Node `--experimental-transform-types` 直接运行
-`plugin/raw/src/*.ts`，所以更新源码只要替换 raw 目录 + 重启 sidecar，不用重新编译 adapter。
+安装后的 sidecar 用 Node 直接运行 `plugin/raw/src/*.ts`，所以更新源码只要替换 raw 目录 +
+重启 sidecar，不用重新编译 adapter。跑 TS 的能力有两种来源：Node 22.7–25.x 用
+`--experimental-transform-types`；Node 26+ 用随包发布的 `engine/amaro`（`--import` 一个
+SWC/WASM loader，`raw/` 仍是磁盘上的 TS，热更新不受影响）。具体走哪条由 `bridge.py` 的
+能力探针决定。
 
 ## 插件使用
 
@@ -156,7 +160,7 @@ main.py / bridge.py      AstrBot 命令、工具、提示词、主动消息、si
 
 ## 已知限制
 
-- 需要 Node 22.7+；没有 Node 时插件会明确报错（可配 `node_path`）。
+- 需要 Node 22.7+（22.7–25.x 原生转换；26+ 自动走内置 `engine/amaro`）；没有 Node 时插件会明确报错（可配 `node_path`）。
 - 主动消息默认关闭；需要配置 `event_target` 或先和机器人说话，再打开。
 - `raw/` 的立绘动作/音乐扩展联动不适用于 AstrBot；提示词会剥掉动作段。
 - 上游私有 `tick` 只用于模拟；上游改了它只影响模拟，不影响插件运行。

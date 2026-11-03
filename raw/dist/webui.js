@@ -34,6 +34,7 @@ const TEXT = {
     workLeft: '还差 {n} 天',
     workLastDay: '今天收工',
     diaryBroken: '日记目录写不进去',
+    diarySynced: '日记与旅行记忆存在这儿（两台电脑填同一个）',
     speed: '{n}× 速度',
     clockSame: '和你的时间一致',
     clockAheadM: '比你快 {m} 分钟',
@@ -47,6 +48,11 @@ const TEXT = {
     sync: '同步',
     syncing: '同步中…',
     syncTitle: '把她的日子拉回到你此刻。倍速不变，过一阵还会再拉开。',
+    returnHome: '叫她回来',
+    resetSpeed: '恢复正常',
+    resetSpeedTitle: '把倍速调回 1×，顺便把她的日子拉回你此刻。',
+    returning: '正在回来',
+    returnTitle: '让她结束这一趟往回走。一站一站走回来，路上照写日记，不是瞬间到家。',
     weatherOut: '她的日期超出预报窗口',
     homeAt: '家 · {n}',
     homeFrom: '从 {n} 出发',
@@ -116,6 +122,7 @@ const TEXT = {
     workLeft: '{n}d to go',
     workLastDay: 'last day',
     diaryBroken: 'Diary folder is not writable',
+    diarySynced: 'Diary and travel memory live here (same path on both machines)',
     speed: '{n}× speed',
     clockSame: 'in step with you',
     clockAheadM: '{m}m ahead of you',
@@ -415,6 +422,49 @@ export default {
             }, { signal: ctx.signal });
             gap.append(syncBtn);
           }
+          /*
+           * 叫她回来。
+           *
+           * 面板上不给「去某地」的按钮 —— 那是替她做决定；但「回来」不一样，
+           * 这一趟本来就是他放她出去的，他有权收回来。
+           * 已经在往回走的时候按钮留着但禁用，比直接消失好：
+           * 消失会让人以为点了没生效。
+           */
+          /*
+           * 倍速调快了之后，得有路回来。
+           *
+           * 2026-11-03 Mr.Q：「如果用户调倍速把宠物的时间调得过快了，得加一个把宠物时间
+           * 调整回来的按钮」。设置页能改，但那要先想起来自己改过、再找到那个设置项。
+           * 面板上直接给一个，两件事一起做：**倍速回 1×，日子拉回此刻**。
+           */
+          if (Number(s.speed) > 1) {
+            const slowBtn = el('button', 'jr-recall', T.resetSpeed);
+            slowBtn.type = 'button';
+            slowBtn.title = T.resetSpeedTitle;
+            slowBtn.addEventListener('click', () => {
+              slowBtn.disabled = true;
+              ctx.setConfig('journey.pace', { 'worlds.journey.speed': 1 })
+                .then(() => ctx.invoke('syncClock'))
+                .then(render)
+                .catch(() => { slowBtn.disabled = false; });
+            }, { signal: ctx.signal });
+            gap.append(slowBtn);
+          }
+          if (s.mode !== 'home') {
+            const backBtn = el('button', 'jr-recall', s.returning ? T.returning : T.returnHome);
+            backBtn.type = 'button';
+            backBtn.title = T.returnTitle;
+            backBtn.disabled = !!s.returning;
+            backBtn.addEventListener('click', () => {
+              backBtn.disabled = true;
+              backBtn.textContent = T.returning;
+              ctx.invoke('returnHome').then(render).catch(() => {
+                backBtn.disabled = false;
+                backBtn.textContent = T.returnHome;
+              });
+            }, { signal: ctx.signal });
+            gap.append(backBtn);
+          }
           status.textContent = T[STATUS_KEY[s.mode] || 'statusUnknown'];
           status.dataset.mode = s.mode;
 
@@ -582,6 +632,19 @@ export default {
           bits.push(fmt(T.diary, s.diary.days));
           foot.append(el('p', null, bits.join(' · ')));
           if (s.diary.problem) foot.append(el('p', 'jr-warn', `${T.diaryBroken}：${s.diary.problem}`));
+          /*
+           * 指到了同步盘就把路径显出来。
+           *
+           * 2026-11-03 Mr.Q：「多设备同步还是不知道怎么设置」—— 除了设置项没讲清，
+           * 还有一个原因：填完之后界面上**没有任何证据**说明它生效了。
+           * 看不到就等于没发生。
+           */
+          if (s.diary.shared && s.diary.dir) foot.append(el('p', 'jr-note', `${T.diarySynced}：${s.diary.dir}`));
+          /*
+           * 出发地认不出来：设置里写着「常熟」，实际按兰州算 —— 不说一句，
+           * 用户只会觉得「加了没用」。2026-11-03 一位读者就是这么卡住的。
+           */
+          if (s.homeProblem) foot.append(el('p', 'jr-warn', s.homeProblem));
           const replay = el('button', 'jr-linkbtn', T.guideReplay);
           replay.type = 'button';
           replay.addEventListener('click', () => {

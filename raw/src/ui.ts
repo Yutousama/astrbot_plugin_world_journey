@@ -98,13 +98,21 @@ export interface UiSnapshot {
     readonly budget: number;
     readonly moneyOn: boolean;
   };
-  readonly diary: { readonly dir: string; readonly days: number; readonly problem: string | null };
+  /** 出发地认不出来时的说明。 = 正常。 */
+  readonly homeProblem: string | null;
+  readonly diary: {
+    /** 有没有指到同步盘。true 时面板底部显示路径，让用户能确认设置生效。 */
+    readonly shared: boolean;
+    readonly dir: string; readonly days: number; readonly problem: string | null;
+  };
   /**
    * 正在打的短工。`null` = 没在打工。
    *
    * 面板上要能一眼看出来，否则用户看到的只是「她三天没动」——
    * 那读起来像坏了，而不像在攒路费。
    */
+  /** 正在往回走。面板据此把「叫她回来」换成「正在回来」，不让连点。 */
+  readonly returning: boolean;
   readonly work: {
     readonly city: string;
     readonly gig: string;

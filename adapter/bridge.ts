@@ -52,7 +52,9 @@ export interface RawBridgeOptions {
   readonly onEvent?: (event: EventRecord) => void;
 }
 
-const BRIDGE_VERSION = '1.0.2';
+declare const __BRIDGE_VERSION__: string;
+/** 构建时由 esbuild 注入（scripts/build-engine.mjs 读根 package.json）；tsx/测试里回退。 */
+const BRIDGE_VERSION = typeof __BRIDGE_VERSION__ === 'string' ? __BRIDGE_VERSION__ : 'dev';
 
 function readLocalNowPlaying(dataDir: string): { title: string; artist: string; at: number } | null {
   try {

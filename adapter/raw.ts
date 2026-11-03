@@ -3,16 +3,40 @@
  *
  * 注意这里**不是静态 import**：安装后的插件把上游源码放在 `plugin/raw/`，通过
  * `JOURNEY_RAW_DIR` 指向它；更新源码后只要重启 sidecar，不需要重新打包 adapter。
- * Node 22.7+ 的 `--experimental-transform-types` 负责把上游 TS 跑起来。
+ * 跑 TS 的能力由 Node 自带 flag 或随包的 `engine/amaro` 提供（见 bridge.py）。
  *
- * 类型仍然从仓库 `raw/src` 静态 import（仅 type，构建时擦除），用来约束 adapter。
+ * 类型只描述套壳用到的公开面，**刻意不 import raw/src/*.ts**：raw 是只读上游，
+ * 它自己的类型严格度不该挡住我们的 typecheck（0.5.26 里就有一处上游的 strict 报错）。
  */
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import type { JourneyConfigSection } from '../raw/src/config.ts';
-import type { JourneyWorld as JourneyWorldType } from '../raw/src/world.ts';
-import type { UiLeg, UiPhoto, UiSnapshot, UiTimelineItem } from '../raw/src/ui.ts';
+import type { RawWorldLike } from './contract.ts';
+
+/** 上游 `JourneyWorld` 的最小结构（真实方法见 contract.ts 的 RawWorldLike）。 */
+export type JourneyWorldType = RawWorldLike;
+/** 上游配置对象：字段由上游定义，套壳只做透传。 */
+export type JourneyConfigSection = Record<string, unknown>;
+/** 照片项：套壳只读 title，其余原样透传给 Python。 */
+export interface UiPhoto {
+  readonly title?: string;
+  readonly [key: string]: unknown;
+}
+/** 路线项：原样透传。 */
+export type UiLeg = Record<string, unknown>;
+export type UiTimelineItem = Record<string, unknown>;
+/** UI 快照：只声明套壳实际读取的字段，其余透传。 */
+export interface UiSnapshot {
+  readonly dateKey: string;
+  readonly clock: string;
+  readonly mode: string;
+  readonly place: { readonly name: string; readonly [key: string]: unknown };
+  readonly trip: { readonly visited: number; readonly [key: string]: unknown };
+  readonly diary: { readonly days: number; readonly [key: string]: unknown };
+  readonly photos: readonly UiPhoto[];
+  readonly wishes: readonly string[];
+  readonly [key: string]: unknown;
+}
 
 export interface RawModule {
   readonly JourneyWorld: new (opts: {
@@ -67,4 +91,3 @@ export async function loadRaw(root = rawRoot()): Promise<RawModule> {
   };
 }
 
-export type { JourneyConfigSection, JourneyWorldType, UiLeg, UiPhoto, UiSnapshot, UiTimelineItem };

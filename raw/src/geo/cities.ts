@@ -142,6 +142,11 @@ const SPOTS: Record<string, readonly string[]> = {
   nanjing: ['中山陵', '夫子庙', '明城墙', '老门东', '玄武湖', '狮子桥'],
   tianjin: ['五大道', '瓷房子', '海河', '古文化街', '天津之眼', '南市食品街'],
   suzhou: ['拙政园', '平江路', '虎丘', '山塘街', '金鸡湖', '观前街'],
+  /*
+   * 2026-11-03 加：一位读者（鱼酥）来信说想加常熟，说自己试过、没加成、
+   * 最后默认落回了兰州。表里已有的四处是他给的，另外四个补的是虞山脚下那一片。
+   */
+  changshu: ['虞山', '尚湖', '兴福寺', '方塔', '燕园', '曾赵园', '沙家浜', '言子墓'],  
   changsha: ['岳麓山', '橘子洲', '太平街', '坡子街', '长沙世界之窗', '文和友'],
   zhengzhou: ['少林寺', '黄河风景区', '二七广场', '德化街', '郑州方特', '河南博物院'],
   qingdao: ['栈桥', '八大关', '崂山', '劈柴院', '青岛啤酒博物馆', '小鱼山'],
@@ -306,6 +311,7 @@ const PRICE_IDX: Record<string, number> = {
   toronto: 3.2, vancouver: 3.6, montreal: 2.8,
   mexicocity: 1.0, guanajuato: 0.9, cancun: 1.8, merida: 0.8,
   buenosaires: 1.1, iguazu: 0.9, elcalafate: 1.2, ushuaia: 1.4,
+  changshu: 1.15,
   // —— 国内：一线 ——
   beijing: 2.0, shanghai: 2.1, shenzhen: 1.9, guangzhou: 1.7,
   xianggang: 2.5, aomen: 1.8,
@@ -338,6 +344,7 @@ const NIGHTS: Record<string, string> = {
   nanjing: '坐船在秦淮河上走一趟',
   tianjin: '海河边的灯',
   suzhou: '平江路夜里人少下来的那一段',
+  changshu: '方塔边上那一圈，灯亮起来之后本地人就出来散步了',
   changsha: '坡子街的夜宵',
   qingdao: '等退潮，去赶海',
   haerbin: '中央大街的灯和冰棍',
@@ -525,6 +532,8 @@ export const CITIES: readonly City[] = [
   C('nanjing', '南京', '江苏', 32.0603, 118.7969, ['古都', '梧桐', '民国'], { port: true }),
   C('suzhou', '苏州', '江苏', 31.2989, 120.5853, ['园林', '江南', '评弹'], { port: true }),
   C('wuxi', '无锡', '江苏', 31.4912, 120.3119, ['太湖', '江南', '排骨'], { port: true }),
+  // 常熟没有民航机场，最近的也得去无锡或上海；高铁和长江港口都有。
+  C('changshu', '常熟', '江苏', 31.6538, 120.7520, ['江南', '古城', '湖', '园林', '面食'], { air: false, port: true }),
   C('yangzhou', '扬州', '江苏', 32.3942, 119.4129, ['早茶', '运河', '园林'], { port: true }),
   C('hangzhou', '杭州', '浙江', 30.2741, 120.1551, ['西湖', '江南', '茶'], { port: true }),
   C('shaoxing', '绍兴', '浙江', 30.0023, 120.5810, ['水乡', '黄酒', '文学'], { port: true }),

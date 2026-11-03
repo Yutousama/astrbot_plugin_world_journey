@@ -9,6 +9,16 @@
   不修改上游逻辑；发布包把上游源码放在 `raw/`，由 sidecar 在运行时动态加载。
   感谢原项目提供的旅行引擎。
 
+## amaro（TypeScript 转换器，随插件发布）
+
+- 项目：<https://github.com/nodejs/amaro>
+- 许可：MIT（`engine/amaro/LICENSE-amaro.md`）
+- 说明：Node 26 起移除了 `--experimental-transform-types`，插件改用 amaro 在
+  `import` 上游 `.ts` 时现场转换。它是 Node.js 官方仓库的 TS 解析/转换包装，
+  内核为 SWC 编译成的 WebAssembly，纯 JS+WASM，没有原生二进制。
+- amaro 的 `dist/` 里同时打包了 SWC 的 WebAssembly 产物，遵循 Apache-2.0
+  （见 `engine/amaro/LICENSE`，Copyright 2024 SWC contributors）。
+
 ## 本项目
 
 - AstrBot 套壳、插件与脚本由 **yutou** 维护，MIT。

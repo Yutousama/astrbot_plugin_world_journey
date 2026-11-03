@@ -19,7 +19,6 @@
   "include": [
     "adapter/**/*.ts",
     "test/**/*.ts",
-    "raw/src/**/*.ts",
     "shim/**/*.ts"
   ]
 }

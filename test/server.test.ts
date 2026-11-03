@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { startServer } from '../adapter/server.ts';
+import { readJson } from '../scripts/lib/upstream.mjs';
 import { makeBridge, tempDir } from './helpers.ts';
+
+const LOCK_VERSION = (readJson(join(process.cwd(), 'upstream.lock.json')) as { version?: string }).version;
 
 test('sidecar：鉴权、状态、工具、提示词、事件、动作、媒体、心跳', async () => {
   const dir = tempDir();
@@ -36,7 +39,7 @@ test('sidecar：鉴权、状态、工具、提示词、事件、动作、媒体�
 
     const health = await getJson('/api/health');
     assert.equal(health.status, 200);
-    assert.equal(health.body.upstreamVersion, '0.5.16');
+    assert.equal(health.body.upstreamVersion, LOCK_VERSION);
     assert.ok(health.body.eventLogId);
 
     const status = await getJson('/api/status');

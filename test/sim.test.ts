@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runSimulation } from '../adapter/sim.ts';
+import { readJson } from '../scripts/lib/upstream.mjs';
 import { T0, tempDir } from './helpers.ts';
+
+const LOCK_VERSION = (readJson(join(process.cwd(), 'upstream.lock.json')) as { version?: string }).version;
 
 test('3 天模拟跑通，事件覆盖出发/到达/跨天，无重复 key', async () => {
   const dir = tempDir();
@@ -16,13 +19,13 @@ test('3 天模拟跑通，事件覆盖出发/到达/跨天，无重复 key', asy
     offline: true,
     echo: false,
   });
-  assert.equal(report.upstreamVersion, '0.5.16');
+  assert.equal(report.upstreamVersion, LOCK_VERSION);
   assert.ok(report.events > 0);
   assert.deepEqual(report.duplicateKeys, []);
   assert.ok(report.eventsByType['journey.depart'] >= 1);
   assert.ok(report.eventsByType['journey.arrive'] >= 1);
   assert.ok(report.citiesVisited >= 1);
-  assert.ok(readFileSync(join(dir, 'sim-report.json'), 'utf8').includes('0.5.16'));
+  assert.ok(readFileSync(join(dir, 'sim-report.json'), 'utf8').includes(LOCK_VERSION ?? ''));
 });
 
 test('同一 seed / 起始时刻产生同一事件序列', async () => {

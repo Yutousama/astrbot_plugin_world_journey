@@ -30,8 +30,13 @@ plugin/         AstrBot Python 插件
 
 - **adapter/raw.ts** 是唯一接触 raw 的文件；它用 `import(pathToFileURL(...))` 动态加载，
   所以 sidecar bundle 只有约 58KB，更新 raw 不需要重打 adapter。
-- 安装后的 sidecar 以 `node --experimental-transform-types sidecar.mjs` 运行；Node 22.7+ 负责
-  把 raw 的 TS（含 parameter properties）转成 JS。
+- 安装后的 sidecar 用 Node 跑 `sidecar.mjs`，再把 `raw/src/*.ts` 动态 import 进来：
+  - Node 22.7–25.x：`node --experimental-transform-types sidecar.mjs`，由 Node 自带转换；
+  - Node 26+：该 flag 被移除（`process.features.typescript` 也没有 `transform` 取值了），改传
+    `--enable-source-maps --import file://.../engine/amaro/register-transform.mjs`。
+  上游用了 parameter properties，擦除模式跑不了，必须真转换。
+- 走哪条由 `bridge.py` 的能力探针决定：`node --experimental-transform-types -p process.features.typescript`
+  返回 `transform` 才算原生可用。版本号只做下限（>=22.7），不做能力判断。
 - **adapter/contract.ts** 检查公开面；**adapter/compat/private.ts** 只在模拟里碰私有 tick。
 - **raw/src** 的 `cortico/*` 只有 `import type`；Node 的 transform-types 会擦除，无需 shim。
 - 事件统一为 `{seq,type,key,text,trigger,ts,photo?}`，写 `events.jsonl`，Python 按 seq 轮询。
@@ -48,7 +53,7 @@ plugin/         AstrBot Python 插件
 ```
 AstrBot initialize
   → 写 engine-config.json
-  → spawn node --no-warnings --experimental-transform-types engine/sidecar.mjs serve ...
+  → spawn node --no-warnings [--experimental-transform-types | --enable-source-maps --import <amaro>] engine/sidecar.mjs serve ...
   → 读 stdout listening port
   → /api/health
   → /api/tools 动态注册 FunctionTool

@@ -110,6 +110,19 @@
         "zh": "记下「因为某首歌想去某地」，下次挑地方时会优先。",
         "en": "Adds a place to her wish list after something pulled her there."
       }
+    },
+    {
+      "name": "journey_return_home",
+      "description": "Turn her trip around and start home, because the person asked her to come back. She walks back stop by stop - arriving somewhere, spending a night, moving on - not a teleport; it can take days. Only call it when the person actually asks her back. Deciding to go home is otherwise hers alone, and leaving early costs her the part of the trip she has not seen.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "summary": {
+        "zh": "他说回来吧，就结束这一趟往回走。",
+        "en": "Starts her trip back home, because the person asked."
+      }
     }
   ],
   "events": [

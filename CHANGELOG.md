@@ -1,5 +1,40 @@
 # 更新日志
 
+## 1.0.3 — 2026-11-03
+
+### 修复：Node 26 起跑不了上游源码
+
+- Node 26.0.0 移除了 `--experimental-transform-types`（`process.features.typescript` 也不再返回
+  `transform`），而上游 `raw/src` 用了 parameter properties，纯擦除模式直接
+  `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`；表现为 sidecar 起不来、`/journey_update` 更新完也起不来。
+- `bridge.py` 不再用版本号猜能力，改成实跑探针
+  `node --experimental-transform-types -p process.features.typescript`，只有回 `transform` 才算原生可用。
+- 探针不通时改走随包发布的 `engine/amaro`（Node 官方 SWC/WASM 转换器）：
+  `--enable-source-maps --import file:///.../engine/amaro/register-transform.mjs`。纯 JS+WASM，
+  没有原生二进制；`raw/` 仍是磁盘上的 TS，**热更新流程与回滚完全不变**。
+- Node 22.7–25.x 走原生 flag，行为和产物不变。
+- `engine/upstream.json` 的 `bridgeVersion` 改为读根 `package.json`，不再硬编码。
+- `THIRD_PARTY_NOTICES.md` 补充 amaro（MIT）与它打包的 SWC WebAssembly（Apache-2.0）。
+- 发布包基线从 0.5.16 升到 **0.5.26**（含同步盘日记/旅行记忆、路途补拍等上游改动）。
+- 重装/升级插件会把 `raw/` 换回发布包基线，看起来像「又升级了一次」：现在启动时会把
+  「见过的最新上游版本」记在 `plugin_data/upstream-state.json`，发现被换回旧版就 warn，
+  `/journey_debug` 也会显示 `上游源码 / 记录的最新上游` 两行。
+- `typecheck` 不再把 `raw/` 纳入编译（0.5.26 有一处上游自己的 strict 报错），套壳改用本地
+  最小类型声明；测试里的上游版本断言改为读 `upstream.lock.json`，上游升版不用再改测试。
+- `BRIDGE_VERSION` 改为构建时由 `package.json` 注入，不再写死。
+- 升到本版需要重装一次插件本体（`/journey_update` 只换 `raw/`，换不了 `engine/`）。
+
+### 安全：按第三方审查收口两处配置面
+
+- `allow_upstream_update` 默认由**开**改为**关**：`/journey_update` 会从 npm 下载 tarball
+  整体替换 `raw/`，虽然有 sha512 校验、失败自动回滚、仅管理员可触发，但它等于允许运行时
+  替换代码；改为默认关、按需打开。要用的话去插件配置里把它打开，关闭时的回复也会提示去哪开。
+- `extra_config` 补强：schema 提示写明「只给上游新增字段兜底、会覆盖表单映射、不要放密钥」；
+  启动时用 warn 日志列出被覆盖的**键名**（不打印值，避免 URL/密钥进日志）；非法 JSON 的报错
+  改成能照做的一句话，并保留「忽略 extra_config 重试、不让插件起不来」的兜底。
+- README 新增「安全说明」：运行时代码替换默认关闭、网络边界（127.0.0.1 + 随机 token）、
+  密钥只落本地 `engine-config.json`。
+
 ## 1.0.2 — 2026-11-03
 
 ### 修复：上下文注入不再破坏 prompt cache

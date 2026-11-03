@@ -42,6 +42,16 @@ export interface PhotoScene {
    * 「真实旅行照片、胶片质感」，等于让提示词跟底模对着干。
    */
   readonly style?: string;
+  /**
+   * 这一张是**在路上**拍的，不是在城里逛。
+   *
+   * 2026-11-03 一位读者来信：「生成的图片一直都是几个出发的城市中的图片，
+   * 不会显示火车、乡间的照片」。查下来确实如此：拍照只挂在「出去逛」那个节点上，
+   * 路上一个节点都不拍，所以画面永远是城里的景点。
+   */
+  readonly onRoad?: boolean;
+  /** 路上坐的是什么（火车 / 长途汽车 / 自驾）。只有在路上时才有意义。 */
+  readonly mode?: string;
 }
 
 export interface PhotoRequest {
@@ -78,7 +88,13 @@ const PHOTO_TIMEOUT_MS = 90_000;
  * 这一段是纯函数，测试直接喂数字验，不用起网络。
  */
 export function photoPrompt(scene: PhotoScene): string {
-  const where = scene.spot ? `${scene.city}的${scene.spot}` : scene.city;
+  const where = scene.onRoad
+    /*
+     * 路上的画面要说清「往外看」，不说模型就画一座城。
+     * 带上交通方式是因为火车窗、汽车窗、机翼底下完全不是一回事。
+     */
+    ? `在${scene.mode ?? '车'}上往外看的风景，${scene.city}一带的田野、村庄和路`
+    : scene.spot ? `${scene.city}的${scene.spot}` : scene.city;
   const light =
     scene.hour < 6 ? '天还没亮的蓝调时刻'
     : scene.hour < 9 ? '清晨的低角度阳光'
