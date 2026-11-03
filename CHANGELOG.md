@@ -1,6 +1,16 @@
 # 更新日志
 
-## 1.0.1 — 2026-11-03
+## 1.0.2 — 2026-11-03
+
+### 修复：上下文注入不再破坏 prompt cache
+
+- `inject_prompt` 不再向 `req.system_prompt` 尾部拼接动态旅行状态；
+- 改用 `req.extra_user_content_parts` + `TextPart.mark_as_temp()`，作为仅本轮可见的临时
+  user 内容块，不写入会话历史；
+- 旅行状态与最近主动汇报合并成一个临时内容块；
+- AstrBot 版本不支持临时内容块时跳过注入并写日志，不回退到 system prompt。
+
+### 1.0.1 — 2026-11-03
 
 - 插件作者改为 **yutou**，原项目 Mr.Q 仅在 README/第三方声明中保留致谢与版权；
 - 拆分开发仓库与发布仓库：发布仓库根目录直接作为 AstrBot 插件根目录；

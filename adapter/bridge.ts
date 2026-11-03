@@ -52,7 +52,7 @@ export interface RawBridgeOptions {
   readonly onEvent?: (event: EventRecord) => void;
 }
 
-const BRIDGE_VERSION = '1.0.1';
+const BRIDGE_VERSION = '1.0.2';
 
 function readLocalNowPlaying(dataDir: string): { title: string; artist: string; at: number } | null {
   try {

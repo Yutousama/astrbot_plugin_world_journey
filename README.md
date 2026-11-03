@@ -117,6 +117,9 @@ plugin/.../engine/
 main.py / bridge.py      AstrBot 命令、工具、提示词、主动消息、sidecar 生命周期
 ```
 
+提示词注入使用 `req.extra_user_content_parts` + `TextPart.mark_as_temp()`，作为仅本轮可见的
+临时 user 内容块，不拼接 `system_prompt`，避免破坏 prompt cache。
+
 套壳只依赖上游少量公开面：
 
 | 上游 | 套壳用法 | 上游变了怎么办 |

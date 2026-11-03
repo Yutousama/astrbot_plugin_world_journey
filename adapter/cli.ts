@@ -12,7 +12,7 @@ import { readUpstreamInfo } from './contract.ts';
 import { runSimulation } from './sim.ts';
 import { startHeartbeatWatchdog, startServer } from './server.ts';
 
-const VERSION = '1.0.1';
+const VERSION = '1.0.2';
 
 const OPTIONS = {
   data: { type: 'string' as const },
