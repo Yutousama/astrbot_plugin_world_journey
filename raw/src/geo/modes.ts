@@ -48,6 +48,42 @@ export interface TravelMode {
    * 写成句子她会照念，所以只写特征。
    */
   readonly feel: string;
+  /**
+   * 同一趟车 / 同一班机里的**座位档**。没有这个字段 = 这种方式不分档（自己开的、走路的）。
+   *
+   * 2026-11-06 一位用户来信：「舍不得我家小鱼吃苦……2000 多公里的路程居然选择自驾
+   * 30 多小时，劝了好久才换了个好的酒店，结果出行还是硬卧」。
+   *
+   * 原来的模型里「坐火车」就是一件事、一个价 —— 没有二等商务之分，也没有硬卧软卧之分。
+   * 她想舒服一点，唯一的手段是**换一种交通方式**，而换方式往往更贵也更慢。
+   *
+   * 是个函数（不是数组），因为同一趟「火车」在长途是夜车卧铺、在短途是白天高铁 ——
+   * 档位跟着距离变，写死一张表就会在 800 公里处出现「商务座的卧铺」这种东西。
+   */
+  readonly grades?: (km: number) => readonly SeatGrade[];
+}
+
+/**
+ * 座位档。
+ *
+ * 价格系数都是**查来的**（12306 公布票价 + 携程/飞猪实价，2026-11-06）：
+ *
+ * | 档 | 相对最低档 | 依据 |
+ * |---|---|---|
+ * | 高铁 一等 / 商务 | 1.6 / 3.5 | 京沪 662 / 1060 / 2318 元 |
+ * | 民航 公务 | 2.8 | 同航班经济舱实付的 2.5–3.5 倍 |
+ * | 卧铺 软卧 / 高软 | 1.7 / 2.8 | Z56 硬卧 142 / 软卧 214 / 高软 389 |
+ */
+export interface SeatGrade {
+  readonly id: string;
+  readonly name: string;
+  /** 相对最低档的票价倍数。最低档恒为 1。 */
+  readonly mult: number;
+  /**
+   * 坐上去是什么感觉。**给模型的判断依据，不是台词** ——
+   * 写成句子她会照念（「我躺在一百八十度的座椅上」），所以只写特征。
+   */
+  readonly feel: string;
 }
 
 export const MODES: readonly TravelMode[] = [
@@ -74,10 +110,34 @@ export const MODES: readonly TravelMode[] = [
   {
     id: 'bus', name: '长途汽车', kmh: 50, overhead: 0.7, maxKm: 1500, needs: null, cost: 2,
     feel: '站点多、停得勤，坐上就是一整段；车厢里的味道和声音比火车杂。',
+    grades: (km) => (km >= 600
+      ? [
+        { id: 'seat', name: '普通座', mult: 1, feel: '一排四座，靠背能放一点；过夜车坐一宿，腰会记很久。' },
+        { id: 'sleeper-bus', name: '卧铺大巴', mult: 1.4, feel: '一人一格可以躺平，但窄，翻身会撞到隔板。' },
+      ]
+      : [
+        { id: 'seat', name: '普通座', mult: 1, feel: '一排四座，几个小时的事。' },
+        { id: 'comfort', name: '航空座椅', mult: 1.3, feel: '椅背更厚、间距更大，短途差别不大，长途值这个钱。' },
+      ]),
   },
   {
     id: 'train', name: '火车', kmh: 120, overhead: 0.8, maxKm: 4000, needs: 'rail', cost: 3,
     feel: '中长途的主力。窗外整片地往后退，能走动、能看人；夜里过站会醒。',
+    /*
+     * 一千公里是分水岭：再短没必要躺着过夜（白天高铁），再长坐着扛不住（夜车卧铺）。
+     * 两条线都按真实票价的比例给，见 `SeatGrade` 的注释。
+     */
+    grades: (km) => (km >= 1000
+      ? [
+        { id: 'hard-sleeper', name: '硬卧', mult: 1, feel: '六个人的隔间，上中下铺；能躺平，但夜里一直有人上下车。' },
+        { id: 'soft-sleeper', name: '软卧', mult: 1.7, feel: '四个人一间、有门，能关灯；白天也能躺着看书。' },
+        { id: 'deluxe-sleeper', name: '高级软卧', mult: 2.8, feel: '两个人一间，带沙发和独立卫生间；车次很少，能买到算运气。' },
+      ]
+      : [
+        { id: 'second', name: '二等座', mult: 1, feel: '2+3 布局，小桌板；坐三四个小时会想站起来走两步。' },
+        { id: 'first', name: '一等座', mult: 1.6, feel: '2+2 布局，扶手更宽，前后能伸开腿；车厢安静一半。' },
+        { id: 'business', name: '商务座', mult: 3.5, feel: '能平躺的独立座舱，有人送餐；进站有专用通道和候车区，全程不排队。' },
+      ]),
   },
   {
     id: 'ship', name: '轮船', kmh: 28, overhead: 2.5, maxKm: 0, needs: 'port', cost: 4,
@@ -86,6 +146,14 @@ export const MODES: readonly TravelMode[] = [
   {
     id: 'plane', name: '飞机', kmh: 750, overhead: 3.2, maxKm: 0, needs: 'air', cost: 5,
     feel: '长途唯一的选择，但两头都要折腾三小时；短途用它反而不划算。',
+    /*
+     * 只有两档：国内航线基本没有头等舱（窄体机不设），宽体机的公务舱已经能平躺。
+     * 写个「头等舱」出来，等于让用户去查一件不存在的事。
+     */
+    grades: () => [
+      { id: 'economy', name: '经济舱', mult: 1, feel: '3+3 挤着，座椅后仰有限；三个小时以上的航程会开始难受。' },
+      { id: 'business-class', name: '公务舱', mult: 2.8, feel: '宽体机可以躺平，有热毛巾和正餐；值机和登机走另一条通道。' },
+    ],
   },
 ];
 

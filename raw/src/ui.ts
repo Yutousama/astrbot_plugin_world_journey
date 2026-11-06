@@ -121,6 +121,33 @@ export interface UiSnapshot {
     readonly daysLeft: number;
   } | null;
   readonly photos: readonly UiPhoto[];
+  /**
+   * 同城有谁 + 她手上的约定。**都没配、也没约人时是 `null`** —— 那一行整条不出现。
+   *
+   * 2026-11-05 Mr.Q：「新功能从哪看？我找不到啊」。查下来是真的没有入口：
+   * 联机这一块界面上一个按钮都没有，用户不知道有这功能，也就永远不去用。
+   * 这一行就是那个入口 —— 不解释功能，只把**现在的事实**摆出来：
+   * 这座城还有几个、有没有人在找伴、她跟谁约好了还剩几天。
+   */
+  readonly social: {
+    /** 同城、同时段还有几个人。0 = 没人（不是坏了）。 */
+    readonly nearby: number;
+    /** 同城有几个人在找伴走一段。 */
+    readonly invites: number;
+    /** 这个池子今天一共多少只（不分城市）。0 = 服务器没回这个字段（旧版）。 */
+    readonly pool: number;
+    /** 她手上那份约定。`here` = 已经到那儿了。 */
+    readonly pledge: {
+      readonly withPet: string;
+      /** 一起走的所有人；老数据没有这一段，面板就按 withPet 显示。 */
+      readonly withPets?: readonly string[];
+      readonly city: string;
+      readonly days: number;
+      readonly daysLeft: number;
+      readonly here: boolean;
+    } | null;
+  } | null;
+
   /** 照片字节所在的目录。相册页顶部显示它，方便用户直接去翻。 */
   readonly photoDir: string;
   /**
@@ -145,9 +172,35 @@ export interface UiSnapshot {
 
   /** 「出门等他点头」开着没有。 */
   readonly askBeforeDepart: boolean;
-  /** 现在能手动让她出发吗（在家、而且不在休息期）。 */
+  /**
+   * 她想做、但要他先点头的那件事。`null` = 没有待批的事。
+   *
+   * 2026-11-06 加。开了「出门等点头」之后，原来的实现是**什么都不发生** ——
+   * 那条鱼从此再没出过门，也不说一句话。开关的意思是「先问我」，
+   * 面板上这张卡片就是「问」这个动作本身：一句话 + 两个按钮（好 / 不好）。
+   */
+  readonly ask: {
+    readonly kind: 'depart' | 'accept';
+    /** 想去的那座城。 */
+    readonly city: string;
+    /** 待几天（只有接邀约才有）。 */
+    readonly days: number | null;
+    /** 谁邀的（只有接邀约才有）。 */
+    readonly withPet: string | null;
+    readonly note: string | null;
+    /** 她问的那句话，已经拼好，前端直接贴。 */
+    readonly line: string;
+  } | null;
+  /**
+   * 现在能不能手动让她出发。
+   *
+   * 2026-11-06 起**只有 `phase === 'home'` 一个条件** —— 休息期不再置灰。
+   * 那份 bug 报告的原话是「间隔改 0 也没法让它手动出门」：判据盖死那层已经修了
+   * （休息期改成按配置实时算），但还剩一种情形 —— 她确实在歇，而他想现在让她走。
+   * 休息期间的说明走 `restUntil`，按钮照样能按。
+   */
   readonly canDepart: boolean;
-  /** 还在休息的话，歇到哪天（`11-03`）。按钮锁着时要说明为什么。 */
+  /** 还在休息的话，歇到哪天（`11-03`）。按钮旁边那句就靠它说清「原计划到哪天」。 */
   readonly restUntil: string | null;
 
   readonly home: string;

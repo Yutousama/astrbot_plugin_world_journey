@@ -18,7 +18,7 @@ import type { City } from '../geo/cities.ts';
 import { CITIES, cityById, isForeign } from '../geo/cities.ts';
 import { distanceKm, waypoints, haulOf, bearingDeg, angleBetween } from '../geo/distance.ts';
 import { climateOf, affinity } from '../geo/climate.ts';
-import { MODES, modeById, hoursFor, reachable, type ModeId, type TravelMode } from '../geo/modes.ts';
+import { MODES, modeById, hoursFor, reachable, type ModeId, type TravelMode, type SeatGrade } from '../geo/modes.ts';
 
 export interface Journey {
   readonly id: string;
@@ -34,6 +34,15 @@ export interface Journey {
   readonly arriveAt: string;
   /** 出发时的倍速。中途改倍速不影响这一段，下一段才生效。 */
   readonly speed: number;
+  /**
+   * 这一趟买的座位档（二等座 / 商务座 / 硬卧 / 公务舱……）。
+   *
+   * 2026-11-06 加的。老状态里没有这一格 —— 读不到就当「最低档」，不是当没有。
+   * 空串 = 这种方式不分档（走路、骑车、自己开）。
+   */
+  readonly seat?: string;
+  /** 座位档的票价倍数。面板/日记要拿它说「这趟花得多」。 */
+  readonly seatMult?: number;
   /** 直线路径上会经过的城市 id，用来给她一点「路过」的实感。 */
   readonly viaIds: readonly string[];
   readonly createdAt: string;
@@ -122,6 +131,21 @@ export function pickDestination(args: {
   visited?: readonly string[];
   /** 想去的地方。因为某首歌、某段话生出来的念头 —— 权重给得很高。 */
   wishes?: readonly string[];
+  /**
+   * 这个月当地正好有事的城市（樱花、雪祭、泼水节）。
+   *
+   * 2026-11-05 Mr.Q：「节日活动什么的也会影响她第二次拜访一个地方」。
+   * 所以这一条不是「优先去哪」，是「**值不值得为这一个月专门跑一趟**」——
+   * 樱花只有三月，错过就等明年，它配得上比一个普通新城市更高的权重。
+   */
+  festivalIds?: readonly string[];
+  /**
+   * 上回没逛完、她还想再回去的城市。
+   *
+   * 和节日那条不是一回事：节**有窗口**，所以压过新城市；没逛完**没窗口**
+   * （随时能回），所以略低于新城市 —— 新鲜的地方不常有，回头路常有。
+   */
+  unfinishedIds?: readonly string[];
   /** 上一段的行进方向（度，0=正北）。`null` = 刚开始或刚离家，不约束方向。 */
   heading?: number | null;
   /** 上一段走了多少公里。用来让「长途之后走短途」。 */
@@ -152,6 +176,8 @@ export function pickDestination(args: {
   const rnd = args.rnd ?? Math.random;
   const from = args.from;
   const visited = new Set(args.visited ?? []);
+  const festivalNow = new Set(args.festivalIds ?? []);
+  const unfinished = new Set(args.unfinishedIds ?? []);
   const wishes = new Set(args.wishes ?? []);
   const heading = args.heading ?? null;
   const homeClimate = climateOf(args.home ?? from);
@@ -281,6 +307,14 @@ export function pickDestination(args: {
     if (heading !== null) w *= dirFactor(angleBetween(bearingDeg(from, x.c), heading));
     w *= affinity(homeClimate, climateOf(x.c));
     if (!visited.has(x.c.id)) w *= 3;
+    /*
+     * 两条「再来一次」的理由。
+     *
+     * 节日那条压在 `else if` 前面：一座城同时「有节」又「没逛完」时，按节算 ——
+     * 节的窗口只有这一个月，没逛完的部分明年还在。选那个会消失的。
+     */
+    if (festivalNow.has(x.c.id)) w *= 4;
+    else if (visited.has(x.c.id) && unfinished.has(x.c.id)) w *= 2.2;
     const overlap = x.c.tags.filter((t) => from.tags.includes(t)).length;
     w *= 1 + Math.max(0, 2 - overlap) * 0.3;
     // 国外要过境，概率压低但保留 —— 半年里总该出去一趟。
@@ -381,6 +415,17 @@ function usableModes(from: City, to: City, km: number): TravelMode[] {
 }
 
 /**
+ * 这两个之间，**有哪些方式真的能用**。
+ *
+ * 2026-11-05 由 `usableModes` 公开出来的：用户说「我要坐高铁去上海」时，
+ * 得先回答「这趟能不能坐高铁」—— 而那套判定（距离上限、枢纽、过不过海）
+ * 必须和选目的地、挑方式用的是同一份，不能各写一遍。
+ */
+export function usableModesFor(from: City, to: City, km = distanceKm(from, to)): TravelMode[] {
+  return usableModes(from, to, km);
+}
+
+/**
  * 从这儿能不能到那儿。
  *
  * **选目的地的时候必须先问这一句。** 不然会选出一座走不到的城市，
@@ -415,9 +460,16 @@ export function pickMode(
    * 不传 = 不限制（没记账、或者预算填了 0）。
    */
   afford?: (m: TravelMode) => boolean,
+  /**
+   * 没驾照：**自驾和租车都从候选中去掉**（2026-11-06）。
+   *
+   * 不是压权 —— 没证的人不该有一成的概率「偷偷开一趟」。
+   */
+  noCar = false,
 ): TravelMode | null {
   const all = usableModes(from, to, km);
-  const allowed = noFly ? all.filter((m) => m.id !== 'plane') : all;
+  const allowed = (noFly ? all.filter((m) => m.id !== 'plane') : all)
+    .filter((m) => !noCar || m.id !== 'car');
   const usable = afford ? allowed.filter((m) => afford(m)) : allowed;
   // 禁了飞机之后可能一趟都走不了（海岛、跨国）。那就交给调用方处理，
   // 别退回去给飞机 —— 给出去就是明知道没钱还买票。
@@ -431,9 +483,23 @@ export function pickMode(
 
     if (haul === 'short') {
       // 短途：越「日常」越好。步行/自行车/电瓶车/公交 是生活，飞机是折腾。
+      /*
+       * **自行车的权重必须跟着距离走。**
+       *
+       * 2026-11-05 一位用户来信：「我喊桌宠坐高铁从常熟去上海，桌宠刚答应，
+       * 插件转头安排它蹬自行车 80 公里去上海」。
+       *
+       * 根因在这一行：`short` 这一档管的是 **0–400 公里**，而自行车原来固定给 5，
+       * 比火车（3）还高 —— 80 公里按权重算，自行车是最可能的那一种。
+       * 原来的上限只卡 `maxKm: 150`，也就是说「一百四十公里也能骑」，
+       * 算术上允许，现实里没人这么干。
+       *
+       * 现在和步行用同一个形状：**超出舒服的范围就迅速掉下去**。
+       * 二十五公里骑车是日常，八十公里是自虐，后者不该赢过火车。
+       */
       if (m.id === 'walk') w = km <= 15 ? 6 : km <= 35 ? 1.5 : 0.05;
-      else if (m.id === 'bike') w = 5;
-      else if (m.id === 'scooter') w = 4;
+      else if (m.id === 'bike') w = km <= 25 ? 5 : km <= 60 ? 1.2 : 0.15;
+      else if (m.id === 'scooter') w = km <= 20 ? 4 : km <= 60 ? 1.0 : 0.1;
       else if (m.id === 'bus') w = 3;
       else if (m.id === 'car') w = 2.5;
       else if (m.id === 'train') w = 3;
@@ -451,7 +517,18 @@ export function pickMode(
     } else if (haul === 'long') {
       if (m.id === 'train') w = 5;
       else if (m.id === 'plane') w = 5;
-      else if (m.id === 'car') w = 1.2;
+      /*
+       * **长途自驾要压到几乎没有。**
+       *
+       * 2026-11-06 用户来信：「2000 多公里的路程居然选择自驾 30 多小时」。
+       * 原来这里是 1.2，跟火车飞机（各 5）比还有一成多的概率 —— 一百次里会中十几次。
+       *
+       * 而现实里 2000 公里自驾不止 30 小时：纯驾驶 20–22 小时，加上法定休息和过夜，
+       * 实际是两到三天，到地方人已经废了。所以：
+       *   1500 公里以内  0.6（还有人这么干，比如带老人小孩、顺路玩）
+       *   1500 公里以上  0.08（基本只剩「专门自驾游」这一种动机）
+       */
+      else if (m.id === 'car') w = km >= 1500 ? 0.08 : 0.6;
       else if (m.id === 'ship') w = 1.4;
       else w = 0.02;
     } else {
@@ -488,6 +565,59 @@ export function pickMode(
  * 第一版把倍速直接除在这里（`到达 = 出发 + 时长/倍速`），结果是 24x 下她十七分钟就
  * 到站，然后在目的地按真实时间住两三天 —— 车跑快了，但人没走快。现在不是了。
  */
+/**
+ * 挑一个座位档 —— **她自己判断**，不是用户设开关。
+ *
+ * 2026-11-06 Mr.Q 定的规矩：「我希望她自己判断」。所以这里没有「舒适度设置」这一项，
+ * 只有三条能解释的依据：
+ *
+ * 1. **手上有多少钱**：这张票占余钱的比例越小，越敢往上买。
+ * 2. **这一趟多长**：八小时硬座和两小时硬座不是一回事 —— 长途给升舱加权。
+ * 3. **不然就最省**：列表第一档永远是最便宜的，什么条件都不满足就它。
+ *
+ * 用户的抱怨（「2000 公里自驾 30 小时、最后还是硬卧」）不是「选项少」，
+ * 是她**只有换交通方式这一个手段**。有了档位，她可以在同一趟车上买到舒服。
+ */
+export function pickGrade(
+  mode: TravelMode,
+  km: number,
+  /** 余钱 ÷ 最低档票价。`null` = 没记账，按「不紧不松」算。 */
+  purse: number | null = null,
+  rnd: () => number = Math.random,
+): SeatGrade | undefined {
+  const list = mode.grades?.(km) ?? [];
+  if (!list.length) return undefined;
+  const base = list[0]!;
+  const second = list[1];
+  const third = list[2];
+  /*
+   * 「这一趟够不够长、值不值得买贵的」—— 门槛 **600 公里**，不是 1200。
+   *
+   * 一开始写的是 1200，结果顶档永远选不到：火车的分档在 1000 公里处从
+   * 「二等/一等/商务」切成「硬卧/软卧/高软」，而 1200 以上只剩卧铺档 ——
+   * 商务座所在的区间（<1000）全被判成「不长」，于是商务座一次都不会出现。
+   *
+   * 600 公里大约是三到五个小时的车：坐这么久，买张舒服的票是合理的。
+   * 三百公里的城际，再怎么有钱也不该买商务座。
+   */
+  const long = km >= 600;
+
+  // 没记账当成「手头有四张票的钱」—— 不上不下，该省的时候还是会省。
+  const p = Number.isFinite(purse) && purse !== null ? (purse as number) : 4;
+
+  if (p < 1.6 || !second) return base;
+
+  // 长途更值得花钱：同样一笔钱，坐八小时比坐两小时值。
+  const up = long ? 1.5 : 1;
+
+  if (p < 4) return rnd() < (long ? 0.3 : 0.15) ? second : base;
+  if (p < 9) return rnd() < Math.min(0.7, 0.4 * up) ? second : base;
+
+  // 余钱很松：顶档也开始出现，但只有长途才常见 —— 短途买商务座不值。
+  if (third && long && rnd() < 0.3) return third;
+  return rnd() < 0.8 ? second : base;
+}
+
 export function buildJourney(args: {
   from: City;
   to: City;
@@ -496,9 +626,11 @@ export function buildJourney(args: {
   at: Date;
   /** 出发时的倍速，只记录下来做诊断用，不参与时长计算。 */
   speed: number;
+  /** 买的是哪一档座位。不传 = 最低档（见 `pickGrade`）。 */
+  grade?: SeatGrade;
   rnd?: () => number;
 }): Journey {
-  const { from, to, mode, km, at, speed } = args;
+  const { from, to, mode, km, at, speed, grade } = args;
   const durationWorldHours = Math.round(hoursFor(mode, km) * 10) / 10;
   const arriveAt = new Date(at.getTime() + durationWorldHours * 3_600_000);
   const corridor = mode.id === 'plane' ? 250 : mode.id === 'walk' ? 15 : 90;
@@ -509,6 +641,7 @@ export function buildJourney(args: {
     toId: to.id,
     modeId: mode.id,
     km,
+    ...(grade && grade.id ? { seat: grade.name, seatMult: grade.mult } : {}),
     durationWorldHours,
     departedAt: at.toISOString(),
     arriveAt: arriveAt.toISOString(),

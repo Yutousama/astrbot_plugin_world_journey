@@ -68,12 +68,27 @@ export class PhotoBook {
    *
    * 用在手动补拍上：他点了「补一张」就是想要一张新的，不该被「一天一张」挡住。
    * 旧的媒体文件不删 —— 内容寻址，删了别人那条会话就断了。
+   *
+   * ## 为什么会出现「几张一模一样的」
+   *
+   * 原来的过滤条件是 `handle !== keepHandle`，意思是「留新的、删旧的」。
+   * 但**同一张图被拍两次时，两个 handle 是一样的**，于是条件不成立，
+   * 旧记录一条都删不掉，照片簿里就堆出 N 条相同记录。
+   *
+   * 2026-11-04 Mr.Q 撞上了：wf 里 seed 固定 → ComfyUI 命中执行缓存 →
+   * 连点几下秒回同一张图 → 照片簿多了三条一模一样的。
+   *
+   * 现在改成「同城同日只留一条」：按 handle 认，保留最前面那条（`add` 是头插，
+   * 最前面就是最新的），其余全删。这样不论新旧 handle 是否相同都收敛到一条。
    */
   replaceDay(dateKey: string, cityId: string, keepHandle: string): number {
     const before = this.items.length;
-    this.items = this.items.filter(
-      (p) => !(p.dateKey === dateKey && p.cityId === cityId && p.handle !== keepHandle),
-    );
+    let kept = false;
+    this.items = this.items.filter((p) => {
+      if (p.dateKey !== dateKey || p.cityId !== cityId) return true;
+      if (p.handle === keepHandle && !kept) { kept = true; return true; }
+      return false;
+    });
     const removed = before - this.items.length;
     if (removed) this.save();
     return removed;

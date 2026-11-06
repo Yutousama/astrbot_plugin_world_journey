@@ -20,7 +20,7 @@ import { dirname } from 'node:path';
 import { isForeign, type City } from './cities.ts';
 
 /** 档次线索。**没有这个字段 ≠ 普通档** —— 那是「数据源没说」。 */
-export type TierHint = 'view' | 'budget' | 'dingy';
+export type TierHint = 'luxury' | 'view' | 'budget' | 'dingy';
 
 export interface HotelPoi {
   readonly name: string;
@@ -162,7 +162,8 @@ const CHEAP_BRANDS = [
 export function tierFromAmapType(type: string): TierHint | null {
   const tierOfSeg = (seg: string): TierHint | null => {
     if (!seg) return null;
-    if (/五星|豪华/.test(seg)) return 'view';
+    // 五星和「豪华」单列一档（2026-11-06）：高德写得很清楚，别把五星揉进「景观房」。
+    if (/五星|豪华/.test(seg)) return 'luxury';
     if (/四星/.test(seg)) return 'view';
     if (/三星/.test(seg)) return 'budget';
     // 经济型连锁（如家、汉庭那种）是普通档，不是小破店 —— 别把干净的连锁店说成招待所。
@@ -202,7 +203,14 @@ export function tierFromName(name: string): TierHint | null {
    */
   const n = raw.toLowerCase();
   const hit = (words: readonly string[]): boolean => words.some((b) => n.includes(b.toLowerCase()));
-  if (hit(LUX_BRANDS)) return 'view';
+  /*
+   * 国际品牌一律当高档（2026-11-06）。
+   *
+   * 严格说这里混了两层：丽思/瑞吉/华尔道夫是真奢华，福朋/万怡/逸林是中端。
+   * 但**名字只能证明「这是个连锁品牌」**，证明不了房价；而把它们拆开需要每家店的真实报价，
+   * 现在没有。宁可整体算高档（房价区间本来就宽），也不要按猜的去细分。
+   */
+  if (hit(LUX_BRANDS)) return 'luxury';
   if (hit(CHEAP_BRANDS)) return 'budget';
   /*
    * 「快捷」「连锁」本身就说明是标准化的小酒店 —— 它们既不是招待所也不是景观房。
@@ -501,13 +509,14 @@ export class HotelDirectory {
  */
 export function pickHotel(
   items: readonly HotelPoi[],
-  tier: 'budget' | 'view' | 'dingy',
+  tier: 'luxury' | 'budget' | 'view' | 'dingy',
   rnd: () => number = Math.random,
 ): HotelPoi | null {
   if (!items.length) return null;
   const has = (s: string, words: readonly string[]): boolean => words.some((w) => s.includes(w));
   const words =
-    tier === 'view' ? ['民宿', '客栈', '度假', '山庄', '庄园', '温泉', '景观', '观景', '精品']
+    tier === 'luxury' ? ['五星', '豪华', '国际', '大酒店', '总统', '行政']
+    : tier === 'view' ? ['民宿', '客栈', '度假', '山庄', '庄园', '温泉', '景观', '观景', '精品']
     : tier === 'dingy' ? ['旅馆', '旅社', '招待所', '旅店', '公寓']
     : ['连锁', '快捷', '酒店', '宾馆', '饭店', '大厦'];
 

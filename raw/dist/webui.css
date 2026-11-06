@@ -174,6 +174,32 @@
 .jr-btn:disabled { opacity: .55; cursor: default; }
 .jr-btn:focus-visible, .jr-photo:focus-visible { outline: 2px solid var(--jr-accent); outline-offset: 3px; }
 
+/* ---------- 她在等你点头 ---------- */
+/*
+ * 边框用赭橙（--jr-accent）：这是整个面板上唯一一处**等用户动手**的地方。
+ * 跟其他卡片一个颜色的话，扫一眼分不出「这是信息」和「这是要你答的」。
+ */
+.jr-ask {
+  margin-top: 18px;
+  padding: 14px 16px;
+  border: 1px solid var(--jr-accent);
+  border-radius: 14px;
+  background: var(--jr-card);
+}
+.jr-ask[hidden] { display: none; }
+.jr-ask-eyebrow {
+  margin: 0 0 6px !important;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .22em;
+  text-transform: uppercase;
+  color: var(--jr-accent);
+}
+.jr-ask-line { margin: 0 !important; font-size: 14px; line-height: 1.55; }
+.jr-ask-row { display: flex; align-items: center; gap: 8px; }
+.jr-ask-row .jr-btn { margin-top: 12px; }
+.jr-ask-hint { margin: 10px 0 0 !important; font-size: 11.5px; color: var(--jr-soft); }
+
 /* ---------- 在路上 ---------- */
 .jr-leg { margin-top: 20px; }
 .jr-leg[hidden] { display: none; }
@@ -299,20 +325,51 @@
 .jr-photo figcaption b { color: var(--jr-ink); font-size: 12.5px; font-weight: 600; }
 
 /* ---------- 天气 / 今晚 / 日出 ---------- */
+/*
+ * **一条一个卡片**（2026-11-05）。
+ *
+ * 原来整块是一个大卡片，里面的词条只靠 `gap` 排开 —— 十条挤在一起，
+ * 「在放 / 想去 / 天气 / 池子 / 同城 / 约好 / 今晚 / 日出 / 体感」连成一整段，
+ * 读的时候得自己找边界。用户的原话：「首页词条太密集了，最好分开列出来一个词条一个容器」。
+ *
+ * 现在外框去掉，每个词条自己一张小卡：标题在上、内容在下。
+ * 宽度跟着内容走 —— 短词条并排，长词条（天气、体感这种整句话的）自然占满一行。
+ */
 .jr-facts {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px 18px;
+  gap: 8px;
   margin-top: 18px;
-  padding: 12px 14px;
-  border-radius: 12px;
+  padding: 0;
+  background: none;
+  border: 0;
+}
+.jr-facts[hidden] { display: none; }
+.jr-fact {
+  flex: 0 1 auto;
+  max-width: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 12px 9px;
+  border-radius: 10px;
   background: var(--jr-card);
   border: 1px solid var(--jr-line);
 }
-.jr-facts[hidden] { display: none; }
-.jr-fact { display: flex; gap: 7px; align-items: baseline; font-size: 12.5px; }
-.jr-fact-k { color: var(--jr-soft); font-size: 11px; letter-spacing: .08em; }
-.jr-fact-v { color: var(--jr-ink); }
+.jr-fact-k {
+  color: var(--jr-soft);
+  font-size: 10.5px;
+  letter-spacing: .12em;
+  line-height: 1.3;
+}
+.jr-fact-v {
+  color: var(--jr-ink);
+  font-size: 12.5px;
+  line-height: 1.6;
+  /* 长地名、长歌名不许把卡片撑破 */
+  overflow-wrap: anywhere;
+}
 
 /* 身后的那个节点：灰掉但还在，时间轴才像「走到这儿了」而不是待办清单 */
 .jr-tl-item[data-past="true"] { opacity: .42; }
@@ -387,6 +444,69 @@
  * 单独一段，跟脚注用小一号的字和一条更淡的线分开：
  * 脚注说的是「她走了多少路」，这一栏说的是「跟作者讲话」，两件事。
  */
+/* ---------- 日记页 ---------- */
+/*
+ * 左选右读。窄屏（宿主面板通常不宽）就叠成一列 ——
+ * 两栏在 400px 里会挤成两个都读不了的窄条。
+ */
+.jr-diary { display: grid; grid-template-columns: minmax(140px, 190px) 1fr; gap: 18px; align-items: start; }
+.jr-diary .jr-head { grid-column: 1 / -1; }
+@media (max-width: 560px) {
+  .jr-diary { grid-template-columns: 1fr; gap: 10px; }
+}
+.jr-dlist { display: flex; flex-direction: column; gap: 2px; max-height: 62vh; overflow-y: auto; }
+.jr-ditem {
+  display: flex; justify-content: space-between; gap: 8px;
+  padding: 7px 10px; border: 0; border-radius: 8px;
+  background: transparent; color: var(--jr-ink);
+  font: inherit; text-align: left; cursor: pointer;
+}
+.jr-ditem:hover { background: var(--jr-accent-soft); }
+.jr-ditem[data-on] { background: var(--jr-accent-soft); color: var(--jr-accent); }
+.jr-ditem-date { font-variant-numeric: tabular-nums; }
+.jr-ditem-city { color: var(--jr-soft); font-size: 12px; }
+.jr-dview { min-width: 0; }
+.jr-dview-title { font-size: 15px !important; margin: 0 0 4px !important; }
+.jr-dview-meta { font-size: 12px !important; color: var(--jr-soft); margin: 0 0 12px !important; }
+.jr-dview-p {
+  font-size: 13.5px !important; line-height: 1.85; margin: 0 0 10px !important;
+  color: var(--jr-ink); white-space: pre-wrap;
+}
+.jr-empty { font-size: 12.5px; color: var(--jr-soft); }
+
+/* ---------- 碰面：没配服务器时的入口 ---------- */
+/*
+ * 2026-11-06：这块只在没配「碰面地址」时出现（配了就只剩上面那排事实）。
+ * 用虚线框而不是实线卡片 —— 它是一条「你可以开这个」的提示，不是一条状态。
+ */
+.jr-meet {
+  margin-top: 18px;
+  padding: 12px 14px;
+  border: 1px dashed var(--jr-line);
+  border-radius: 10px;
+  background: var(--jr-card);
+}
+/*
+ * 空的时候整块不出现（2026-11-06 补）。
+ *
+ * 配过碰面服务器的人，`social` 不是 null，那块就不填内容 —— 但 `section` 本身还在，
+ * 于是面板底下留了一个**空的白框**。Mr.Q 一眼看到：「我这里什么都不显示正常嘛」。
+ * 用 `:empty` 兜住：只要没子节点就整块不占位，不必让 JS 那边再记着一个 hidden。
+ */
+.jr-meet:empty { display: none; }
+.jr-meet .jr-next-title { margin-bottom: 6px; }
+.jr-meet-lead { font-size: 12.5px; line-height: 1.6; color: var(--jr-ink); margin: 0 0 6px !important; }
+.jr-meet-hint { font-size: 12px; line-height: 1.6; color: var(--jr-soft); margin: 0 0 8px !important; }
+.jr-meet-addr { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.jr-meet-url {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  color: var(--jr-accent);
+  background: var(--jr-accent-soft);
+  padding: 3px 8px;
+  border-radius: 6px;
+}
+
 .jr-fb {
   margin-top: 18px;
   padding-top: 16px;

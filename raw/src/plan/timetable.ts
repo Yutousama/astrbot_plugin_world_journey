@@ -72,6 +72,14 @@ export function makeSchedule(
   dateKey: string,
   km: number,
   hours: number,
+  /**
+   * 她**实际买的那一档**（`Journey.seat`）。
+   *
+   * 2026-11-06：席别原来是这里随机生成的（76% 二等座 / 24% 一等座），
+   * 和「实际扣了多少钱」完全脱节 —— 面板写着「二等座」，账上扣的是商务座的价。
+   * 现在由调用方把真买的那档传进来；不传才退回随机（老状态、测试）。
+   */
+  seatHint?: string,
 ): Schedule | null {
   if (!HAS_SCHEDULE.has(mode)) return null;
   const seed = seedOf([mode, from.id, to.id, dateKey]);
@@ -80,7 +88,7 @@ export function makeSchedule(
     // 航班号：两字码 + 四位。国内主流航司的代码。
     const airline = oneOf(['CA', 'MU', 'CZ', 'HU', '3U', 'ZH', 'MF', 'SC'], seed);
     const code = `${airline}${pick(seed, 1000, 9899, 4)}`;
-    const seat = hours >= 4 ? oneOf(['经济舱', '超级经济舱'], seed >>> 3) : '经济舱';
+    const seat = seatHint || (hours >= 4 ? oneOf(['经济舱', '超级经济舱'], seed >>> 3) : '经济舱');
     // 登机口：真实机场是字母 + 数字，A/B/C 区最常见。
     const gate = `${oneOf(['A', 'B', 'C', 'D'], seed >>> 5)}${pick(seed, 1, 36, 7)}`;
     return { code, seat, gate };
@@ -94,14 +102,14 @@ export function makeSchedule(
     if (highSpeed) {
       const letter = pick(seed, 0, 99, 3) < 72 ? 'G' : 'D';
       code = `${letter}${pick(seed, 100, 9899, 4)}`;
-      seat = pick(seed, 0, 99, 6) < 76 ? '二等座' : '一等座';
+      seat = seatHint || (pick(seed, 0, 99, 6) < 76 ? '二等座' : '一等座');
     } else {
       const letter = oneOf(['K', 'Z', 'T'], seed >>> 2);
       code = `${letter}${pick(seed, 10, 999, 4)}`;
       // 过夜的长途才说卧铺 —— 三小时的 K 车说「软卧」很奇怪。
-      seat = hours >= 8
+      seat = seatHint || (hours >= 8
         ? oneOf(['硬卧', '软卧'], seed >>> 4)
-        : oneOf(['硬座', '硬卧'], seed >>> 4);
+        : oneOf(['硬座', '硬卧'], seed >>> 4));
     }
     const gate = `${pick(seed, 1, 16, 7)} 站台`;
     return { code, seat, gate };

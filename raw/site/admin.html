@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>碰面 · 运维面板</title>
+<style>
+  :root{
+    --bg:#faf5ee; --card:#fffdf8; --ink:#33291f; --soft:#8a7a68;
+    --line:#e8ddcc; --accent:#c06a35; --accent-soft:#f6e7da;
+    --ok:#5f7d5a; --ok-soft:#e8efe6; --bad:#b0453a; --bad-soft:#f8e6e3;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#171310; --card:#211b17; --ink:#f0e6da; --soft:#a99684;
+      --line:#3a2f27; --accent:#e39b62; --accent-soft:#38291e;
+      --ok:#9dbba0; --ok-soft:#242c23; --bad:#e08b7d; --bad-soft:#33211e;
+    }
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.65 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei","Segoe UI",sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:920px;margin:0 auto;padding:32px 20px 72px}
+
+  header{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:22px}
+  h1{font-size:21px;margin:0;letter-spacing:-.2px}
+  .tag{
+    font-size:11.5px;letter-spacing:.6px;color:var(--accent);background:var(--accent-soft);
+    padding:3px 9px;border-radius:99px;font-weight:600;
+  }
+  .tag.demo{color:var(--soft);background:var(--bg);border:1px solid var(--line)}
+
+  .bar{
+    background:var(--card);border:1px solid var(--line);border-radius:12px;
+    padding:15px 16px;margin-bottom:18px;
+    display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;
+  }
+  .field{flex:1 1 200px;min-width:160px}
+  .field label{display:block;font-size:12px;color:var(--soft);margin-bottom:5px}
+  input{
+    width:100%;padding:9px 11px;font:inherit;font-size:13.5px;
+    background:var(--bg);color:var(--ink);
+    border:1px solid var(--line);border-radius:8px;outline:none;
+  }
+  input:focus{border-color:var(--accent)}
+  button{
+    font:inherit;font-size:13.5px;font-weight:600;padding:9px 16px;
+    border-radius:8px;cursor:pointer;border:1px solid var(--line);
+    background:var(--card);color:var(--ink);transition:border-color .15s,opacity .15s;
+  }
+  button:hover:not(:disabled){border-color:var(--accent)}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+
+  .msg{font-size:13px;margin:0 0 18px;padding:11px 14px;border-radius:9px;display:none}
+  .msg.show{display:block}
+  .msg.ok{background:var(--ok-soft);border:1px solid var(--ok);color:var(--ok)}
+  .msg.bad{background:var(--bad-soft);border:1px solid var(--bad);color:var(--bad)}
+
+  .cards{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:18px}
+  @media(min-width:700px){.cards{grid-template-columns:repeat(4,1fr)}}
+  .stat{
+    background:var(--card);border:1px solid var(--line);border-radius:12px;padding:15px 16px;
+  }
+  .stat .k{font-size:12px;color:var(--soft);margin:0 0 5px}
+  .stat .v{font-size:25px;font-weight:700;line-height:1.15;font-variant-numeric:tabular-nums}
+  .stat .u{font-size:11.5px;color:var(--soft);font-weight:400;margin-left:3px}
+
+  .box{
+    background:var(--card);border:1px solid var(--line);border-radius:12px;
+    padding:18px;margin-bottom:16px;
+  }
+  .box h2{font-size:14px;margin:0 0 14px;font-weight:600}
+  .box h2 small{color:var(--soft);font-weight:400;font-size:12px;margin-left:6px}
+
+  .meter{height:9px;border-radius:99px;background:var(--bg);overflow:hidden;
+    border:1px solid var(--line);margin:4px 0 9px}
+  .meter i{display:block;height:100%;background:var(--ok);transition:width .4s}
+  .meter i.warn{background:var(--accent)}
+  .meter i.hot{background:var(--bad)}
+  .meter-note{font-size:12.5px;color:var(--soft);margin:0}
+
+  .cityrow{display:flex;align-items:center;gap:10px;padding:6px 0;font-size:13.5px}
+  .cityrow .n{flex:0 0 88px;color:var(--soft);font-size:12.5px}
+  .cityrow .bar2{flex:1;height:7px;background:var(--bg);border-radius:99px;overflow:hidden}
+  .cityrow .bar2 i{display:block;height:100%;background:var(--accent);opacity:.55}
+  .cityrow .c{flex:0 0 42px;text-align:right;font-variant-numeric:tabular-nums;font-weight:600}
+
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{text-align:left;font-weight:600;color:var(--soft);font-size:12px;
+    padding:0 8px 8px 0;border-bottom:1px solid var(--line);white-space:nowrap}
+  td{padding:8px 8px 8px 0;border-bottom:1px solid var(--line);vertical-align:top}
+  tr:last-child td{border-bottom:none}
+  td.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:var(--soft)}
+  .empty{color:var(--soft);font-size:13px;padding:14px 0;margin:0}
+
+  footer{margin-top:28px;font-size:12.5px;color:var(--soft);line-height:1.8}
+  footer code{background:var(--accent-soft);color:var(--accent);padding:1px 5px;border-radius:4px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>碰面 · 运维面板</h1>
+    <span class="tag" id="modeTag">示例数据</span>
+  </header>
+
+  <div class="bar">
+    <div class="field">
+      <label for="url">服务地址</label>
+      <input id="url" type="text" spellcheck="false" placeholder="https://coop-sight.xxx.workers.dev">
+    </div>
+    <div class="field">
+      <label for="key">管理密钥</label>
+      <input id="key" type="password" spellcheck="false" placeholder="wrangler secret put ADMIN_KEY 设的那个">
+    </div>
+    <button id="connect" class="primary">连上</button>
+    <button id="demo">看示例</button>
+  </div>
+
+  <p class="msg" id="msg"></p>
+
+  <div class="cards">
+    <div class="stat"><p class="k">今日上报</p><p class="v" id="s-posts">—<span class="u">次</span></p></div>
+    <div class="stat"><p class="k">今日宠物</p><p class="v" id="s-uids">—<span class="u">只</span></p></div>
+    <div class="stat"><p class="k">今日格子</p><p class="v" id="s-rows">—<span class="u">条</span></p></div>
+    <div class="stat"><p class="k">表总行数</p><p class="v" id="s-total">—<span class="u">行</span></p></div>
+  </div>
+
+  <div class="box">
+    <h2>每日写入预算<small>超了当天就不再收上报</small></h2>
+    <div class="meter"><i id="meter" style="width:0"></i></div>
+    <p class="meter-note" id="meterNote">—</p>
+  </div>
+
+  <div class="box">
+    <h2>今天分布在哪儿<small>按格子数排</small></h2>
+    <div id="cities"><p class="empty">—</p></div>
+  </div>
+
+  <div class="box">
+    <h2>最近上报<small>uid 已打码</small></h2>
+    <div style="overflow-x:auto">
+      <table>
+        <thead><tr>
+          <th>宠物</th><th>城市</th><th>时段</th><th>在干嘛</th><th>时间</th><th>身份</th>
+        </tr></thead>
+        <tbody id="rows"><tr><td colspan="6" class="empty">—</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <footer>
+    <b>这是只读面板。</b>封禁和清理要改数据，走 <code>wrangler d1 execute</code> ——
+    网页上不留写入口，少一个能把线上搞坏的地方。<br>
+    密钥只存在这台浏览器里，不会发到任何第三方。清浏览器数据就没了。
+  </footer>
+
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var $ = function (id) { return document.getElementById(id); };
+  var urlIn = $('url'), keyIn = $('key'), msg = $('msg'), modeTag = $('modeTag');
+  var STORE = 'coop-sight-admin';
+
+  /* ---------- 示例数据（打开就有东西看） ---------- */
+  var DEMO = {
+    ok: true,
+    day: new Date().toISOString().slice(0, 10),
+    today: { posts: 1834, rows: 1206, uids: 412 },
+    budget: { cap: 20000, used: 1834, ratio: 1834 / 20000 },
+    tables: { presence: 48213, rowsPerPost: 4 },
+    cities: [
+      { city: 'xian', n: 96 }, { city: 'lanzhou', n: 71 }, { city: 'chengdu', n: 58 },
+      { city: 'lasa', n: 44 }, { city: 'hangzhou', n: 39 }, { city: 'dunhuang', n: 31 },
+      { city: 'beijing', n: 27 }, { city: 'xiamen', n: 19 }
+    ]
+  };
+  var DEMO_ROWS = [
+    { uid: 'a3f1…9c22', pet: '大肥鱼', city: 'xian', slot: 'evening', doing: '南门里吃泡馍', at: new Date(Date.now() - 6e4 * 3).toISOString() },
+    { uid: '7b02…4de1', pet: '小满', city: 'lanzhou', slot: 'evening', doing: '黄河边看日落', at: new Date(Date.now() - 6e4 * 11).toISOString() },
+    { uid: 'c9e4…1a07', pet: '团子', city: 'xian', slot: 'evening', doing: '在城墙上吹风', at: new Date(Date.now() - 6e4 * 18).toISOString() },
+    { uid: '5d38…bb90', pet: '阿黄', city: 'chengdu', slot: 'night', doing: '在客栈睡觉', at: new Date(Date.now() - 6e4 * 26).toISOString() },
+    { uid: 'e17c…3f45', pet: '胖头', city: 'lasa', slot: 'night', doing: '看星星', at: new Date(Date.now() - 6e4 * 41).toISOString() }
+  ];
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
+
+  function endpointOf(raw) {
+    var base = String(raw == null ? '' : raw).trim().replace(/\/+$/, '');
+    if (!base) return '';
+    return /\/sight$/.test(base) ? base : base + '/sight';
+  }
+
+  /* admin 接口挂在根上，不是在 /sight 底下 —— 把用户填的地址还原成根 */
+  function rootOf(raw) {
+    var base = String(raw == null ? '' : raw).trim().replace(/\/+$/, '');
+    return base.replace(/\/sight$/, '');
+  }
+
+  function showMsg(kind, text) {
+    msg.className = 'msg show ' + kind;
+    msg.textContent = text;
+  }
+  function hideMsg() { msg.className = 'msg'; msg.textContent = ''; }
+
+  function setMode(demo) {
+    modeTag.textContent = demo ? '示例数据' : '实时数据';
+    modeTag.className = demo ? 'tag demo' : 'tag';
+  }
+
+  function fmtTime(iso) {
+    try {
+      var d = new Date(iso);
+      var p = function (n) { return String(n).padStart(2, '0'); };
+      return p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+    } catch (e) { return String(iso); }
+  }
+
+  function render(stats, rows) {
+    $('s-posts').innerHTML = esc(stats.today.posts) + '<span class="u">次</span>';
+    $('s-uids').innerHTML = esc(stats.today.uids) + '<span class="u">只</span>';
+    $('s-rows').innerHTML = esc(stats.today.rows) + '<span class="u">条</span>';
+    $('s-total').innerHTML = esc(stats.tables.presence) + '<span class="u">行</span>';
+
+    var r = Math.max(0, Math.min(1, stats.budget.ratio || 0));
+    var meter = $('meter');
+    meter.style.width = (r * 100).toFixed(1) + '%';
+    meter.className = r > 0.85 ? 'hot' : r > 0.6 ? 'warn' : '';
+
+    var posts = stats.today.posts;
+    var cap = stats.budget.cap;
+    var perPost = stats.tables.rowsPerPost;
+    $('meterNote').textContent =
+      posts + ' / ' + cap + ' 次（' + (r * 100).toFixed(1) + '%）· '
+      + '每次上报写 ' + perPost + ' 行，今天已写约 ' + (posts * perPost).toLocaleString() + ' 行';
+
+    var cities = stats.cities || [];
+    var box = $('cities');
+    if (!cities.length) {
+      box.innerHTML = '<p class="empty">今天还没有任何上报。</p>';
+    } else {
+      var max = cities[0].n || 1;
+      box.innerHTML = cities.map(function (c) {
+        var w = Math.max(3, Math.round((c.n / max) * 100));
+        return '<div class="cityrow">'
+          + '<span class="n">' + esc(c.city) + '</span>'
+          + '<span class="bar2"><i style="width:' + w + '%"></i></span>'
+          + '<span class="c">' + esc(c.n) + '</span>'
+          + '</div>';
+      }).join('');
+    }
+
+    var tb = $('rows');
+    if (!rows || !rows.length) {
+      tb.innerHTML = '<tr><td colspan="6" class="empty">今天还没有上报记录。</td></tr>';
+    } else {
+      tb.innerHTML = rows.map(function (x) {
+        return '<tr>'
+          + '<td>' + esc(x.pet) + '</td>'
+          + '<td class="mono">' + esc(x.city) + '</td>'
+          + '<td class="mono">' + esc(x.slot) + '</td>'
+          + '<td>' + esc(x.doing || '—') + '</td>'
+          + '<td class="mono">' + fmtTime(x.at) + '</td>'
+          + '<td class="mono">' + esc(x.uid) + '</td>'
+          + '</tr>';
+      }).join('');
+    }
+  }
+
+  /* ---------- 连接 ---------- */
+  function connect() {
+    var root = rootOf(urlIn.value);
+    var key = keyIn.value.trim();
+    if (!root) { showMsg('bad', '先填服务地址。'); return; }
+    if (!key) { showMsg('bad', '先填管理密钥。'); return; }
+
+    var btn = $('connect');
+    btn.disabled = true;
+    btn.textContent = '连…';
+    hideMsg();
+
+    var hdr = { 'x-admin-key': key };
+    var base = root + '/admin';
+
+    Promise.all([
+      fetch(base + '/stats', { headers: hdr }).then(function (res) {
+        return res.text().then(function (t) { return { res: res, text: t }; });
+      }),
+      fetch(base + '/list?limit=50', { headers: hdr }).then(function (res) {
+        return res.text().then(function (t) { return { res: res, text: t }; });
+      })
+    ]).then(function (pair) {
+      btn.disabled = false;
+      btn.textContent = '连上';
+
+      var s = pair[0];
+      if (s.res.status === 401) { showMsg('bad', '密钥不对。'); return; }
+      if (s.res.status === 404) {
+        showMsg('bad', '这个服务没有管理接口 —— 要么没配 ADMIN_KEY，要么服务端版本太旧。');
+        return;
+      }
+      if (s.res.status !== 200) { showMsg('bad', '服务返回了 ' + s.res.status + '。'); return; }
+
+      var stats, rowsBody;
+      try {
+        stats = JSON.parse(s.text);
+        rowsBody = JSON.parse(pair[1].text);
+      } catch (e) {
+        showMsg('bad', '返回的不是 JSON，地址可能指到了别处。');
+        return;
+      }
+
+      render(stats, rowsBody.rows || []);
+      setMode(false);
+      showMsg('ok', '连上了。数据是 ' + stats.day + ' 这一天的，刷新一下就是最新的。');
+
+      try {
+        localStorage.setItem(STORE, JSON.stringify({ url: urlIn.value, key: key }));
+      } catch (e) { /* 存不了就算了，不影响看数据 */ }
+    }).catch(function () {
+      btn.disabled = false;
+      btn.textContent = '连上';
+      showMsg('bad', '连不上。检查地址、以及服务端有没有允许 x-admin-key 这个跨域头。');
+    });
+  }
+
+  $('connect').addEventListener('click', connect);
+  keyIn.addEventListener('keydown', function (e) { if (e.key === 'Enter') connect(); });
+
+  $('demo').addEventListener('click', function () {
+    hideMsg();
+    render(DEMO, DEMO_ROWS);
+    setMode(true);
+  });
+
+  /* ---------- 恢复上次填的地址（密钥也恢复，本机用） ---------- */
+  try {
+    var saved = JSON.parse(localStorage.getItem(STORE) || 'null');
+    if (saved && saved.url) {
+      urlIn.value = saved.url;
+      keyIn.value = saved.key || '';
+    }
+  } catch (e) { /* ignore */ }
+
+  $('demo').click();
+}());
+</script>
+</body>
+</html>

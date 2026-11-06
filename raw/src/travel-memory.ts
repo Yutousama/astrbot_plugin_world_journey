@@ -32,6 +32,65 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+/**
+ * 对某个伙伴的印象 —— 一起走过几次、上次什么时候、她怎么看这个人。
+ *
+ * key 用**名字**：服务端只回名字，不发 uid（`meet.ts` 那条「能看见，摸不着」的线）。
+ * 代价写在前面：他改一次名，同一个人就变成两条记录。这是已知的、接受的代价 ——
+ * 比拿一个服务端根本不给的 id 去猜要诚实。
+ */
+export interface PetMemory {
+  /** 一起走过几次。取大不取和：两台机器各见过 2 次，合并后还是 2，不是 4。 */
+  readonly times: number;
+  /** 上次一起的日子（她那里的日期，`YYYY-MM-DD`）。 */
+  readonly last: string;
+  /** 她对这个人的印象，一句话。空 = 还没写。 */
+  readonly impression: string;
+}
+
+export type PetsMap = Readonly<Record<string, PetMemory>>;
+
+/**
+ * 她自己的口味 —— **跟人走，和「去过哪」同一个文件**。
+ *
+ * 2026-11-05 Mr.Q：「那个偏好系统还可以做扩展（喜欢哪个地方、吃什么、看什么景色）」。
+ *
+ * 三类的分野不是随便分的：地方决定「下次去哪」，吃食决定「到了吃什么」，
+ * 景色决定「什么时候来」（雪山要冬天、花要春天）。混成一张清单的话，
+ * 这三种用途一个都做不成。
+ *
+ * `like: false` 也是记忆 —— 她说「这个不想再吃」，比「这个好吃」更该被记住。
+ * 不记下来，下一次又会被推荐一遍。
+ */
+export interface TasteItem {
+  /** 「玉泉观」「牦牛肉汤」「雪山」。 */
+  readonly name: string;
+  /** 一句为什么。空 = 只是记了一下。 */
+  readonly note: string;
+  /** 哪天记下的（她当地的日期）。合并时用它判谁新。 */
+  readonly at: string;
+  readonly like: boolean;
+  /**
+   * 一张照片的句柄，只有「地方」这一类带。
+   *
+   * 2026-11-05 Mr.Q：「地方指的是一个城市选一张她最喜欢的图片，如果每个风景点都算进去，
+   * 那照片就太多了」。所以这里存的是**一座城一张** —— 它是「这座城市她记得的那一眼」，
+   * 不是那次旅行的相册。年报要用的就是这一张。
+   */
+  readonly photo: string;
+}
+
+export type TasteKind = 'place' | 'food' | 'scenery';
+
+export type TasteMap = Readonly<Record<TasteKind, readonly TasteItem[]>>;
+
+export const TASTE_KINDS: readonly TasteKind[] = ['place', 'food', 'scenery'];
+
+/** 每一类最多记多少条。超了丢最早的 —— 无上限的清单迟早把同步盘撑坏。 */
+const TASTE_CAP = 60;
+
+export const emptyTaste = (): TasteMap => ({ place: [], food: [], scenery: [] });
+
 export interface TravelMemory {
   readonly version: 1;
   readonly everVisited: readonly string[];
@@ -45,15 +104,23 @@ export interface TravelMemory {
    * 立刻跑去打工。
    */
   readonly earned: number;
+  /** 一起走过的人。见 `PetMemory` 的注释：key 是名字，改名会断成两条。 */
+  readonly pets: PetsMap;
+  /** 口味：喜欢 / 不喜欢的地方、吃食、景色。见 `TasteItem`。 */
+  readonly taste: TasteMap;
   readonly updatedAt: string;
 }
 
-/** 只取记忆那三样，其余字段不碰 —— 位置、路线、时钟一律留在本机。 */
+/** 只取记忆那几样，其余字段不碰 —— 位置、路线、时钟一律留在本机。 */
 export interface MemoryFields {
   readonly everVisited: readonly string[];
   readonly wishes: readonly string[];
   readonly spent: number;
   readonly earned: number;
+  /** 可选：老调用方（和不带伙伴的迁移路径）不传就当没有。 */
+  readonly pets?: PetsMap;
+  /** 可选：同上。不传就沿用文件里原有的。 */
+  readonly taste?: TasteMap;
 }
 
 const FILE = 'travel-memory.json';
@@ -66,6 +133,177 @@ const uniq = (list: readonly unknown[]): string[] => {
   return out;
 };
 
+/** 把任意输入收成一份干净的伙伴表。名字空的、次数不是数的，一律按「没有」处理。 */
+export function normalizePets(raw: unknown): PetsMap {
+  const out: Record<string, PetMemory> = {};
+  if (!raw || typeof raw !== 'object') return out;
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    const name = String(k || '').trim().slice(0, 24);
+    if (!name) continue;
+    const r = (v ?? {}) as Partial<PetMemory>;
+    out[name] = {
+      times: Number.isFinite(Number(r.times)) ? Math.max(0, Math.floor(Number(r.times))) : 0,
+      last: typeof r.last === 'string' ? r.last.slice(0, 10) : '',
+      impression: typeof r.impression === 'string' ? r.impression.slice(0, 80) : '',
+    };
+  }
+  return out;
+}
+
+/**
+ * 两份伙伴表合一份。
+ *
+ * 次数**取大不取和** —— 和 `spent` 同一条道理：两台机器各见过他两次，
+ * 合并之后是「见过两次」，不是四次。相加会把同一次旅行算两遍。
+ */
+export function mergePets(a: PetsMap, b: PetsMap): PetsMap {
+  const out: Record<string, PetMemory> = { ...a };
+  for (const [name, y] of Object.entries(b)) {
+    const x = out[name];
+    if (!x) { out[name] = y; continue; }
+    const newer = (y.last || '') >= (x.last || '') ? y : x;
+    out[name] = {
+      times: Math.max(x.times, y.times),
+      last: newer.last || x.last || y.last,
+      // 印象有字才算数：一边写了、一边没写，就留写了的那句。
+      impression: newer.impression || x.impression || y.impression,
+    };
+  }
+  return out;
+}
+
+/** 一起走过一次。纯函数 —— 落盘交给调用方，因为 `save` 还要别的字段。 */
+export function metPet(pets: PetsMap, name: string, dateKey: string): PetsMap {
+  const key = String(name || '').trim().slice(0, 24);
+  if (!key) return pets;
+  const cur = pets[key];
+  return {
+    ...pets,
+    [key]: {
+      times: (cur?.times ?? 0) + 1,
+      last: String(dateKey || '').slice(0, 10) || cur?.last || '',
+      impression: cur?.impression ?? '',
+    },
+  };
+}
+
+/** 写一句对这个人的印象。空串 = 抹掉（她改主意了，不该被旧印象锁死）。 */
+export function setPetImpression(pets: PetsMap, name: string, text: string): PetsMap {
+  const key = String(name || '').trim().slice(0, 24);
+  if (!key) return pets;
+  const cur = pets[key] ?? { times: 0, last: '', impression: '' };
+  return {
+    ...pets,
+    [key]: { ...cur, impression: String(text || '').trim().slice(0, 80) },
+  };
+}
+
+/**
+ * 把任意输入收成一张干净的口味表。
+ *
+ * 老文件里没有这一段（`undefined`）→ 返回空表；某一类被写成对象而不是数组 →
+ * 这一类按空处理。**不抛异常**：一份口味表读坏了，不该让她的旅行起不来。
+ */
+export function normalizeTaste(raw: unknown): TasteMap {
+  const out: Record<TasteKind, TasteItem[]> = { place: [], food: [], scenery: [] };
+  if (!raw || typeof raw !== 'object') return out;
+  const src = raw as Record<string, unknown>;
+  for (const kind of TASTE_KINDS) {
+    const list = src[kind];
+    if (!Array.isArray(list)) continue;
+    for (const one of list) {
+      if (!one || typeof one !== 'object') continue;
+      const r = one as Partial<TasteItem>;
+      const name = String(r.name ?? '').trim().slice(0, 24);
+      if (!name) continue;
+      if (out[kind].some((x) => x.name === name)) continue;
+      out[kind].push({
+        name,
+        note: String(r.note ?? '').trim().slice(0, 60),
+        at: typeof r.at === 'string' ? r.at.slice(0, 10) : '',
+        like: r.like !== false,
+        photo: typeof r.photo === 'string' ? r.photo.slice(0, 64) : '',
+      });
+    }
+    out[kind] = out[kind].slice(-TASTE_CAP);
+  }
+  return out;
+}
+
+/**
+ * 两份口味表合一份。
+ *
+ * 按名字去重，**谁的日子新听谁**：她在 A 机器上把「牦牛肉汤」标成喜欢、
+ * 后来在 B 机器上改成不喜欢，合并之后应该是不喜欢 —— 反过来的话，
+ * 她改了主意也白改，下次还会被推荐。
+ *
+ * 日期一样时（同一天两边各记一次）保留**有备注**的那条。
+ */
+export function mergeTaste(a: TasteMap, b: TasteMap): TasteMap {
+  const out: Record<TasteKind, TasteItem[]> = { place: [], food: [], scenery: [] };
+  for (const kind of TASTE_KINDS) {
+    const merged: TasteItem[] = [];
+    for (const it of [...(a[kind] ?? []), ...(b[kind] ?? [])]) {
+      const i = merged.findIndex((x) => x.name === it.name);
+      if (i < 0) { merged.push(it); continue; }
+      const old = merged[i]!;
+      const newer = it.at > old.at ? it : (it.at === old.at && it.note && !old.note ? it : old);
+      merged[i] = {
+        ...newer,
+        note: newer.note || old.note || it.note,
+        photo: newer.photo || old.photo || it.photo,
+      };
+    }
+    out[kind] = merged.slice(-TASTE_CAP);
+  }
+  return out;
+}
+
+/**
+ * 记一条口味。同名就改写 —— 她的口味会变，不该变成两条互相矛盾的记录。
+ */
+export function setTaste(
+  taste: TasteMap,
+  kind: TasteKind,
+  name: string,
+  note: string,
+  like: boolean,
+  dateKey: string,
+  photo = '',
+): TasteMap {
+  const key = String(name || '').trim().slice(0, 24);
+  if (!key) return taste;
+  const list = [...(taste[kind] ?? [])];
+  const i = list.findIndex((x) => x.name === key);
+  const item: TasteItem = {
+    name: key,
+    note: String(note || '').trim().slice(0, 60) || (i >= 0 ? list[i]!.note : ''),
+    at: String(dateKey || '').slice(0, 10) || new Date().toISOString().slice(0, 10),
+    like: like !== false,
+    // 新的一张优先；没给就沿用原来那张 —— 不能因为这次没拍就把记录清空。
+    photo: String(photo || '').slice(0, 64) || (i >= 0 ? list[i]!.photo : ''),
+  };
+  if (i >= 0) list.splice(i, 1, item); else list.push(item);
+  return { ...taste, [kind]: list.slice(-TASTE_CAP) };
+}
+
+/** 把口味表说成人话，给工具的回执用。空的那一类整行不出现。 */
+export function tasteSummary(taste: TasteMap): string {
+  const label: Record<TasteKind, string> = { place: '地方', food: '吃食', scenery: '景色' };
+  const lines: string[] = [];
+  for (const kind of TASTE_KINDS) {
+    const list = taste[kind] ?? [];
+    if (!list.length) continue;
+    const yes = list.filter((x) => x.like).map((x) => (x.note ? `${x.name}（${x.note}）` : x.name));
+    const no = list.filter((x) => !x.like).map((x) => x.name);
+    const bits: string[] = [];
+    if (yes.length) bits.push(`喜欢：${yes.join('、')}`);
+    if (no.length) bits.push(`不喜欢：${no.join('、')}`);
+    lines.push(`${label[kind]} —— ${bits.join('；')}`);
+  }
+  return lines.join('\n');
+}
+
 function parse(raw: string): TravelMemory | null {
   try {
     const j = JSON.parse(raw) as Partial<TravelMemory>;
@@ -75,6 +313,10 @@ function parse(raw: string): TravelMemory | null {
       wishes: uniq(Array.isArray(j.wishes) ? j.wishes : []),
       spent: Number.isFinite(Number(j.spent)) ? Math.max(0, Number(j.spent)) : 0,
       earned: Number.isFinite(Number(j.earned)) ? Math.max(0, Number(j.earned)) : 0,
+      // 老文件没有这一段 —— `normalizePets` 收到 undefined 就返回空表，不报错。
+      pets: normalizePets((j as Record<string, unknown>).pets),
+      // 老文件没有这一段 —— `normalizeTaste` 收到 undefined 就返回空表。
+      taste: normalizeTaste((j as Record<string, unknown>).taste),
       updatedAt: typeof j.updatedAt === 'string' ? j.updatedAt : '',
     };
   } catch {
@@ -92,6 +334,8 @@ export function mergeMemory(a: TravelMemory | null, b: TravelMemory | null): Tra
     wishes: uniq([...a.wishes, ...b.wishes]),
     spent: Math.max(a.spent, b.spent),
     earned: Math.max(a.earned ?? 0, b.earned ?? 0),
+    pets: mergePets(a.pets ?? {}, b.pets ?? {}),
+    taste: mergeTaste(a.taste ?? emptyTaste(), b.taste ?? emptyTaste()),
     updatedAt: a.updatedAt > b.updatedAt ? a.updatedAt : b.updatedAt,
   };
 }
@@ -193,6 +437,13 @@ export class TravelMemoryStore {
       wishes: uniq(fields.wishes),
       spent: Math.max(0, Number(fields.spent) || 0),
       earned: Math.max(0, Number(fields.earned) || 0),
+      /*
+       * 伙伴表没有传就沿用文件里原有的 —— `save` 是全量覆盖写，
+       * 少带这一项就等于每次保存都把对别人的印象清空一次。
+       */
+      pets: normalizePets(fields.pets ?? this.read()?.pets ?? {}),
+      // 同一条道理：口味没传就沿用文件里原有的，否则每次保存都清空一次。
+      taste: normalizeTaste(fields.taste ?? this.read()?.taste ?? {}),
       updatedAt: new Date().toISOString(),
     };
     const text = `${JSON.stringify(data, null, 2)}\n`;
@@ -235,10 +486,16 @@ export class TravelMemoryStore {
     const wishes = uniq([...st.wishes, ...mem.wishes]);
     const spent = Math.max(st.spent, mem.spent);
     const earned = Math.max(st.earned, mem.earned ?? 0);
+    const before = st.pets ?? {};
+    const pets = mergePets(before, mem.pets ?? {});
+    const tasteBefore = st.taste ?? emptyTaste();
+    const taste = mergeTaste(tasteBefore, mem.taste ?? emptyTaste());
     const grew = everVisited.length !== st.everVisited.length
       || wishes.length !== st.wishes.length
       || spent !== st.spent
-      || earned !== st.earned;
-    return { state: { ...st, everVisited, wishes, spent, earned }, grew };
+      || earned !== st.earned
+      || Object.keys(pets).length !== Object.keys(before).length
+      || TASTE_KINDS.some((k) => (taste[k]?.length ?? 0) !== (tasteBefore[k]?.length ?? 0));
+    return { state: { ...st, everVisited, wishes, spent, earned, pets, taste }, grew };
   }
 }

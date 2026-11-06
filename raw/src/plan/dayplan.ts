@@ -20,7 +20,15 @@ import { cnHolidayOn } from './holidays.ts';
 
 export type BeatKind =
   | 'arrive' | 'wake' | 'sunrise' | 'breakfast' | 'activity'
-  | 'lunch' | 'dinner' | 'night' | 'hotel' | 'sleep' | 'depart';
+  | 'lunch' | 'dinner' | 'night' | 'hotel' | 'sleep' | 'depart'
+  /**
+   * 在城里挪动的那一段（2026-11-06）。
+   *
+   * 用户来信：「去景点也要坐公交」。原来她只有「去哪儿」没有「怎么去」——
+   * 从住处到龙门石窟、从龙门石窟到饭馆，中间那段是空的，
+   * 读起来像她会瞬移。
+   */
+  | 'commute';
 
 /**
  * 「还在那儿」那句中段话的模板。
@@ -71,6 +79,27 @@ export interface Beat {
   readonly pilgrim?: Pilgrim;
 }
 
+/**
+ * 今天的市内交通（2026-11-06）。
+ *
+ * 单独列出来而不是只写在 beats 里，是因为**这一天的钱要单独记一笔** ——
+ * beats 是叙事，账是账，两件事不该挤在一个字段里。
+ */
+export interface DayCommute {
+  /** 今天在城里坐了几次（去一趟 + 回一趟算两次）。 */
+  readonly trips: number;
+  /** 今天为此花了多少钱。 */
+  readonly price: number;
+  /** 用到的交通方式，去重，给日记/面板说「今天全靠公交」。 */
+  readonly modes: readonly string[];
+}
+
+export interface DayExtras {
+  /** 今天为「到了之后怎么逛」花了几项、多少钱。 */
+  readonly items: readonly string[];
+  readonly price: number;
+}
+
 export interface DayPlan {
   readonly dateKey: string;
   readonly cityId: string;
@@ -83,6 +112,37 @@ export interface DayPlan {
   readonly shape: 'arrival' | 'full' | 'last';
   /** 这地方今晚有没有「只有夜里才能做的事」。没有就是回酒店。 */
   readonly nightOption: string | null;
+  /** 今天在城里怎么挪的、花了多少（2026-11-06）。 */
+  readonly commute: DayCommute;
+  /**
+   * 景点里额外花的钱（2026-11-06）：讲解、观光车、景区自行车。
+   *
+   * 用户来信：「可以选择安排导游讲解景点什么的，有些景点比较大的是不是可以有什么
+   * 观光车扫码自行车之类的选项」。这一层挂在**景点**上，不挂在路上 ——
+   * 所以它和 `commute` 分开记。
+   */
+  readonly extras: DayExtras;
+  /**
+   * 同城同时段还有谁（最多三个，不含她自己）。
+   *
+   * 2026-11-04 加的碰面功能：**只能看，不能应声**。拉不到或没配服务器就是空数组，
+   * 叙事里也就没有那一句 —— 不硬凑。
+   */
+  readonly neighbors: readonly { pet: string; doing: string }[];
+  /**
+   * 这个池子今天一共多少只（不分城市）。**只给面板看，不进叙事。**
+   *
+   * 2026-11-05：一个人用的时候，「同城没人」和「这条线坏了」在界面上长得一模一样。
+   * 一个总数把这两件事分开：有 37 只但同城 0 只 = 功能正常、只是没碰上。
+   */
+  readonly pool: number;
+  /**
+   * 同城别人发出来的邀约（最多三条）。
+   *
+   * 和 `neighbors` 一样**只进叙事**：今天去哪儿、几点睡、花多少钱，都不看它。
+   * 差别在于它是「有人在找人一起走」，而不只是「有人也在这儿」。
+   */
+  readonly invites: readonly { id: string; pet: string; to: string; toName: string; days: number; note: string }[];
   /** 当天天气。`null` = 没配 key / 查不到 / 国外，一律当作未知，不编。 */
   readonly weather: Forecast | null;
 }
@@ -114,11 +174,15 @@ function nightOptionOf(city: City): string | null {
  * **地方优先**：一座城真有自己的节，那才是她那天该撞上的事。
  */
 function festivalOn(city: City, dateKey: string): { name: string; what: string } | null {
-  const f = city.festival;
-  if (f) {
-    const month = Number(dateKey.slice(5, 7));
-    if (Number.isFinite(month) && f.months.includes(month)) {
-      return { name: f.name, what: f.what };
+  /*
+   * 一个城市一年可以不止一个节（武汉：三月樱花、七月渡江节）。
+   * 挨个看，取第一个对得上月份的 —— 月份不重叠时不会有歧义，
+   * 真重叠了（比如春节和花市都在二月）也是先写的那个，顺序由数据决定。
+   */
+  const month = Number(dateKey.slice(5, 7));
+  if (Number.isFinite(month)) {
+    for (const f of city.festivals) {
+      if (f.months.includes(month)) return { name: f.name, what: f.what };
     }
   }
   return cnHolidayOn(city, dateKey);
@@ -137,6 +201,30 @@ function foodHint(city: City): string {
   if (has('草原') || has('奶食') || has('牛羊')) return '肉和奶';
   if (has('寺庙') || has('素')) return '素的、清淡的';
   return '本地人日常吃的那种';
+}
+
+/**
+ * 这一顿吃什么。
+ *
+ * ## 为什么有了 `city.foods` 还要保留 `foodHint`
+ *
+ * `foods` 是具体菜名（「兰州牛肉面」「酿皮子」），`foodHint` 是方向（「面，本地那一套」）。
+ * 有菜名就用菜名 —— 具体名词才能让她写出「要了碗牛肉面，辣子放多了」；
+ * 只有方向的时候她只能写「吃了一碗面」，跟「在街上走」一样空。
+ *
+ * 但**不是每个城市都有菜名**（127 城里 105 城有，其余留空），没有就退回方向。
+ * 这是兜底，不是主力。
+ *
+ * ## 为什么要按餐次轮换
+ *
+ * 原来一天三顿共用同一个 `food` 值 —— 有了菜名之后就会变成
+ * 「早饭兰州牛肉面 / 午饭兰州牛肉面 / 晚饭兰州牛肉面」。按早中晚各取一样，
+ * 一个城三样菜正好一天不重样；只有两样时晚饭会回到第一样，那是真会发生的。
+ */
+export function pickFood(city: City, meal: 0 | 1 | 2): string {
+  const f = city.foods;
+  if (!f.length) return foodHint(city);
+  return f[meal % f.length];
 }
 
 const round15 = (h: number): number => Math.round(h * 4) / 4;
@@ -230,12 +318,37 @@ export function planDay(args: {
   /** 当天天气。拿不到就传 null —— 不能因为没天气就不排作息表。 */
   weather?: Forecast | null;
   /**
+   * 同城同时段还有谁（最多三个）。不传＝没人，或者是碰面没开。
+   *
+   * 只进叙事，不进任何计算 —— 她在哪儿、花多少钱、什么时候睡，都和这个无关。
+   */
+  neighbors?: readonly { pet: string; doing: string }[];
+  pool?: number;
+  /**
+   * 同城别人发出来的邀约。不传＝没拉、或者没有 —— 两种都是空数组，不必区分：
+   * 这一天照排，叙事里少一句而已。
+   */
+  invites?: readonly { id: string; pet: string; to: string; toName: string; days: number; note: string }[];
+  /**
    * 在这个城市的第几天（0 = 到的那天）。
    *
    * 只影响「今天去哪儿」—— 每天换一批地标，别连着两天排同一个。
    * 不传就是 0，行为跟老版本一致。
    */
   dayIndex?: number;
+  /**
+   * 这趟手上有车吗（2026-11-06）。
+   *
+   * 用户来信：「如果是自驾那么这次全程应该都是自驾，去景点也是自驾，
+   * 自驾要耗油费或者电费」。有车的时候城里就不坐公交了 —— 油钱比两张公交票贵，
+   * 但她有车就是为了方便，算账不是这时候算的。
+   */
+  car?: { fuel: 'oil' | 'ev' } | null;
+  /**
+   * 手头宽不宽（余钱够不够放松花）。影响景点里买不买讲解/观光车 ——
+   * 不传 = 不宽，她自己走。
+   */
+  comfortable?: boolean;
 }): DayPlan {
   const { city, dateKey, shape, lodging } = args;
   const rnd = args.rnd ?? Math.random;
@@ -253,7 +366,6 @@ export function planDay(args: {
   const murky = weather ? isMurky(weather.dayWeather) : false;
   const nightWet = weather ? isWet(weather.nightWeather) : false;
   const nightOption = nightWet ? null : nightOptionOf(city);
-  const food = foodHint(city);
 
   const beats: Beat[] = [];
   const push = (
@@ -291,9 +403,88 @@ export function planDay(args: {
    * 让下午三点半的她有话可说，而不是只剩一句「等晚饭」。
    * 那条也带 `spot`，但巡礼按地名去重，不会重复报同一部作品。
    */
+  /*
+   * 城内交通的累积（2026-11-06）。
+   *
+   * 用户来信：「去景点也要坐公交」。原来她只有「去哪儿」没有「怎么去」——
+   * 从住处到龙门石窟、从石窟到饭馆，中间那段是空的，日历上看起来像瞬移。
+   */
+  let trips = 0;
+  let tripCost = 0;
+  /** 停车单独记：回程不算它（回酒店/回住处，停车场不收费）。 */
+  let parkCost = 0;
+  /** 景点里的额外消费（讲解/观光车/自行车）。 */
+  const extraItems: string[] = [];
+  let extraCost = 0;
+  const modes = new Set<string>();
+  /*
+   * 有地铁的城市。没有真实线网数据，用城市价格指数当代理 ——
+   * 指数 > 1.05 的基本是省会/计划单列市，那儿确实有地铁；
+   * 县城指数在 0.8 上下，不会误判。
+   */
+  const hasMetro = city.priceIdx >= 1.05;
+  /*
+   * 今天舍不舍得在景点上花钱。和酒店/座位用同一套思路：
+   * 宽的时候才会买讲解、坐观光车；紧的时候自己走。
+   */
+  const richThisDay = args.comfortable === true;
+
   const act = (at: number, what: string, spot: string, span?: number): void => {
     const hours = span ?? 0;
+    /*
+     * 去那儿怎么走。距离没有真实坐标，用种子给一个 1.2–12 公里的数 ——
+     * 它只影响「骑车还是坐车」，不影响叙事。
+     */
+    /*
+     * **别再拿字符码求和当种子**（2026-11-06 踩到）。
+     *
+     * 求和有个要命的性质：相邻两个日期只差 1，`% 100` 也只差 1 ——
+     * 于是「今天买不买讲解」按日期一条斜线地挪，而不是随机。
+     * 实测洛阳：龙门石窟 89、白马寺 69、洛阳老城 87，全落在 60 以上的那一档，
+     * 连住二十天一次都没买过。换成 FNV-1a 之后才是均匀的。
+     */
+    const kmSeed = hashOf(`${city.id}${dateKey}${spot}`);
+    const km = 1.2 + (kmSeed % 108) / 10;
+    if (args.car) {
+      /*
+       * 有车就开车。油钱按公里算，**停车只在景点收**（2026-11-06 Mr.Q 指出的）：
+       *
+       * 酒店自带停车场，回住处不该再收一次；而景区停车常常是含在门票里的 ——
+       * 原来不管去哪儿都拍 15 块，一天下来光停车就四五十，比油钱还多，明显不对。
+       *
+       * 现在：去景点才可能收（约六成收，10–30 元）；含在门票里的那四成收 0。
+       */
+      const per = args.car.fuel === 'ev' ? 0.15 : 0.7;
+      const fuel = Math.max(2, Math.round(km * per));
+      const park = parkFee(kmSeed);
+      trips += 1;
+      tripCost += fuel + park;
+      parkCost += park;
+      modes.add(args.car.fuel === 'ev' ? '自驾（电车）' : '自驾');
+      push(Math.max(0, at - (km * 1.6 + 5) / 60), 'commute', `开车去${spot}`);
+      return;
+    }
+    const ride = inCityMode(km, hasMetro, rnd);
+    trips += 1;
+    tripCost += ride.price;
+    if (ride.name !== '走路') {
+      modes.add(ride.name);
+      // 在路上那一段：时刻 = 到达时刻减去路上花的时间，读起来才「先走再玩」。
+      push(Math.max(0, at - ride.min / 60), 'commute', `${ride.verb}${spot}`);
+    }
     push(at, 'activity', what, pilgrimAt(city.id, spot), spot, hours ? at + hours : undefined);
+    /*
+     * 到了之后怎么逛（2026-11-06）。
+     *
+     * 挂在 `act` 里而不是 `commute` 里：讲解和观光车是**景点内**的消费，
+     * 跟怎么来的没有关系。她也不是每次都买 —— 余钱紧就自己走。
+     */
+    const extra = pickSpotExtra(spot, kmSeed, args.car ? args.car.fuel : null, richThisDay);
+    if (extra) {
+      extraItems.push(extra.item);
+      extraCost += extra.price;
+      push(at + 0.4, 'beat', extra.text);
+    }
     if (hours < 1.5) return;
     /*
      * 中段那句。**同一个景点不放两句**：一天两个景点各有一句已经够了，
@@ -332,8 +523,8 @@ export function planDay(args: {
       return finish();
     }
     if (start >= 17) {
-      if (nightOption) push(19.5, 'dinner', `晚饭，${food}`);
-      else push(18.5, 'dinner', `晚饭，${food}`);
+      if (nightOption) push(19.5, 'dinner', `晚饭，${pickFood(city, 2)}`);
+      else push(18.5, 'dinner', `晚饭，${pickFood(city, 2)}`);
       if (nightOption) push(20.25, 'night', nightOption);
       push(nightOption ? 21.5 : 20, 'hotel', `住进${lodgingLabel(lodging)}。${lodging.feel}`);
       push(23, 'sleep', '睡');
@@ -341,27 +532,27 @@ export function planDay(args: {
     }
     if (start >= 13.5) {
       act(start + 1, `下午，${a0}`, a0, Math.max(1.5, 17.75 - start));
-      push(18.5, 'dinner', `晚饭，${food}`);
+      push(18.5, 'dinner', `晚饭，${pickFood(city, 2)}`);
       if (nightOption) push(20.25, 'night', nightOption);
       push(nightOption ? 21.5 : 20, 'hotel', `住进${lodgingLabel(lodging)}。${lodging.feel}`);
       push(23, 'sleep', '睡');
       return finish();
     }
     if (start >= 11) {
-      push(12.5, 'lunch', `午饭，${food}`);
+      push(12.5, 'lunch', `午饭，${pickFood(city, 1)}`);
       act(14.5, `下午，${a1}`, a1, SPAN_PM);
-      push(18.5, 'dinner', `晚饭，${food}`);
+      push(18.5, 'dinner', `晚饭，${pickFood(city, 2)}`);
       if (nightOption) push(20.25, 'night', nightOption);
       push(nightOption ? 21.5 : 20, 'hotel', `住进${lodgingLabel(lodging)}。${lodging.feel}`);
       push(23, 'sleep', '睡');
       return finish();
     }
     // 上午到：这一天还很长
-    if (start < 9) push(9, 'breakfast', `早饭，${food}`);
+    if (start < 9) push(9, 'breakfast', `早饭，${pickFood(city, 0)}`);
     act(10, a0, a0);
-    push(12.5, 'lunch', `午饭，${food}`);
+    push(12.5, 'lunch', `午饭，${pickFood(city, 1)}`);
     act(14.5, `下午，${a1}`, a1);
-    push(18.5, 'dinner', `晚饭，${food}`);
+    push(18.5, 'dinner', `晚饭，${pickFood(city, 2)}`);
     if (nightOption) push(20.25, 'night', nightOption);
     push(nightOption ? 21.5 : 20, 'hotel', `住进${lodgingLabel(lodging)}。${lodging.feel}`);
     push(23, 'sleep', '睡');
@@ -392,19 +583,19 @@ export function planDay(args: {
   if (canSunrise && sunriseHour !== null) {
     push(sunriseHour - 1.5, 'wake', `天没亮就起，为了赶日出（当地日出 ${fmtHour(sunriseHour)}）`);
     push(sunriseHour - 0.25, 'sunrise', `日出。${shape === 'last' ? '最后一天，专门为这个起的' : ''}`.trim());
-    push(sunriseHour + 1.5, 'breakfast', `看完回来吃早饭，${food}`);
+    push(sunriseHour + 1.5, 'breakfast', `看完回来吃早饭，${pickFood(city, 0)}`);
     act(
       sunriseHour + 3.5, wholeDay ? dayLine : `上午，${spotA}`, spotA,
       // 「一整天都在山上」要撑到下午，不能只给上午那两个小时
       wholeDay ? Math.max(SPAN_PM, 17.5 - (sunriseHour + 3.5)) : SPAN_AM,
     );
-    push(12.5, 'lunch', `午饭，${food}`);
+    push(12.5, 'lunch', `午饭，${pickFood(city, 1)}`);
     if (!wholeDay) act(14.5, `下午，${spotB}`, spotB, SPAN_PM);
   } else {
     push(7, 'wake', '起床');
-    push(7.5, 'breakfast', `早饭，${food}`);
+    push(7.5, 'breakfast', `早饭，${pickFood(city, 0)}`);
     act(9.5, dayLine, spotA, wholeDay ? Math.max(SPAN_PM, 17.5 - 9.5) : SPAN_AM);
-    push(12.5, 'lunch', `午饭，${food}`);
+    push(12.5, 'lunch', `午饭，${pickFood(city, 1)}`);
     if (!wholeDay) act(14.5, `下午，${spotB}`, spotB, SPAN_PM);
   }
   /*
@@ -415,7 +606,7 @@ export function planDay(args: {
    */
   const fest = festivalOn(city, dateKey);
   if (fest) push(16.75, 'activity', `赶上${fest.name}。${fest.what}`);
-  push(18.5, 'dinner', `晚饭，${food}`);
+  push(18.5, 'dinner', `晚饭，${pickFood(city, 2)}`);
   if (nightOption) {
     push(20.25, 'night', nightOption);
     push(21.5, 'hotel', `回${lodgingLabel(lodging)}。${lodging.feel}`);
@@ -429,12 +620,184 @@ export function planDay(args: {
   return finish();
 
   function finish(): DayPlan {
+    /*
+     * 月末那天说一句。
+     *
+     * 月报工具（`journey_monthly`）不会自己挑日子 —— 它只知道「给我这个月」。
+     * 「今天月底了」得有人提醒，这句话就是那个人。
+     *
+     * 放在早饭那一格（8 点）。原来放夜里 21:30，撞上了两件事：
+     * 当天「晚上九点才到」的话这一天本来就只剩进房间和睡，多一条就把测试顶红了；
+     * 而且 `finish()` 是先排序再返回的，后 push 的节点不会被排 —— 顺序就乱。
+     * 所以**必须在排序之前 push**，时间也挑在白天不打架的那一格。
+     *
+     * 判据用日历算，不用「明天是 1 号」：`dateKey` 是当地日期，
+     * 跨月那天的时区差异会让后一种写法在月末的晚上判错。
+     */
+    const m = Number(dateKey.slice(5, 7));
+    const d = Number(dateKey.slice(8, 10));
+    const daysInMonth = new Date(Date.UTC(Number(dateKey.slice(0, 4)), m, 0)).getUTCDate();
+    // 到达日不提：那一天她在换地方，本来就不会坐下来写月报。
+    if (shape !== 'arrival' && Number.isFinite(daysInMonth) && d === daysInMonth) {
+      push(8, 'beat', '这个月最后一天了');
+    }
+    /*
+     * 一年的最后一天再补一句。
+     *
+     * 月报看细节，年报看形状 —— 十二月三十一号该有两个由头，不是一个。
+     * 放在 8.5：跟月报那句挤在同一个早上，但排在它后面，先写月报再写年报。
+     */
+    if (shape !== 'arrival' && m === 12 && Number.isFinite(daysInMonth) && d === daysInMonth) {
+      push(8.5, 'beat', '今年最后一天了');
+    }
     beats.sort((a, b) => a.at - b.at);
+
+    /*
+     * 回程也算一趟：人到了景点还得回来，这一趟不打折。
+     *
+     * 但**回程不带停车费** —— 回的是酒店或住处，那边停车场不收钱（2026-11-06 改）。
+     * 所以这里只补油钱：把停车从总数里减掉，再算平均。
+     */
+    if (trips > 0 && tripCost > 0) {
+      const fuelOnly = Math.max(0, tripCost - parkCost);
+      const avgFuel = Math.round(fuelOnly / Math.max(1, trips));
+      trips += 1;
+      tripCost += avgFuel;
+    }
+
     return {
       dateKey, cityId: city.id, beats, lodging,
       sunriseHour, sunsetHour, shape, nightOption, weather,
+      commute: { trips, price: tripCost, modes: [...modes] },
+      extras: { items: extraItems, price: extraCost },
+      // 没传就是没人 —— 碰面是加分项，缺了不影响这一天照排。
+      neighbors: args.neighbors ?? [],
+      pool: args.pool ?? 0,
+      invites: args.invites ?? [],
     };
   }
+}
+
+/**
+ * 城内怎么走。
+ *
+ * 价格是查来的（2026-11-06）：公交 2 元、地铁 3–6、共享单车 1.5 元/15 分钟、
+ * 电瓶车 3 元、出租 15–40。
+ *
+ * **距离决定方式，不是随机挑一种**：一公里内没人打车，十公里外没人骑车 ——
+ * 这条常识不写进去，就会出现「三百米也要打车」这种不像过日子的选择。
+ *
+ * 时间也按真实速度给：走路 13 分/公里（含红绿灯）、骑车约 6、公交约 4（含等车）、
+ * 地铁约 3（加 8 分钟进出站）、出租约 2.2（加 3 分钟等车）。
+ */
+function inCityMode(
+  km: number,
+  metro: boolean,
+  rnd: () => number,
+): { name: string; price: number; min: number; verb: string } {
+  if (km <= 1.2) return { name: '走路', price: 0, min: km * 13, verb: '' };
+  if (km <= 3) {
+    return rnd() < 0.5
+      ? { name: '共享单车', price: 1.5, min: km * 6, verb: '骑共享单车去' }
+      : { name: '电瓶车', price: 3, min: km * 4, verb: '扫了辆电瓶车去' };
+  }
+  if (km <= 9) {
+    // 有地铁的城市，短途多半选地铁 —— 准点，不堵。
+    if (metro && rnd() < 0.45) return { name: '地铁', price: 4, min: km * 3 + 8, verb: '坐地铁去' };
+    return { name: '公交', price: 2, min: km * 4 + 10, verb: '坐公交去' };
+  }
+  return rnd() < 0.4
+    ? { name: '出租', price: Math.round(12 + km * 2.4), min: km * 2.2 + 3, verb: '打车去' }
+    : { name: '公交', price: 2, min: km * 4 + 10, verb: '坐公交去' };
+}
+
+/**
+ * 这个景点值不值得花点钱「省腿」（2026-11-06）。
+ *
+ * 用户来信：「可以选择安排导游讲解景点什么的，有些景点比较大的是不是可以有什么
+ * 观光车扫码自行车之类的选项，舍不得我家小鱼吃苦，经常逛到腿软」。
+ *
+ * ## 三类，按景点的**性质**给，不按价格
+ *
+ * - 有故事的地方（博物馆/遗址/石窟/寺/陵/古城）→ **讲解**，30 元/人
+ * - 走不完的地方（山/峰/峡/瀑/森林/湿地）→ **观光车**，40 元
+ * - 路上好看的地方（湖/公园/古镇/老街）→ **景区自行车**，20 元
+ *
+ * ## 买不买
+ *
+ * 只有「今天手头宽」才买，而且**只买一项** —— 一天在两个景点各买一次讲解，
+ * 听起来像旅游团广告，不像她在过日子。
+ *
+ * 电车/自驾与这里无关（那只影响路上），所以 `fuel` 参数只用来给文案加一句
+ * 「车停在门口」，不参与判断。价格是查来的（景区公示价 80–200/团、观光车 20–90）。
+ */
+function pickSpotExtra(
+  spot: string,
+  seed: number,
+  fuel: 'oil' | 'ev' | null,
+  comfortable: boolean,
+): { item: string; text: string; price: number } | null {
+  if (!comfortable) return null;
+  // 宽裕的日子也不是每个景点都买 —— 六成的景点会花钱，其余自己走。
+  if (Math.abs(Math.round(seed)) % 100 >= 60) return null;
+
+  /*
+   * 顺序有讲究：**有故事的地方先给讲解**。
+   * 「石窟」既算有故事也算要走很多路，但站在那儿听人讲一段，比重复一遍「好多佛像」有用。
+   */
+  if (/博物馆|遗址|石窟|寺|庙|陵|古城|故居|纪念馆|宫|塔|楼阁/.test(spot)) {
+    return {
+      item: '讲解',
+      price: 30,
+      text: `在${spot}门口请了个讲解，一路听下来，比牌子上的字多得多`,
+    };
+  }
+  if (/山|峰|峡|瀑|森林|湿地|草原|大峡谷/.test(spot)) {
+    return {
+      item: '观光车',
+      price: 40,
+      text: `坐了景区的观光车，省下两三公里的上坡`,
+    };
+  }
+  if (/湖|公园|古镇|老街|街区|绿道|堤/.test(spot)) {
+    return {
+      item: '景区自行车',
+      price: 20,
+      text: `租了辆自行车，沿着${spot}慢慢骑了一圈`,
+    };
+  }
+  return null;
+}
+
+/**
+ * 32 位 FNV-1a。
+ *
+ * 只用来把「城市+日期+景点」压成一个稳定的整数种子。**不要换成求和** ——
+ * 求和让相邻输入的输出也相邻，低位几乎没有随机性（见 `act` 里的注释）。
+ */
+function hashOf(text: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+/**
+ * 景点停车费（2026-11-06）。
+ *
+ * 真实情况（查价 + Mr.Q 的说法）：景区停车 10–30 元/次，而且**相当一部分景区
+ * 把停车含在门票里** —— 所以这里四成收 0。
+ *
+ * 不确定性用种子定，同一天同一个景点不会一会儿收一会儿不收。
+ */
+function parkFee(seed: number): number {
+  const n = Math.abs(Math.round(seed)) % 100;
+  if (n < 40) return 0;          // 含在门票里
+  if (n < 75) return 10;
+  if (n < 92) return 20;
+  return 30;
 }
 
 /** 这地方值不值得为日出起大早。海边和高原值得；纯城市不值得（楼挡着）。 */

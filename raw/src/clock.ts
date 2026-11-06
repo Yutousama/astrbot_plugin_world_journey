@@ -147,6 +147,14 @@ export function tzOffsetLabel(tz: string, at: Date = new Date()): string {
 /** 「几个小时」说成人话：14.7 → 「十四个多小时」。 */
 export function humanHours(h: number): string {
   if (h < 1) return `${Math.max(1, Math.round(h * 60))} 分钟`;
+  /*
+   * 两天以上按天说。
+   *
+   * 2026-11-05 的 144 天模拟抓到的：布宜诺斯艾利斯坐船跨洋，一趟 450 小时 ——
+   * 事件里写着「这一趟要走 450 个多小时」「还有大约 448 小时」。
+   * 数字没错，但没人这么说话；而且「448 小时」读者得自己换算成十九天。
+   */
+  if (h >= 48) return `${Math.round(h / 24)} 天`;
   const whole = Math.floor(h);
   const rest = h - whole;
   if (rest < 0.25) return `${whole} 小时`;

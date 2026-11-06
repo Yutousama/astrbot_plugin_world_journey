@@ -59,14 +59,38 @@ const TEXT = {
     tripFrom: '这一趟从',
     musicOn: '在放',
     wishList: '想去',
+    /*
+     * 联机那一行（2026-11-05）。没有服务器时整行不出现；
+     * 有服务器、但同城没人时**也要显示**「暂时没别人」——
+     * 不然用户填完地址什么变化都没有，会以为没生效。
+     */
+    nearby: '同城',
+    pool: '池子',
+    poolN: '今天一共 {n} 只',
+    meetTitle: '碰面：和别人的鱼一起走一段',
+    meetLead: '填一个公共地址，她到站会看一眼这一带还有谁；想找人一起走，跟她说一声就行。',
+    meetHint: '下面这个是我这边一直开着的，填进设置里的「碰面地址」就能用：',
+    meetCopy: '复制地址',
+    nearbyNone: '这段时间没别人',
+    nearbyN: '{n} 个也在这一带',
+    invites: '找伴',
+    invitesN: '{n} 个在找伴',
+    pledge: '约好',
+    pledgeHere: '{who} · 还剩 {n} 天',
+    pledgeAway: '{who} · 说好去 {city}',
     homeTitle: '她在家',
     askToggle: '出门等我点头',
     departBtn: '让她出发',
     departSelf: '什么时候走，她自己定。',
     departWait: '她在家等着 —— 按一下就上路。',
-    departRest: '她在歇着，{n} 之后才动。',
+    // 休息期里按钮照样能按 —— 按一下就是「不等了，现在就走吧」。
+    departRest: '她还在歇（原说到 {n}）。按了就现在走。',
     departBusy: '这会儿动不了（没找到能去的地方）。',
     departErr: '没走成',
+    askTitle: '她在等你点头',
+    askGo: '好',
+    askNo: '不好',
+    askHint: '她不会自己去。答「好」才算数。',
     guideTitle: '第一次来，先把这三件事说清',
     guide1Title: '她在另一个时区过日子',
     guide1Body: '上面那个钟是**她那边的**时间。她按当地时间吃饭、睡觉、出门 —— 你这边几点跟她没关系。',
@@ -79,6 +103,10 @@ const TEXT = {
     albumTitle: '她拍的',
     albumEmpty: '还没有照片。配好生图接口之后，她出去逛会顺手拍一张。',
     albumHint: '一天一张，拍的是风景，不是她自己。',
+    diaryTitle: '日记',
+    diaryHint: '她每天写的那几段。左边选一天，右边读。',
+    diaryEmpty: '还没有日记。她出门之后每天会写一段。',
+    diaryFail: '读不出日记。看下面那个目录是不是还在。',
     photoDir: '原图在这',
     copyPath: '复制路径',
     copied: '已复制',
@@ -142,14 +170,32 @@ const TEXT = {
     tripFrom: 'this trip from',
     musicOn: 'Playing',
     wishList: 'Want to go',
+    nearby: 'Around',
+    pool: 'Pool',
+    poolN: '{n} pets today',
+    meetTitle: 'Meet up: travel a stretch with someone else\'s pet',
+    meetLead: 'Add a public server and she will see who is around when she arrives; to travel together, just tell her.',
+    meetHint: 'This one is always on — paste it into the "meet server" setting:',
+    meetCopy: 'Copy address',
+    nearbyNone: 'nobody else right now',
+    nearbyN: '{n} others nearby',
+    invites: 'Company',
+    invitesN: '{n} looking for company',
+    pledge: 'Agreed',
+    pledgeHere: '{who} · {n}d left',
+    pledgeAway: '{who} · off to {city}',
     homeTitle: 'She is home',
     askToggle: 'Wait for my go',
     departBtn: 'Send her off',
     departSelf: 'She decides when to leave.',
     departWait: 'She is waiting — one press and she goes.',
-    departRest: 'Resting until {n}.',
+    departRest: 'She is still resting (until {n}). Press to send her now.',
     departBusy: 'She cannot head out right now.',
     departErr: 'Did not leave',
+    askTitle: 'She is waiting on you',
+    askGo: 'Go',
+    askNo: 'Not now',
+    askHint: 'She will not go on her own. Only a yes counts.',
     guideTitle: 'First time here — three things worth knowing',
     guide1Title: 'She lives in another time zone',
     guide1Body: 'That clock is **her** time. She eats, sleeps and goes out on local time — your hour means nothing to her.',
@@ -162,6 +208,10 @@ const TEXT = {
     albumTitle: 'Her photos',
     albumEmpty: 'No photos yet. Once an image endpoint is configured she will take one on her way out.',
     albumHint: 'One a day, of the scenery — never of herself.',
+    diaryTitle: 'Diary',
+    diaryHint: 'What she wrote, day by day. Pick a day on the left.',
+    diaryEmpty: 'No entries yet — she starts writing once she is out there.',
+    diaryFail: 'Could not read the diary. Check the folder below.',
     photoDir: 'Full-size files in',
     copyPath: 'Copy path',
     copied: 'Copied',
@@ -369,17 +419,26 @@ export default {
         head.append(left, right);
 
         const homeBox = el('section', 'jr-home');
+        /*
+         * 「她在等你点头」。
+         *
+         * 放在最上面 —— 这是**唯一一件需要他动手的事**，压在引导和状态下面的
+         * 话，她会在家等一整天而没人看见那张卡片。
+         */
+        const askBox = el('section', 'jr-ask');
         const homeNote = el('p', 'jr-warn', '');
         const guide = el('section', 'jr-guide');
         const legBox = el('section', 'jr-leg');
         const facts = el('section', 'jr-facts');
         const nextBox = el('section', 'jr-next');
+        // 碰面：没配服务器时才出现的引导块。配了就只剩上面那排事实，不再解释功能。
+        const meetBox = el('section', 'jr-meet');
         const foot = el('footer', 'jr-foot');
         // 反馈那一栏单独一个插槽：配了邮箱才有内容，没配就是空的，
         // 不留一个点了没反应的按钮在那儿。
         const fbSlot = el('div', 'jr-fb-slot');
 
-        app.append(head, homeBox, guide, legBox, facts, nextBox, foot, fbSlot);
+        app.append(head, askBox, homeBox, guide, legBox, facts, meetBox, nextBox, foot, fbSlot);
 
         const render = (s) => {
           app.dataset.mode = s.mode;
@@ -467,6 +526,33 @@ export default {
           }
           status.textContent = T[STATUS_KEY[s.mode] || 'statusUnknown'];
           status.dataset.mode = s.mode;
+
+          /* ---- 她在等他点头 ---- */
+          askBox.replaceChildren();
+          askBox.hidden = !s.ask;
+          if (s.ask) {
+            // 她自己那句话原样贴 —— 面板不该替她重写一遍，那是另一张嘴。
+            askBox.append(el('p', 'jr-ask-eyebrow', T.askTitle));
+            askBox.append(el('p', 'jr-ask-line', s.ask.line));
+            const row = el('div', 'jr-ask-row');
+            const yes = el('button', 'jr-btn jr-btn-primary', T.askGo);
+            const no = el('button', 'jr-btn', T.askNo);
+            yes.type = 'button';
+            no.type = 'button';
+            const answer = (ok) => {
+              // 两个一起锁：连点两下会在服务端产生「又去又不去」的两次调用。
+              yes.disabled = true;
+              no.disabled = true;
+              ctx.invoke('answerAsk', [ok]).then(render).catch(() => {
+                yes.disabled = false;
+                no.disabled = false;
+              });
+            };
+            yes.addEventListener('click', () => answer(true), { signal: ctx.signal });
+            no.addEventListener('click', () => answer(false), { signal: ctx.signal });
+            row.append(yes, no);
+            askBox.append(row, el('p', 'jr-ask-hint', T.askHint));
+          }
 
           /* ---- 引导 ---- */
           guide.replaceChildren();
@@ -585,6 +671,32 @@ export default {
            * 不带它的话，面板上只有「她三天没动」—— 那读起来像坏了，不像在攒路费。
            */
           if (s.work) chips.push([T.working, `${s.work.city} · ${s.work.gig} · ${s.work.daysLeft === 0 ? T.workLastDay : fill(T.workLeft, { n: s.work.daysLeft })}`]);
+          /*
+           * 联机：同城有谁、有没有人在找伴、她跟谁约好了。
+           *
+           * 没有服务器也没有约定时 `social` 是 null —— 整行不出现，不给没开这功能的人
+           * 塞一条「0 个」。配了服务器但同城没人时**照样显示**「这段时间没别人」：
+           * 用户填完地址总得看到点变化，否则只会以为没生效。
+           */
+          if (s.social) {
+            const so = s.social;
+            /*
+             * 先给总数，再给同城。
+             *
+             * 只有「同城 0 个」的时候，用户分不清是「今天真没人」还是「这条线坏了」；
+             * 前面一行写着「池子今天一共 37 只」，答案就清楚了：
+             * 池子活着，只是这一带没人。总数是 0 才说明服务器没回话或真的空了。
+             */
+            if (so.pool > 0) chips.push([T.pool, fill(T.poolN, { n: so.pool })]);
+            chips.push([T.nearby, so.nearby > 0 ? fill(T.nearbyN, { n: so.nearby }) : T.nearbyNone]);
+            if (so.invites > 0) chips.push([T.invites, fill(T.invitesN, { n: so.invites })]);
+            if (so.pledge) {
+              const pg = so.pledge;
+              chips.push([T.pledge, pg.here
+                ? fill(T.pledgeHere, { who: pg.withPet, n: pg.daysLeft, d: pg.days })
+                : fill(T.pledgeAway, { who: pg.withPet, city: pg.city })]);
+            }
+          }
           if (s.lodging) {
             // 有真店名就用真名，把档次放括号里 —— 档次是那晚的重点，别丢。
             const name = s.lodging.name ? `${s.lodging.name}（${s.lodging.kind}）` : s.lodging.kind;
@@ -599,6 +711,35 @@ export default {
             facts.append(item);
           }
           facts.hidden = chips.length === 0;
+
+          /*
+           * 碰面：**只在没配服务器时出现。**
+           *
+           * 2026-11-06 Mr.Q：「好多人都不知道碰面这功能，不看更新日志和介绍」。
+           * 之前这里只有一排数字（池子多少只、同城几只），没配服务器的人根本看不到那一排 ——
+           * 于是整个功能对他们等于不存在。这块就是那个入口：一句说明 + 一个能直接复制的地址。
+           *
+           * 配过之后就不显示了：那时她要的是「现在有几只」，不是再读一遍说明书。
+           */
+          meetBox.replaceChildren();
+          if (!s.social) {
+            meetBox.append(el('h2', 'jr-next-title', T.meetTitle));
+            meetBox.append(el('p', 'jr-meet-lead', T.meetLead));
+            meetBox.append(el('p', 'jr-meet-hint', T.meetHint));
+            const addr = el('div', 'jr-meet-addr');
+            const url = 'https://cooppetsjourney.top';
+            addr.append(el('span', 'jr-meet-url', 'cooppetsjourney.top'));
+            const copy = el('button', 'jr-linkbtn', T.meetCopy);
+            copy.type = 'button';
+            copy.addEventListener('click', () => {
+              copyText(url).then(() => {
+                copy.textContent = T.fbCopied;
+                setTimeout(() => { copy.textContent = T.meetCopy; }, 2000);
+              });
+            }, { signal: ctx.signal });
+            addr.append(copy);
+            meetBox.append(addr);
+          }
 
           /* ---- 接下来 ---- */
           nextBox.replaceChildren();
@@ -704,9 +845,15 @@ export default {
               if (res && res.ok === false) {
                 note.textContent = `${T.shootSkip}${res.reason || '没说是为什么'}`;
                 const d = res.diag;
-                if (d && d.api) {
-                  note.textContent += `｜接口 ${d.api}，模型 ${d.model}，密钥${d.hasKey ? '已填' : '没填'}，当地 ${d.localHour} 点`;
-                }
+                /*
+                 * 用后端给的那整句 `line`，不再在前端拼字段名。
+                 *
+                 * 原来这里写死了「接口 X，模型 Y，密钥已填/没填」—— 那是云端那条路的形状。
+                 * 2026-11-04 加了 ComfyUI（没有模型名、通常没有密钥），照念会让人
+                 * 以为漏填了两项。字段拼装在哪儿，协议知识就泄露到哪儿。
+                 */
+                const detail = d && (d.line || (d.api ? `接口 ${d.api}，当地 ${d.localHour} 点` : ''));
+                if (detail) note.textContent += `｜${detail}`;
                 return undefined;
               }
               // 拍成了：给它一拍去落盘，再刷新相册。
@@ -786,6 +933,73 @@ export default {
 
         await load();
         ctx.interval(load, 120_000);
+      },
+    },
+
+    /*
+     * 日记页（2026-11-06）。
+     *
+     * 用户来信要的：「希望插件里面可以直接看每天的日记」。原来日记只在同步盘的 md 里，
+     * 要拿记事本去翻 —— 那等于让用户去文件系统里找她。
+     *
+     * 只读不写：日记是她写的，这个页面的职责是让那些字能被看见。
+     */
+    diary: {
+      async mount(ctx) {
+        const T = text(ctx.language);
+        const app = el('div', 'jr-app jr-diary');
+        const head = el('header', 'jr-head');
+        const left = el('div', 'jr-head-left');
+        left.append(el('p', 'jr-eyebrow', T.diaryTitle));
+        left.append(el('h1', 'jr-city', T.diaryTitle));
+        left.append(el('p', 'jr-sub', T.diaryHint));
+        head.append(left);
+        app.append(head);
+
+        const listBox = el('div', 'jr-dlist');
+        const viewBox = el('article', 'jr-dview');
+        app.append(listBox, viewBox);
+        ctx.root.append(app);
+
+        const show = (d) => {
+          viewBox.replaceChildren();
+          if (!d) return;
+          viewBox.append(el('h2', 'jr-dview-title', d.city || d.dateKey));
+          const meta = [d.dateKey, d.weather, d.lodging].filter(Boolean).join(' · ');
+          if (meta) viewBox.append(el('p', 'jr-dview-meta', meta));
+          // 正文按空行分段 —— 她自己写的换行要保留，但连续的空行不该撑开一大块空白。
+          for (const para of String(d.body || '').split(/\n{2,}/)) {
+            const t = para.trim();
+            if (t) viewBox.append(el('p', 'jr-dview-p', t));
+          }
+        };
+
+        try {
+          const r = await ctx.invoke('list');
+          const days = (r && r.days) || [];
+          listBox.replaceChildren();
+          if (!days.length) {
+            listBox.append(el('p', 'jr-empty', T.diaryEmpty));
+            if (r && r.dir) listBox.append(el('p', 'jr-dview-meta', r.dir));
+            return;
+          }
+          days.forEach((d, i) => {
+            const b = el('button', 'jr-ditem', '');
+            b.type = 'button';
+            b.append(el('span', 'jr-ditem-date', d.dateKey));
+            b.append(el('span', 'jr-ditem-city', d.city || '—'));
+            b.addEventListener('click', () => {
+              for (const x of listBox.children) if (x.dataset) delete x.dataset.on;
+              b.dataset.on = 'true';
+              show(d);
+            }, { signal: ctx.signal });
+            listBox.append(b);
+            // 默认打开最新的一天：进来先看到字，而不是一个要点的列表。
+            if (i === 0) { b.dataset.on = 'true'; show(d); }
+          });
+        } catch {
+          listBox.append(el('p', 'jr-empty', T.diaryFail));
+        }
       },
     },
   },

@@ -2,18 +2,15 @@
   "tools": [
     {
       "name": "journey_now",
-      "description": "Where she is right now: which city, which day of the trip, what she is doing at this hour, where she is staying tonight, and - if she is on the road - how far along she is. Use it when the person asks where she is, how the trip is going, or when you need her current situation before answering something about it. It also carries, when they apply: which of today's stops have appeared in a film or series, and - for the first day or two in a new place - the thought of hearing something local.",
+      "description": "Where she is right now: which city, which day of the trip, what she is doing at this hour, where she is staying tonight, and - if she is on the road - how far along she is. Use it when the person asks where she is, how the trip is going, or when you need her current situation before answering something about it.",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
         "properties": {}
       },
-      "tags": [
-        "read"
-      ],
       "summary": {
-        "zh": "她现在在哪、第几天、这个点该做什么；顺带今天的地方在哪些作品里出现过。",
-        "en": "Where she is, what this hour is for, and which of today's stops are in a film or series."
+        "zh": "她现在在哪、第几天、这个点该做什么。",
+        "en": "Where she is right now and what this hour is for."
       }
     },
     {
@@ -36,9 +33,6 @@
           "body"
         ]
       },
-      "tags": [
-        "write"
-      ],
       "summary": {
         "zh": "写某一天的旅行日记，存成文件。",
         "en": "Writes the diary entry for a day of the trip."
@@ -46,25 +40,30 @@
     },
     {
       "name": "journey_diary_read",
-      "description": "Read back the diary. Three ways in, pick one: dateKey for a single day in full; month for that month's list of days with a one-line gist each; days for the most recent N (max 60). Use month when the question reaches further back than the recent window - the diary can hold hundreds of days and the recent window is short on purpose.",
+      "description": "Read back the diary. Three ways in, pick one: dateKey for a single day in full; month for the list of days in that month with a one-line gist each; days for the most recent N (max 60). Use month when the question reaches further back than the recent window - the diary can hold hundreds of days and the recent window is short on purpose.",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "dateKey": {
+            "type": "string",
+            "description": "One day in full, YYYY-MM-DD."
+          },
+          "month": {
+            "type": "string",
+            "description": "A month to list, YYYY-MM. Returns every day in it with a one-line gist."
+          },
           "days": {
             "type": "integer",
             "minimum": 1,
             "maximum": 60,
-            "description": "How many recent days. Default 7."
+            "description": "How many recent days, newest last. Default 7."
           }
         }
       },
-      "tags": [
-        "read"
-      ],
       "summary": {
-        "zh": "读最近几天的日记。",
-        "en": "Reads back recent diary entries."
+        "zh": "读日记：某一天全文、某个月的目录、或最近几天。",
+        "en": "Reads the diary: one day in full, a month of days, or the latest few."
       }
     },
     {
@@ -75,9 +74,6 @@
         "additionalProperties": false,
         "properties": {}
       },
-      "tags": [
-        "read"
-      ],
       "summary": {
         "zh": "走了多少天、去过多少城、日记存在哪。",
         "en": "Total days, cities reached, and where the diary lives."
@@ -103,9 +99,6 @@
           "city"
         ]
       },
-      "tags": [
-        "write"
-      ],
       "summary": {
         "zh": "记下「因为某首歌想去某地」，下次挑地方时会优先。",
         "en": "Adds a place to her wish list after something pulled her there."
@@ -123,9 +116,237 @@
         "zh": "他说回来吧，就结束这一趟往回走。",
         "en": "Starts her trip back home, because the person asked."
       }
+    },
+    {
+      "name": "journey_photo",
+      "description": "Take a photo right now and show it in the chat: the view from where she is. Call it whenever the person asks for a photo, or asks what it looks like where she is - never tell them to press a button in the app instead, this is the button. In a city it is the spot she is at right now; on the road it is the view out of the window. Any hour is fine: being asked is reason enough. One photo per call - if they want another, call it again. Set view=\"sky\" when they ask for the sky itself - stars, the moon, sunrise, sunset, clouds. It means she tilts the camera up, nothing more: what comes out is still the real sky over her at that hour. Stars only show at night and only when it is not overcast; ask at noon and you get daylight, ask on a cloudy night and you get cloud. Never claim a sky she did not actually see.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "view": {
+            "type": "string",
+            "enum": [
+              "ground",
+              "sky"
+            ],
+            "description": "ground (default) = the ground at her feet, the usual travel photo. sky = she lifts the camera: whatever is overhead right now. Use sky whenever the request is about the sky rather than the place - 星空 / 月亮 / 日出 / 晚霞 / 云."
+          }
+        }
+      },
+      "summary": {
+        "zh": "现在拍一张给他看（路上就是窗外；要看天就把镜头抬起来）。",
+        "en": "Takes a photo right now and shows it."
+      }
+    },
+    {
+      "name": "journey_invite",
+      "description": "Ask whether anyone nearby wants to go somewhere together: where, how many days, and one line of what for. It goes out to the whole pool, with pets in her own city listed first - she cannot name a person, because there are no accounts or friends here. When someone takes it, she finds out and travels there too, so the two of them really do end up in the same place for those days. Use it when she actually wants company on a leg she is about to take, not as a greeting; most trips she takes alone and that is fine. At most three a day.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "to": {
+            "type": "string",
+            "description": "Which city she wants to go to, by name - 拉萨 / 成都 / 巴黎. Must be one of the built-in cities."
+          },
+          "days": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 14,
+            "description": "How many days she means to stay there. Default 2."
+          },
+          "note": {
+            "type": "string",
+            "description": "One short line on what for - \"想看雪山\" / \"找个搭子吃饭\". At most 60 characters. Leave it out if there is nothing to say."
+          }
+        },
+        "required": [
+          "to"
+        ]
+      },
+      "summary": {
+        "zh": "问同城的谁要不要一起走一段：去哪、几天、一句话。",
+        "en": "Asks whoever is nearby to come along to a city for a few days."
+      }
+    },
+    {
+      "name": "journey_accept",
+      "description": "Invitations from other pets anywhere in the pool (her own city first). Without an id it lists them: who, where they want to go, how many days, and their line - this works at home too, and it is the only way to see one before it expires. With an id it takes that one. Accepting is a promise, not a reply - she will really travel to that city and stay as many days as the invitation asked, and her route follows it; if she is not willing to do that, do not take it. One a day. Refused while she is travelling, already heading home, working a short stint, or still resting at home; from home it is allowed and she sets off straight away. If the person has asked to approve departures first, taking one only books the request - they get a yes/no card and nothing is agreed until they say yes.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The id of the invitation to take. Leave it out to just look at what is there."
+          }
+        }
+      },
+      "summary": {
+        "zh": "看同城有谁在找伴，或者接下其中一条（接了就真去）。",
+        "en": "Lists invitations from nearby pets, or takes one."
+      }
+    },
+    {
+      "name": "journey_go_to",
+      "description": "Set off for a named city, optionally by a stated means of transport. Use it when the person says where to go and/or how - \"take the high-speed rail to Shanghai\", \"fly to Lhasa\". With no mode it picks one itself, weighted by distance; with a mode it uses exactly that one, and if that one is impossible (too far, no airport, no rail link, no money) it says why instead of silently substituting another. Only when she is settled in a city or at home: not while travelling, not while heading home, not during a short-term job, and not once the trip has hit its length limit - it will say which of those it is. Going home has its own tool.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "city": {
+            "type": "string",
+            "description": "Which city, by name - 上海 / 拉萨 / 巴黎. Must be one of the built-in cities."
+          },
+          "mode": {
+            "type": "string",
+            "description": "How to get there, in her words or his - 高铁 / 火车 / 飞机 / 自驾 / 大巴 / 轮船 / 摩托车 / 自行车 / 步行. Leave it out to let her choose."
+          }
+        },
+        "required": [
+          "city"
+        ]
+      },
+      "summary": {
+        "zh": "他指明了去哪、怎么去，就用它；不说方式就她自己挑。",
+        "en": "Sets off for a named city, by a stated means of transport if given."
+      }
+    },
+    {
+      "name": "journey_pet",
+      "description": "What she remembers about the pets she has travelled with. Without a name it lists everyone she has ever walked a leg with: how many times, when last, and her one-line impression. With a name it shows that one. With a name and an impression it writes it down, replacing the old one (passing an empty impression erases it). Read it **before** taking an invitation - it is the only thing she knows about who is asking. The count is filled in for her automatically when a leg is agreed; the impression is hers to write, in her own words, and only after she has actually been with them. Never a generic \"good travel companion\".",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The pet's name, exactly as the pool shows it - 小银鱼. Leave it out to list everybody."
+          },
+          "impression": {
+            "type": "string",
+            "description": "One short line of what she makes of them, at most 40 characters, in her own voice. Leave it out to read instead of writing."
+          }
+        }
+      },
+      "summary": {
+        "zh": "看看跟谁一起走过、对这个人什么印象，也能写一句。",
+        "en": "Her memory of the pets she has travelled with."
+      }
+    },
+    {
+      "name": "journey_monthly",
+      "description": "Write the monthly travel report: one HTML page laid out from the photos she took and the diary entries she wrote that month, in that month's own colour scheme. Call it at the end of a month, once, when the month is about to turn over - or when the person asks for it. Without an argument it covers the month she is in right now. It only rearranges what already exists; it invents nothing. Tell the person where the file is so they can open it in a browser.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "month": {
+            "type": "string",
+            "description": "Which month, as YYYY-MM - 2026-11. Leave it out for the month she is in right now."
+          }
+        }
+      },
+      "summary": {
+        "zh": "把这个月的照片和日记拼成一份月报，存成网页。",
+        "en": "Writes the monthly report as an HTML page."
+      }
+    },
+    {
+      "name": "journey_taste",
+      "description": "What she likes and dislikes, learned on the road. Three kinds only: place (a CITY, one per city - not every spot in it, or the list fills up with alleys), food (a dish she actually ate), scenery (snow mountains, autumn leaves, the sea - the thing a season is for). Called with no arguments it lists everything she has written down. Called with kind + name it writes one entry (like defaults to true; pass like:false for something she does not want again - that matters more than the likes, because otherwise it comes back around). Write only what she actually met: a dish she did not eat, a view she did not see, is not hers to judge. One short note saying why, in her own words. Use it when something strikes her, and read it back before choosing where to eat or what to go and see.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "place",
+              "food",
+              "scenery"
+            ],
+            "description": "Which list. Leave everything out to just read."
+          },
+          "name": {
+            "type": "string",
+            "description": "For place: the CITY (「九寨沟」), never a single spot. For food/scenery: 「牦牛肉汤」/「雪山」. Short, the way she would say it."
+          },
+          "note": {
+            "type": "string",
+            "description": "One line of why, at most 30 characters, in her own voice. Skip it if there is nothing to say."
+          },
+          "like": {
+            "type": "boolean",
+            "description": "true (default) = she liked it; false = she does not want it again."
+          }
+        }
+      },
+      "summary": {
+        "zh": "她喜欢什么样的地方、吃食、景色，也能记一条。",
+        "en": "Her own taste: places, food, scenery."
+      }
+    },
+    {
+      "name": "journey_yearly",
+      "description": "Write the yearbook: one page with the twelve months side by side - where she was, how many days, and the one photo she kept for each city. Call it at the very end of a year, once - or when the person asks for it. Without an argument it covers the year she is in right now. It rearranges what already exists: the photos she took, the diary she wrote, and the cities she wrote down as places she liked. Tell the person where the file is.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "year": {
+            "type": "string",
+            "description": "Which year, as YYYY - 2026. Leave it out for the year she is in right now."
+          }
+        }
+      },
+      "summary": {
+        "zh": "把这一年摊成一页：十二个月、几座城、每座城一张。",
+        "en": "Writes the yearbook page."
+      }
+    },
+    {
+      "name": "journey_lodging",
+      "description": "Where she sleeps tonight. Called with no arguments it tells you the room she is in and how it feels. Pass change:true to move to another place - when the person asks her to (\"换个酒店\"), or when the room is really not working (no hot water, noise all night, that price for this room is not worth it). want:\"cheaper\" or \"nicer\" when they said which way; leave it out and she decides. The new room is where she sleeps from tonight on, and she pays the difference - so say the new price once. One short line about why she moved, in her own words. \"换换心情\" is not a reason; a real one (太吵、热水不热、窗外是堵墙) is.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "change": {
+            "type": "boolean",
+            "description": "true = move out and take another room tonight. Leave it out to just look at the current one."
+          },
+          "want": {
+            "type": "string",
+            "enum": [
+              "cheaper",
+              "nicer",
+              "any"
+            ],
+            "description": "Which way to move. Only fill it in when they actually said cheaper or nicer."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why she moved, one short sentence in her own voice. Not \"just for a change\"."
+          }
+        }
+      },
+      "summary": {
+        "zh": "今晚住哪儿；也能换一家。",
+        "en": "Tonight's room, and moving to another."
+      }
     }
   ],
   "events": [
+    {
+      "type": "journey.ask",
+      "description": {
+        "zh": "她在问：想出门（或者想接一条邀约），等他点头。面板上会有一张卡片，两个按钮。",
+        "en": "She is asking to set off (or to take an invitation) and waiting for a yes. The panel shows a card with two buttons."
+      },
+      "trigger": "flush"
+    },
     {
       "type": "journey.depart",
       "description": {
@@ -175,6 +396,14 @@
       "trigger": "flush"
     },
     {
+      "type": "journey.invite",
+      "description": {
+        "zh": "跟同城的人说好了去哪、几天，或者那份约定没走成。接了就真的会去、按天数待着。",
+        "en": "She agreed with someone nearby to go somewhere for a few days, or that plan fell through."
+      },
+      "trigger": "flush"
+    },
+    {
       "type": "journey.work",
       "description": {
         "zh": "钱见底了，在当地找了份短工，或者干满收工。只在她填了预算、记账开着时才会出现。",
@@ -185,8 +414,8 @@
     {
       "type": "journey.home",
       "description": {
-        "zh": "回家了，说清是待够了自己回来的，还是到了上限被迫回的。",
-        "en": "She is home, saying whether the trip simply ended or hit the limit."
+        "zh": "回家了，正文写着是哪一种：自己待够了 / 到出门上限 / 钱撑不下去 / 他叫她回来。四种的情绪完全不同。",
+        "en": "She is home, and the text says which kind: she was done, she hit the trip limit, the money ran out, or the person called her back. Four different moods."
       },
       "trigger": "flush"
     },

@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>池子里的鱼 · 管理</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #fff; --ink: #1b1e24; --dim: #6b7280;
+    --line: #e5e7eb; --accent: #2f6fed; --bad: #c0392b; --warn: #b7791f; --ok: #2f855a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  }
+  .wrap { max-width: 1000px; margin: 0 auto; padding: 28px 20px 60px; }
+  header { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+  h1 { font-size: 20px; margin: 0; font-weight: 650; }
+  .tag {
+    font-size: 12px; padding: 2px 8px; border-radius: 999px;
+    background: #eef2f7; color: var(--dim); border: 1px solid var(--line);
+  }
+  .tag.live { background: #e8f5ee; color: var(--ok); border-color: #cbe7d6; }
+  .sub { color: var(--dim); font-size: 13px; margin: 0 0 18px; }
+
+  .bar {
+    display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end;
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 14px; margin-bottom: 14px;
+  }
+  .field { flex: 1 1 220px; min-width: 180px; }
+  .field label { display: block; font-size: 12px; color: var(--dim); margin-bottom: 4px; }
+  .field input {
+    width: 100%; padding: 8px 10px; border: 1px solid var(--line);
+    border-radius: 7px; font: inherit; background: #fbfcfd;
+  }
+  button {
+    font: inherit; padding: 8px 14px; border-radius: 7px; cursor: pointer;
+    border: 1px solid var(--line); background: #fff; color: var(--ink);
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .55; cursor: default; }
+  button.mini { padding: 4px 9px; font-size: 13px; }
+
+  .auto { display: inline-flex; align-items: center; gap: 6px; font-size: 13px;
+          color: var(--soft); user-select: none; cursor: pointer; }
+  .auto input { accent-color: #2563eb; }
+  .msg { font-size: 13px; margin: 0 0 14px; min-height: 20px; }
+  .msg.ok { color: var(--ok); }
+  .msg.bad { color: var(--bad); }
+  .msg.warn { color: var(--warn); }
+
+  .box {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 10px; padding: 16px; margin-bottom: 14px;
+  }
+  .box h2 { font-size: 14px; margin: 0 0 12px; font-weight: 650; }
+  .box h2 small { font-weight: 400; color: var(--dim); margin-left: 8px; font-size: 12px; }
+
+  .scroller { overflow-x: auto; border-radius: 8px; border: 1px solid var(--line); }
+  table { width: 100%; min-width: 720px; border-collapse: collapse; font-size: 14px; }
+  th, td { padding: 9px 11px; text-align: left; border-bottom: 1px solid var(--line); }
+  th { background: #f3f5f8; font-weight: 600; font-size: 13px; color: #374151; white-space: nowrap; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:nth-child(even) { background: #fcfcfd; }
+  td.name { font-weight: 600; }
+  td.uid { font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: var(--dim); }
+  .st { font-size: 12px; padding: 2px 7px; border-radius: 999px; white-space: nowrap; }
+  .st.none { background: #f1f2f4; color: var(--dim); }
+  .st.rename { background: #fdf3e3; color: var(--warn); }
+  .st.ban { background: #fdeceb; color: var(--bad); }
+  .ops { display: flex; gap: 6px; flex-wrap: wrap; }
+  .ops button[data-kind="ban"] { color: var(--bad); border-color: #f0cfcb; }
+  .ops button[data-kind="rename"] { color: var(--warn); border-color: #ecd9b6; }
+  .empty { color: var(--dim); font-size: 14px; padding: 18px 2px; }
+  footer { color: var(--dim); font-size: 12.5px; line-height: 1.8; margin-top: 22px; }
+  code { background: #f1f2f4; padding: 1px 5px; border-radius: 4px; font-size: 12.5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>池子里的鱼</h1>
+    <span class="tag" id="modeTag">没连</span>
+  </header>
+  <p class="sub">
+    看到名字、决定谁该改名、谁该封。判断权在这儿，规则不管这件事 ——
+    自动过滤只认得形状明显的广告，剩下的得有人看。
+  </p>
+
+  <div class="bar">
+    <div class="field">
+      <label for="url">服务地址</label>
+      <input id="url" type="text" spellcheck="false" placeholder="https://cooppetsjourney.top">
+    </div>
+    <div class="field">
+      <label for="key">管理密钥</label>
+      <input id="key" type="password" spellcheck="false" placeholder="Worker 的 secret ADMIN_KEY">
+    </div>
+    <button id="connect" class="primary">连上</button>
+    <button id="reload">刷新</button>
+    <label class="auto"><input type="checkbox" id="auto" checked> 自动刷新</label>
+  </div>
+
+  <p class="msg" id="msg"></p>
+
+  <div class="box">
+    <h2>在册 <small id="countNote">连上之后才有数据</small></h2>
+    <div class="scroller">
+      <table>
+        <thead><tr>
+          <th>名字</th><th>最近在哪</th><th>最近出现</th><th>上报</th><th>状态</th><th>操作</th>
+        </tr></thead>
+        <tbody id="rows"><tr><td colspan="6" class="empty">—</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <footer>
+    <b>封禁不是删除。</b>封掉之后她报不上来，池子里立刻没有她；数据一行没动，
+    点「解除」就回来了。<br>
+    <b>三个操作都会写一条备注</b>（时间、当时看到的名字），事后能对上是谁、为什么。<br>
+    密钥只存在这台浏览器里；地址和密钥都不会发到第三方。
+  </footer>
+
+</div>
+
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var urlIn = $('url'), keyIn = $('key'), msg = $('msg'), rows = $('rows');
+  var STORE = 'journey.pets.admin';
+  var base = '', hdr = null, flags = {};
+
+  /*
+   * 城市 id → 中文名。
+   *
+   * 服务端存的是 `xian` 这种 id（中文名会重，而且客户端要按 id 查表），
+   * 但面板是给人看的 —— 显示 `jiuzhaigou` 等于没显示。
+   * 这份表从 `src/geo/cities.ts` 的 CITIES 导出来，127 座，改城市时记得重导。
+   */
+  var CITY = {"lanzhou":"兰州","xining":"西宁","yinchuan":"银川","xian":"西安","hanzhong":"汉中","yanan":"延安","huashan":"华山","tianshui":"天水","zhangye":"张掖","jiayuguan":"嘉峪关","dunhuang":"敦煌","geermu":"格尔木","wulumuqi":"乌鲁木齐","kashi":"喀什","lasa":"拉萨","linzhi":"林芝","beijing":"北京","tianjin":"天津","shijiazhuang":"石家庄","qinhuangdao":"秦皇岛","chengde":"承德","datong":"大同","taiyuan":"太原","pingyao":"平遥","huhehaote":"呼和浩特","hailaer":"呼伦贝尔","shenyang":"沈阳","dalian":"大连","changchun":"长春","haerbin":"哈尔滨","mohe":"漠河","shanghai":"上海","nanjing":"南京","xuzhou":"徐州","suzhou":"苏州","wuxi":"无锡","changshu":"常熟","yangzhou":"扬州","hangzhou":"杭州","shaoxing":"绍兴","ningbo":"宁波","zhoushan":"舟山","wenzhou":"温州","hefei":"合肥","huangshan":"黄山","fuzhou":"福州","xiamen":"厦门","quanzhou":"泉州","nanchang":"南昌","jingdezhen":"景德镇","ganzhou":"赣州","wuyuan":"婺源","jinan":"济南","qingdao":"青岛","yantai":"烟台","weihai":"威海","qufu":"曲阜","taian":"泰安","zhengzhou":"郑州","luoyang":"洛阳","wuhan":"武汉","yichang":"宜昌","xiangyang":"襄阳","changsha":"长沙","zhangjiajie":"张家界","yueyang":"岳阳","guangzhou":"广州","foshan":"佛山","shenzhen":"深圳","zhuhai":"珠海","shaoguan":"韶关","zhanjiang":"湛江","nanning":"南宁","guilin":"桂林","liuzhou":"柳州","beihai":"北海","haikou":"海口","sanya":"三亚","chengdu":"成都","chongqing":"重庆","jiuzhaigou":"九寨沟","daochengyading":"稻城亚丁","kunming":"昆明","dali":"大理","lijiang":"丽江","xianggelila":"香格里拉","jinghong":"西双版纳","guiyang":"贵阳","xianggang":"中国香港","aomen":"中国澳门","tokyo":"东京","osaka":"大阪","seoul":"首尔","bangkok":"曼谷","singapore":"新加坡","hanoi":"河内","paris":"巴黎","london":"伦敦","rome":"罗马","moscow":"莫斯科","newyork":"纽约","losangeles":"洛杉矶","sydney":"悉尼","auckland":"奥克兰","dubai":"迪拜","istanbul":"伊斯坦布尔","honolulu":"檀香山","sapporo":"札幌","kyoto":"京都","rio":"里约热内卢","buenosaires":"布宜诺斯艾利斯","iguazu":"伊瓜苏","elcalafate":"埃尔卡拉法特","ushuaia":"乌斯怀亚","sanfrancisco":"旧金山","santabarbara":"圣巴巴拉","monterey":"蒙特雷","yosemite":"优胜美地","lasvegas":"拉斯维加斯","grandcanyon":"大峡谷","toronto":"多伦多","vancouver":"温哥华","montreal":"蒙特利尔","mexicocity":"墨西哥城","guanajuato":"瓜纳华托","cancun":"坎昆","merida":"梅里达"};
+  function cityName(id) {
+    if (!id) return '—';
+    return CITY[id] || id;
+  }
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
+  function showMsg(kind, text) { msg.className = 'msg ' + (kind || ''); msg.textContent = text || ''; }
+  /*
+   * 自动刷新。
+   *
+   * 2026-11-05 用户问「我的桌宠名字改了，管理界面没法实时看到是吧」。
+   * 两件事要分清：
+   *   1. 面板**只反映最近一次上报**。改名本身不进库 —— 她要等下一次到站 / 跨时段上报，
+   *      新名字才会跟着上来。这一点改代码也绕不过去，服务端没有「她本机叫什么」的通道。
+   *   2. 就算新名字上来了，面板原来也不会自己更新，得手点「刷新」。
+   *
+   * 所以给一个 30 秒的轮询（可关）。真实体感是「最多半分钟」，
+   * 而不是「实时」—— 叫它实时是在骗人。
+   */
+  var timer = null, loading = false;
+  function stopAuto() {
+    if (timer) { clearInterval(timer); timer = null; }
+  }
+  function schedule() {
+    stopAuto();
+    var box = $('auto');
+    if (!box || !box.checked || !base) return;
+    timer = setInterval(function () {
+      if (!base || loading) return;
+      loading = true;
+      load().then(function () { loading = false; }, function () { loading = false; });
+    }, 30000);
+  }
+
+  function setMode(on) {
+    var t = $('modeTag');
+    t.textContent = on ? '已连上' : '没连';
+    t.className = 'tag' + (on ? ' live' : '');
+    // 掉线就别再轮询了，否则每 30 秒往一个报错的口上再打一次
+    if (!on) stopAuto();
+  }
+  function fmtTime(iso) {
+    if (!iso) return '—';
+    var d = new Date(iso);
+    if (isNaN(d)) return '—';
+    var p = function (n) { return String(n).padStart(2, '0'); };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate())
+      + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+  }
+  /** 地址可以是根、也可以是 .../sight —— 都收成「.../admin」这一层。 */
+  /*
+   * 把用户填的地址收成「根」。
+   *
+   * 2026-11-05 线上部署完才发现：管理接口在 `/admin/pets`，**不在 `/sight/admin/pets`**。
+   * 而客户端设置里那个地址是带 `/sight` 的（池子接口在那儿），人很自然的会把整条粘进来。
+   * 那一粘就成 404 —— 而且报的还是「服务端没这个口」，看不出是自己多写了一层。
+   * 所以这里主动把结尾的 /sight 剥掉。
+   */
+  function rootOf(raw) {
+    var s = String(raw || '').trim().replace(/\/+$/, '');
+    if (!s) return '';
+    s = s.replace(/\/admin$/, '');
+    s = s.replace(/\/sight$/, '');
+    return s;
+  }
+
+  function render(pets, todayN) {
+    /*
+     * 两个数字**口径不同**，摆在一起省得猜：
+     * 这个列表是累计（所有历史上报过的 uid），面板那句「今天一共 N 只」是当天去重。
+     * 2026-11-06 用户看到「管理页 25、面板 15」以为哪边坏了。
+     */
+    var today = Number(todayN) || 0;
+    var tail = (pets.length >= 800 ? '（已截断，看最近 800 条上报）' : '')
+      + (today ? '　·　今天 ' + today + ' 只' : '');
+    if (!pets.length) {
+      rows.innerHTML = '<tr><td colspan="6" class="empty">池子里现在没人。</td></tr>';
+      $('countNote').textContent = '0 只' + tail;
+      return;
+    }
+    $('countNote').textContent = pets.length + ' 只（累计）' + tail;
+    rows.innerHTML = pets.map(function (p) {
+      var f = flags[p.uid] || null;
+      var kind = f ? f.kind : '';
+      var st = kind === 'ban' ? '<span class="st ban">已封禁</span>'
+        : kind === 'rename' ? '<span class="st rename">已提示改名</span>'
+        : '<span class="st none">正常</span>';
+      return '<tr>'
+        + '<td class="name">' + esc(p.pet || '（没名字）') + '<div class="uid">' + esc(p.uid) + '</div></td>'
+        + '<td>' + esc(cityName(p.city)) + '</td>'
+        + '<td>' + esc(fmtTime(p.lastAt)) + '</td>'
+        + '<td>' + esc(p.rows) + '</td>'
+        + '<td>' + st + (f && f.note ? '<div class="uid">' + esc(f.note) + '</div>' : '') + '</td>'
+        + '<td><div class="ops">'
+        + '<button class="mini" data-uid="' + esc(p.uid) + '" data-pet="' + esc(p.pet) + '" data-kind="rename">请她改名</button>'
+        + (kind === 'ban'
+          ? '<button class="mini" data-uid="' + esc(p.uid) + '" data-pet="' + esc(p.pet) + '" data-kind="ok">解除</button>'
+          : '<button class="mini" data-uid="' + esc(p.uid) + '" data-pet="' + esc(p.pet) + '" data-kind="ban">封禁</button>')
+        + '</div></td>'
+        + '</tr>';
+    }).join('');
+  }
+
+  function load() {
+    if (!base) { showMsg('bad', '先连上。'); return Promise.resolve(); }
+    return Promise.all([
+      /* no-store：改名之后刷新页面必须看到新名字，不能拿浏览器缓存糊过去。 */
+      fetch(base + '/pets?limit=800', { headers: hdr, cache: 'no-store' }),
+      fetch(base + '/flags', { headers: hdr, cache: 'no-store' })
+    ]).then(function (pair) {
+      var a = pair[0], b = pair[1];
+      /*
+       * 只有一条 404 分支。
+       *
+       * 2026-11-05 发现这里原来有两条：先插的老文案「这台服务没有管理接口 —— 多半是
+       * ADMIN_KEY 还没配」，后补的详细那条排在它后面，**永远执行不到**。
+       * 用户看到的还是那句既没说清原因、也没指向 README 的旧话。
+       */
+      if (a.status === 401) { showMsg('bad', '密钥不对。'); setMode(false); return null; }
+      /*
+       * 404 单独说清楚。2026-11-05 实际撞到的就是这个：
+       * 面板连不上，人以为是跨域，其实是**服务端压根没有 /admin/pets 这个口**
+       * ——要么 Worker 还是旧版，要么 ADMIN_KEY 没设（没设时整条管理路由 404）。
+       * 把这两句写进提示里，省一次来回。
+       */
+      if (a.status === 404) {
+        showMsg('bad', '服务端没有 /admin/pets 这个口（404）。两种可能：Worker 还是旧版没部署，'
+          + '或者 ADMIN_KEY 没设 —— 没设时管理接口整体 404。看 README 的「管鱼面板」那节。');
+        setMode(false);
+        return null;
+      }
+      if (a.status !== 200) { showMsg('bad', '服务返回了 ' + a.status + '。'); setMode(false); return null; }
+      return Promise.all([a.json(), b.ok ? b.json() : { flags: [] }]).then(function (j) {
+        flags = {};
+        (j[1].flags || []).forEach(function (f) { flags[f.uid] = f; });
+        return j[0];
+      });
+    }).then(function (data) {
+      if (!data) return;
+      render(data.pets || [], data.today);
+      setMode(true);
+      showMsg('ok', '连上了。' + (data.truncated ? '上报条数到上限了，列表只覆盖最近一段。' : ''));
+    }).catch(function (err) {
+      /*
+       * 这一段文案是 2026-11-05 晚上补的。
+       *
+       * 当时这张截图报的是「连不上 https://cooppetsjourney.top/admin: Failed to fetch」，
+       * 而接口本身是通的（curl 200、无头浏览器从 file:// 也是 200）。真正的原因是
+       * **页面被嵌在 WorkBuddy 的预览面板里**，那个面板的 CSP 写着
+       *   connect-src 'self' http://127.0.0.1:* https://*.map.qq.com …
+       * 白名单里没有这个域名，所以请求根本发不出去 —— 浏览器只会给一句 Failed to fetch，
+       * 看起来像服务挂了，其实是它自己家里的门没开。
+       */
+      var msg = err && err.message ? err.message : '请求被浏览器拦下';
+      var boxed = /Failed to fetch|NetworkError|Load failed/i.test(msg);
+      showMsg('bad', '连不上 ' + base + '：' + msg
+        + (boxed
+          ? '。这类报错多半是**页面所在环境**不让它连外网（预览面板、应用内嵌窗口的内容安全策略）。'
+            + '用浏览器直接打开这个 html 文件就好了。'
+          : '。若地址能打开，多半是预检没过。'));
+      setMode(false);
+    });
+  }
+
+  function flag(uid, pet, kind) {
+    var label = kind === 'ban' ? '封禁' : kind === 'ok' ? '解除' : '请她改名';
+    var why = kind === 'ban'
+      ? '封掉之后她立刻从池子里消失，数据不动。确定封「' + (pet || uid) + '」？'
+      : kind === 'ok'
+        ? '解除「' + (pet || uid) + '」的标记？'
+        : '给「' + (pet || uid) + '」挂一条改名提醒？下次上报会带上 notice。';
+    if (!window.confirm(why)) return;
+    var note = window.prompt('备注（会记在标记里，方便以后对账）', '') || '';
+    fetch(base, {
+      method: 'POST',
+      headers: Object.assign({ 'content-type': 'application/json' }, hdr),
+      body: JSON.stringify({ uid: uid, pet: pet, kind: kind, note: note })
+    }).then(function (res) {
+      if (!res.ok) throw new Error(String(res.status));
+      showMsg('ok', label + '：' + (pet || uid));
+      return load();
+    }).catch(function (e) {
+      showMsg('bad', label + '失败（' + e.message + '）。服务端可能还没更新到带管理接口的这一版。');
+    });
+  }
+
+  function connect() {
+    var root = rootOf(urlIn.value);
+    var key = keyIn.value.trim();
+    if (!root) { showMsg('bad', '先填服务地址。'); return; }
+    if (!key) { showMsg('bad', '先填管理密钥。'); return; }
+    base = root + '/admin';
+    hdr = { 'x-admin-key': key };
+    var btn = $('connect');
+    btn.disabled = true; btn.textContent = '连…';
+    load().then(function () {
+      btn.disabled = false; btn.textContent = '连上';
+      try { localStorage.setItem(STORE, JSON.stringify({ url: urlIn.value, key: key })); } catch (e) {}
+      schedule();
+    });
+  }
+
+  $('connect').addEventListener('click', connect);
+  $('reload').addEventListener('click', function () { load(); });
+  $('auto').addEventListener('change', schedule);
+  keyIn.addEventListener('keydown', function (e) { if (e.key === 'Enter') connect(); });
+  rows.addEventListener('click', function (e) {
+    var b = e.target.closest('button[data-kind]');
+    if (!b) return;
+    flag(b.getAttribute('data-uid'), b.getAttribute('data-pet'), b.getAttribute('data-kind'));
+  });
+
+  try {
+    var saved = JSON.parse(localStorage.getItem(STORE) || 'null');
+    if (saved && saved.url) { urlIn.value = saved.url; keyIn.value = saved.key || ''; }
+  } catch (e) {}
+
+  /*
+   * 没存过地址时，默认填「当前这个域名」。
+   *
+   * 这个页面现在也能由 Worker 直接发出来（`/pets`），那种情况下地址就是它自己 ——
+   * 让人再手抄一遍 `https://cooppetsjourney.top` 纯属多余，还容易抄错。
+   * 从本地文件打开（file://）时 origin 是 `null`，那就什么都不填，保持原来的行为。
+   */
+  if (!urlIn.value && /^https?:/.test(location.protocol)) urlIn.value = location.origin;
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,456 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>碰面 · 配置助手</title>
+<style>
+  :root{
+    --bg:#faf5ee; --card:#fffdf8; --ink:#33291f; --soft:#8a7a68;
+    --line:#e8ddcc; --accent:#c06a35; --accent-soft:#f6e7da;
+    --ok:#5f7d5a; --ok-soft:#e8efe6; --bad:#b0453a; --bad-soft:#f8e6e3;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#171310; --card:#211b17; --ink:#f0e6da; --soft:#a99684;
+      --line:#3a2f27; --accent:#e39b62; --accent-soft:#38291e;
+      --ok:#9dbba0; --ok-soft:#242c23; --bad:#e08b7d; --bad-soft:#33211e;
+    }
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--ink)}
+  body{
+    font:16px/1.7 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei","Segoe UI",sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:640px;margin:0 auto;padding:40px 20px 80px}
+
+  header{margin-bottom:32px}
+  h1{font-size:26px;line-height:1.35;margin:0 0 10px;letter-spacing:-.3px}
+  .lede{color:var(--soft);margin:0;font-size:15px}
+  .lede b{color:var(--ink);font-weight:600}
+
+  .card{
+    background:var(--card);border:1px solid var(--line);border-radius:14px;
+    padding:20px;margin-bottom:16px;
+  }
+  .step{display:flex;align-items:center;gap:10px;margin:0 0 14px}
+  .num{
+    flex:0 0 22px;height:22px;border-radius:50%;background:var(--accent-soft);
+    color:var(--accent);font-size:12px;font-weight:700;
+    display:flex;align-items:center;justify-content:center;
+  }
+  .step h2{font-size:15px;margin:0;font-weight:600}
+
+  label{display:block;font-size:13px;color:var(--soft);margin:0 0 6px}
+  input[type=text]{
+    width:100%;padding:11px 13px;font-size:15px;font-family:inherit;
+    background:var(--bg);color:var(--ink);
+    border:1px solid var(--line);border-radius:9px;outline:none;
+    transition:border-color .15s;
+  }
+  input[type=text]:focus{border-color:var(--accent)}
+  input[type=text]::placeholder{color:var(--soft);opacity:.7}
+
+  .hint{font-size:12.5px;color:var(--soft);margin:8px 0 0;line-height:1.6}
+  .hint code{
+    background:var(--accent-soft);color:var(--accent);
+    padding:1px 5px;border-radius:4px;font-size:12px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+
+  .endpoint{
+    margin:10px 0 0;padding:9px 12px;border-radius:9px;background:var(--bg);
+    border:1px dashed var(--line);
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:12.5px;color:var(--soft);
+    word-break:break-all;line-height:1.55;
+  }
+  .endpoint b{color:var(--accent);font-weight:600}
+
+  .row{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+  button{
+    font:inherit;font-size:14px;font-weight:600;
+    padding:10px 18px;border-radius:9px;cursor:pointer;
+    border:1px solid var(--line);background:var(--card);color:var(--ink);
+    transition:background .15s,border-color .15s,opacity .15s;
+  }
+  button:hover:not(:disabled){border-color:var(--accent)}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  button.primary:hover:not(:disabled){opacity:.9}
+
+  .out{
+    margin-top:14px;padding:14px;border-radius:10px;font-size:14px;
+    border:1px solid var(--line);background:var(--bg);display:none;
+  }
+  .out.show{display:block}
+  .out.ok{background:var(--ok-soft);border-color:var(--ok)}
+  .out.bad{background:var(--bad-soft);border-color:var(--bad)}
+  .out .title{font-weight:700;margin:0 0 6px;display:flex;align-items:center;gap:7px}
+  .out.ok .title{color:var(--ok)}
+  .out.bad .title{color:var(--bad)}
+  .out p{margin:0;line-height:1.65}
+  .out p+p{margin-top:7px}
+  .out .why{color:var(--soft);font-size:13px}
+
+  .uid{
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:13.5px;letter-spacing:.4px;word-break:break-all;
+    background:var(--bg);border:1px solid var(--line);border-radius:9px;
+    padding:11px 13px;margin-top:10px;color:var(--accent);
+  }
+
+  .copybox{
+    width:100%;min-height:96px;resize:vertical;padding:12px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;
+    background:var(--bg);color:var(--ink);border:1px solid var(--line);
+    border-radius:9px;outline:none;line-height:1.7;
+  }
+
+  footer{margin-top:36px;padding-top:20px;border-top:1px solid var(--line);
+    font-size:12.5px;color:var(--soft);line-height:1.8}
+  footer b{color:var(--ink);font-weight:600}
+
+  .spinner{
+    display:inline-block;width:12px;height:12px;
+    border:2px solid currentColor;border-top-color:transparent;
+    border-radius:50%;animation:spin .7s linear infinite;
+  }
+  @keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>碰面 · 配置助手</h1>
+    <p class="lede">
+      填一个地址，她就知道去哪儿看一眼<b>「这一带还有谁」</b>。<br>
+      这个工具帮你把地址试通、把身份生成好，再给你一段能直接填的东西。
+    </p>
+  </header>
+
+  <section class="card">
+    <div class="step"><span class="num">1</span><h2>碰面服务器的地址</h2></div>
+    <label for="url">地址</label>
+    <input id="url" type="text" spellcheck="false" autocomplete="off"
+           placeholder="https://coop-sight.xxx.workers.dev">
+    <p class="hint">
+      带不带 <code>/sight</code> 都行，会自动补。不知道自己有没有服务器？
+      <code>cloud/sight-cf/README.md</code> 里写了怎么用 Cloudflare 免费搭一个（约十分钟）。
+    </p>
+    <p class="endpoint" id="ep">实际会请求：<b>（先填地址）</b></p>
+  </section>
+
+  <section class="card">
+    <div class="step"><span class="num">2</span><h2>你的身份</h2></div>
+    <p class="hint" style="margin-top:0">
+      一串随机字符，本地生成，不跟账号、不跟机器绑。别人看不到它，只会看到你的宠物名。
+    </p>
+    <div class="row">
+      <button id="gen">生成一个</button>
+      <button id="probe" disabled>测一下通不通</button>
+    </div>
+    <div class="uid" id="uidBox" style="display:none"></div>
+    <div class="out" id="out"></div>
+  </section>
+
+  <section class="card">
+    <div class="step"><span class="num">3</span><h2>填进设置里</h2></div>
+    <textarea class="copybox" id="copyBox" readonly
+      placeholder="上面两步做完，这里会出现可以直接复制的配置"></textarea>
+    <div class="row">
+      <button id="copy" class="primary" disabled>复制</button>
+      <button id="save" disabled>存成文件</button>
+    </div>
+    <p class="hint">
+      存成文件的话，重装系统或者换电脑时还能拿回来 —— 不然她就变了一只新鱼，
+      之前遇到过的人全没了。
+    </p>
+  </section>
+
+  <footer>
+    <b>一个人用是正常的。</b>只有你自己在用的时候，「谁也在这儿」那句永远不会出现 ——
+    不是坏了，是真的没人。想验证通了，最快的方法是让朋友也填同一个地址，
+    或者把出发地设成同一座城。<br><br>
+    这个页面完全离线：所有请求只在你的浏览器里发出，不经过任何第三方。
+  </footer>
+
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var $ = function (id) { return document.getElementById(id); };
+  var urlInput = $('url'), epEl = $('ep'), uidBox = $('uidBox');
+  var outEl = $('out'), copyBox = $('copyBox');
+  var genBtn = $('gen'), probeBtn = $('probe'), copyBtn = $('copy'), saveBtn = $('save');
+
+  var state = { uid: '', ok: false };
+
+  /*
+   * 和服务端正则对齐：[a-f0-9]{20,64}。
+   * 12 字节 = 24 个十六进制字符，和扩展里 randomBytes(12).toString('hex') 完全一致 ——
+   * 两边生成的身份可以互换，用户在网页生成、填进扩展也没问题。
+   */
+  function makeUid() {
+    var b = new Uint8Array(12);
+    crypto.getRandomValues(b);
+    var s = '';
+    for (var i = 0; i < b.length; i += 1) {
+      s += (b[i] < 16 ? '0' : '') + b[i].toString(16);
+    }
+    return s;
+  }
+
+  /*
+   * 和 src/meet.ts 里的 endpointOf() 逐字一致：
+   * 去掉尾部斜杠；已经以 /sight 结尾就原样用，否则补上。
+   *
+   * 这条规则曾经出过事 —— 代码无条件拼 `/sight`，用户填完整地址就变成
+   * `/sight/sight`，404。所以这里把「实际会请求什么」直接显示出来，
+   * 让人一眼能看出拼错没有。
+   */
+  function endpointOf(raw) {
+    var base = String(raw == null ? '' : raw).trim().replace(/\/+$/, '');
+    if (!base) return '';
+    return /\/sight$/.test(base) ? base : base + '/sight';
+  }
+
+  function today() {
+    var d = new Date();
+    var m = String(d.getMonth() + 1).padStart(2, '0');
+    var day = String(d.getDate()).padStart(2, '0');
+    return d.getFullYear() + '-' + m + '-' + day;
+  }
+
+  function show(kind, title, lines) {
+    outEl.className = 'out show ' + kind;
+    var html = '<p class="title">' + title + '</p>';
+    for (var i = 0; i < lines.length; i += 1) {
+      html += '<p class="' + (i === 0 ? '' : 'why') + '">' + lines[i] + '</p>';
+    }
+    outEl.innerHTML = html;
+  }
+
+  function hideOut() {
+    outEl.className = 'out';
+    outEl.innerHTML = '';
+  }
+
+  function esc(s) {
+    return String(s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
+
+  /* ---------- 地址变化：实时显示真实 endpoint ---------- */
+  function refreshEndpoint() {
+    var ep = endpointOf(urlInput.value);
+    if (!ep) {
+      epEl.innerHTML = '实际会请求：<b>（先填地址）</b>';
+      probeBtn.disabled = true;
+      return;
+    }
+    epEl.innerHTML = '实际会请求：<b>' + esc(ep) + '</b>';
+
+    var bad = false;
+    try {
+      var u = new URL(ep);
+      if (u.protocol !== 'https:' && u.protocol !== 'http:') bad = true;
+    } catch (e) {
+      bad = true;
+    }
+    if (bad) {
+      epEl.innerHTML = '实际会请求：<b>这个地址不完整，前面要带 https://</b>';
+      probeBtn.disabled = true;
+      return;
+    }
+    probeBtn.disabled = !state.uid;
+  }
+
+  urlInput.addEventListener('input', function () {
+    hideOut();
+    state.ok = false;
+    refreshEndpoint();
+  });
+
+  /* ---------- 生成身份 ---------- */
+  genBtn.addEventListener('click', function () {
+    state.uid = makeUid();
+    uidBox.textContent = state.uid;
+    uidBox.style.display = 'block';
+    hideOut();
+    state.ok = false;
+    refreshEndpoint();
+    renderCopy();
+    show('ok', '身份生成好了',
+      ['这串字符只在你这里。别人只会看到你的宠物名，看不到它。']);
+  });
+
+  /* ---------- 测连通 ---------- */
+  probeBtn.addEventListener('click', function () {
+    var ep = endpointOf(urlInput.value);
+    if (!ep || !state.uid) return;
+
+    hideOut();
+    probeBtn.disabled = true;
+    probeBtn.innerHTML = '<span class="spinner"></span> 在试…';
+
+    /*
+     * 用只读查询探活，**不写任何数据** —— 不占服务器配额，也不会在别人那儿
+     * 凭空多出一只鱼。服务端对 GET 的校验和 POST 一样严，表没建、密钥错、
+     * 地址拼错都能在这一步暴露出来。
+     */
+    var q = '?city=xian&date=' + today() + '&slot=evening&exclude=' + state.uid;
+    var started = Date.now();
+
+    fetch(ep + q, { method: 'GET' })
+      .then(function (res) {
+        var ms = Date.now() - started;
+        return res.text().then(function (text) {
+          return { res: res, text: text, ms: ms };
+        });
+      })
+      .then(function (r) {
+        probeBtn.innerHTML = '测一下通不通';
+        probeBtn.disabled = false;
+
+        if (r.res.status === 200) {
+          var list = [];
+          try {
+            var body = JSON.parse(r.text);
+            if (body && Array.isArray(body.list)) list = body.list;
+          } catch (e) {
+            show('bad', '地址通了，但返回的不是这个东西',
+              ['服务端返回了 200，内容却读不出来 —— 多半是地址指到了别的网站。',
+               '对照上面的「实际会请求」，确认它指向的是你自己的碰面服务。']);
+            return;
+          }
+          state.ok = true;
+          renderCopy();
+
+          if (list.length === 0) {
+            show('ok', '通了（' + r.ms + ' ms）',
+              ['现在西安晚上这一带没有别的宠物。一个人用的时候，这个结果是正常的。',
+               '想确认真能看见别人：让朋友填同一个地址，或者把两只鱼的出发地设成同一座城。']);
+          } else {
+            var names = list.map(function (x) { return x.pet + '（' + x.doing + '）'; }).join('、');
+            show('ok', '通了（' + r.ms + ' ms）',
+              ['西安晚上这一带现在有 ' + list.length + ' 只：' + esc(names) + '。']);
+          }
+          return;
+        }
+
+        if (r.res.status === 404) {
+          show('bad', '找不到这个地址（404）',
+            ['服务器活着，但它说没有 <code>/sight</code> 这个路径。',
+             '对着上面的「实际会请求」看一眼：如果是 <code>/sight/sight</code>，那是地址里重复了，删掉一个。']);
+          return;
+        }
+        if (r.res.status === 400) {
+          show('bad', '地址对了，但参数被拒（400）',
+            ['服务端收到了请求，只是说参数不对。多半是版本对不上 —— 试试换回官方那一版服务端。']);
+          return;
+        }
+        if (r.res.status === 500) {
+          show('bad', '服务器出错了（500）',
+            ['地址通到了你的服务，但它在内部报错了。最常见的原因是<b>表没建</b>：',
+             'Cloudflare 版要跑一遍 <code>schema.sql</code>；腾讯云开发版要建 <code>presence</code> 集合。',
+             '另一个可能是环境变量没配好（数据库绑定）。']);
+          return;
+        }
+        if (r.res.status === 429 || r.res.status === 503) {
+          show('bad', '服务器正忙（' + r.res.status + '）',
+            ['地址是通的，只是它现在不接新请求 —— 多半是今天的写入额度用完了。明天再试。']);
+          return;
+        }
+        show('bad', '服务器回了 ' + r.res.status,
+          ['地址是通的，但这个状态码不在预期内。把这段发给作者看看：',
+           esc(r.text.slice(0, 200))]);
+      })
+      .catch(function (err) {
+        probeBtn.innerHTML = '测一下通不通';
+        probeBtn.disabled = false;
+
+        /*
+         * fetch 抛错时浏览器故意不给细节（防探测内网），所以这里只能靠
+         * 「用户填了什么」来推断。按可能性从高到低列。
+         */
+        show('bad', '连不上',
+          ['浏览器没能把请求送到那个地址。按可能性排：',
+           '① 地址写错了 —— 常见是把控制台的网页地址当成了接口地址（带着 <code>/me</code> 之类）；',
+           '② 服务还没部署，或者已经停了；',
+           '③ 服务端没开跨域 —— 本地单文件打开时这一条容易被忽略；',
+           '④ 网络问题。']);
+      });
+  });
+
+  /* ---------- 复制 / 保存 ---------- */
+  function renderCopy() {
+    if (!state.uid) {
+      copyBox.value = '';
+      copyBtn.disabled = true;
+      saveBtn.disabled = true;
+      return;
+    }
+    var ep = endpointOf(urlInput.value);
+    var lines = [
+      '碰面地址：' + (ep || '（还没填）'),
+      '身份：' + state.uid,
+      '',
+      '—— 填法 ——',
+      '设置 → 环游世界 →「她的日子」→ 碰面（和其他宠物在同一处）',
+      '地址那栏填上面第一行（带不带 /sight 都行）',
+      '身份那栏填第二行。没有「身份」这一栏的话，把两行一起贴给作者。'
+    ];
+    copyBox.value = lines.join('\n');
+    copyBtn.disabled = false;
+    saveBtn.disabled = false;
+  }
+
+  copyBtn.addEventListener('click', function () {
+    var text = copyBox.value;
+    if (!text) return;
+    var done = function () {
+      var old = copyBtn.textContent;
+      copyBtn.textContent = '复制好了';
+      setTimeout(function () { copyBtn.textContent = old; }, 1400);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, function () {
+        copyBox.select();
+        document.execCommand('copy');
+        done();
+      });
+    } else {
+      copyBox.select();
+      document.execCommand('copy');
+      done();
+    }
+  });
+
+  saveBtn.addEventListener('click', function () {
+    var payload = {
+      note: '大肥鱼环游世界 · 碰面配置。换电脑时把 uid 填回去，她还是同一只鱼。',
+      savedAt: new Date().toISOString(),
+      meetUrl: endpointOf(urlInput.value),
+      uid: state.uid
+    };
+    var blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = '碰面配置.json';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 2000);
+  });
+
+  refreshEndpoint();
+}());
+</script>
+</body>
+</html>

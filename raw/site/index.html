@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>大肥鱼环游世界</title>
+<meta name="description" content="让她真的出门走一趟，而不是演一段旅行给你看。127 座城、1094 个有名字的去处、真实的路上时间。">
+<style>
+  :root{
+    --bg:#faf5ee; --card:#fffdf8; --ink:#33291f; --soft:#8a7a68;
+    --line:#e8ddcc; --accent:#c06a35; --accent-soft:#f6e7da; --ok:#5f7d5a;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#171310; --card:#211b17; --ink:#f0e6da; --soft:#a99684;
+      --line:#3a2f27; --accent:#e39b62; --accent-soft:#38291e; --ok:#9dbba0;
+    }
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.75 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei","Segoe UI",sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:760px;margin:0 auto;padding:0 22px}
+  section{padding:64px 0}
+  section+section{border-top:1px solid var(--line)}
+
+  /* ---------- 顶部 ---------- */
+  .hero{padding:88px 0 72px}
+  .kicker{
+    display:inline-block;font-size:12.5px;letter-spacing:1.2px;text-transform:uppercase;
+    color:var(--accent);background:var(--accent-soft);
+    padding:4px 11px;border-radius:99px;margin-bottom:22px;
+  }
+  h1{
+    font-size:clamp(32px,6vw,46px);line-height:1.22;letter-spacing:-1px;
+    margin:0 0 20px;font-weight:700;
+  }
+  .sub{font-size:17.5px;line-height:1.75;color:var(--soft);margin:0 0 32px;max-width:600px}
+  .sub strong{color:var(--ink);font-weight:600}
+
+  .cta{display:flex;gap:12px;flex-wrap:wrap}
+  .btn{
+    display:inline-block;font-size:15px;font-weight:600;text-decoration:none;
+    padding:12px 22px;border-radius:10px;border:1px solid var(--line);
+    background:var(--card);color:var(--ink);transition:border-color .15s,opacity .15s;
+  }
+  .btn:hover{border-color:var(--accent)}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  .btn.primary:hover{opacity:.9}
+
+  /* ---------- 状态卡 ---------- */
+  .panel{
+    background:var(--card);border:1px solid var(--line);border-radius:16px;
+    padding:24px;margin-top:8px;
+  }
+  .panel-head{display:flex;justify-content:space-between;align-items:baseline;
+    gap:14px;flex-wrap:wrap;margin-bottom:6px}
+  .panel-city{font-size:21px;font-weight:700}
+  .panel-when{font-size:13px;color:var(--soft);font-variant-numeric:tabular-nums}
+  .panel-note{font-size:14px;color:var(--soft);margin:0 0 20px}
+  .timeline{list-style:none;margin:0;padding:0}
+  .timeline li{
+    display:flex;gap:16px;padding:11px 0;font-size:14.5px;
+    border-top:1px dashed var(--line);
+  }
+  .timeline li:first-child{border-top:none}
+  .timeline .t{flex:0 0 56px;color:var(--accent);font-variant-numeric:tabular-nums;
+    font-weight:600;font-size:13.5px}
+  .timeline .what{color:var(--ink)}
+  .timeline li.done .what{color:var(--soft)}
+
+  /* ---------- 特性 ---------- */
+  h2{font-size:clamp(23px,3.6vw,29px);line-height:1.35;margin:0 0 12px;letter-spacing:-.4px}
+  .lead{color:var(--soft);margin:0 0 34px;font-size:15.5px;max-width:600px}
+
+  .grid{display:grid;grid-template-columns:1fr;gap:14px}
+  @media(min-width:620px){.grid{grid-template-columns:1fr 1fr}}
+  .item{
+    background:var(--card);border:1px solid var(--line);border-radius:13px;
+    padding:19px 20px;
+  }
+  .item h3{font-size:15px;margin:0 0 7px;font-weight:600}
+  .item p{margin:0;font-size:14px;line-height:1.7;color:var(--soft)}
+  .item b{color:var(--ink);font-weight:600}
+
+  /* ---------- 碰面 ---------- */
+  .meet-steps{counter-reset:s;list-style:none;padding:0;margin:26px 0 0}
+  .meet-steps li{
+    counter-increment:s;position:relative;padding:0 0 22px 44px;
+  }
+  .meet-steps li::before{
+    content:counter(s);position:absolute;left:0;top:1px;
+    width:26px;height:26px;border-radius:50%;
+    background:var(--accent-soft);color:var(--accent);
+    font-size:13px;font-weight:700;
+    display:flex;align-items:center;justify-content:center;
+  }
+  .meet-steps h3{font-size:15px;margin:0 0 5px}
+  .meet-steps p{margin:0;font-size:14px;color:var(--soft);line-height:1.7}
+  .meet-steps li:last-child{padding-bottom:0}
+
+  .note{
+    margin-top:26px;padding:15px 18px;border-radius:11px;
+    background:var(--accent-soft);border:1px solid var(--line);
+    font-size:14px;line-height:1.7;
+  }
+  .note b{color:var(--accent)}
+
+  /* ---------- 装 ---------- */
+  ol.install{margin:26px 0 0;padding-left:22px;font-size:14.5px;line-height:2}
+  ol.install code,code.inline{
+    background:var(--accent-soft);color:var(--accent);
+    padding:2px 6px;border-radius:5px;font-size:13px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+    word-break:break-all;
+  }
+  pre{
+    background:var(--card);border:1px solid var(--line);border-radius:11px;
+    padding:15px 17px;overflow-x:auto;margin:16px 0 0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:12.8px;line-height:1.75;
+  }
+  pre .c{color:var(--soft)}
+
+  footer{
+    padding:44px 0 72px;border-top:1px solid var(--line);
+    font-size:13px;color:var(--soft);line-height:1.9;
+  }
+  footer a{color:var(--accent);text-decoration:none}
+  footer a:hover{text-decoration:underline}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <section class="hero">
+    <span class="kicker">Coopani 世界扩展</span>
+    <h1>让她真的出门走一趟，<br>而不是演一段旅行给你看。</h1>
+    <p class="sub">
+      从那座城市出发，自己挑地方、自己挑交通方式，路上耗掉的<strong>是真实的时间</strong>。
+      到了之后按当地时间过日子 —— 吃饭、看日出、回酒店、写日记。
+      日记放在你的同步盘里，<strong>换台电脑她还记得自己去过哪</strong>。
+    </p>
+    <div class="cta">
+      <a class="btn primary" href="meet-setup.html">配一下碰面</a>
+      <a class="btn" href="#install">怎么装</a>
+    </div>
+  </section>
+
+  <section>
+    <h2>她那边的一天</h2>
+    <p class="lead">不是「生成一段旅行日记」，是排一张带时刻的表，然后按它过日子。</p>
+
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-city">西安 · 第 2 天</span>
+        <span class="panel-when">她那边 20:40</span>
+      </div>
+      <p class="panel-note">傍晚 6 点到的，出站走了二十分钟才找到住的地方。</p>
+      <ul class="timeline">
+        <li class="done"><span class="t">07:10</span><span class="what">城墙根下吃胡辣汤，人挤人</span></li>
+        <li class="done"><span class="t">09:30</span><span class="what">陕西历史博物馆，排了四十分钟</span></li>
+        <li class="done"><span class="t">14:20</span><span class="what">大雁塔，台阶晒得烫脚</span></li>
+        <li><span class="t">20:40</span><span class="what">南门里吃泡馍，掰得太碎被老板说了</span></li>
+        <li><span class="t">22:10</span><span class="what">回酒店，写今天的日记</span></li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <h2>能做到什么</h2>
+    <p class="lead">底下每一处地点都是真有名字的地方，不是「城郊的湿地公园」。</p>
+
+    <div class="grid">
+      <div class="item">
+        <h3>127 座城，1094 个去处</h3>
+        <p>中国全境加东亚、东南亚、欧洲、北美、拉美、大洋洲。每城七到十个具体地名 ——
+          <b>凑不出真名字的城市宁可不写</b>。</p>
+      </div>
+      <div class="item">
+        <h3>九种交通，用时真算</h3>
+        <p>步行、自行车、电瓶车、摩托车、自驾、长途汽车、火车、轮船、飞机。
+          同一段距离，步行和飞机差两个数量级 —— <b>不会出现「步行去巴黎」</b>。</p>
+      </div>
+      <div class="item">
+        <h3>按当地时间过日子</h3>
+        <p>时区靠系统算，夏令时也对；日出日落本地算。三个饭点固定，晚八点后没夜间活动就回酒店，
+          <b>有日出条件才排凌晨起床</b>。</p>
+      </div>
+      <div class="item">
+        <h3>一天一张照片</h3>
+        <p>路上拍的，全是空镜：窗外、街角、傍晚的城墙。接本地 ComfyUI 或云端接口都行，
+          <b>不填就只把景色写成文字</b>。</p>
+      </div>
+      <div class="item">
+        <h3>日记跟着人走</h3>
+        <p>一个月一个 Markdown，放同步盘即可。冲突副本按天合并，旧的一天一篇会自动并进来。</p>
+      </div>
+      <div class="item">
+        <h3>有些地方她在作品里见过</h3>
+        <p>排到那儿的时候她知道这是哪部作品的哪个场景 —— 但<b>不知道剧情</b>，
+          也不会补清单外的地名。</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="meet">
+    <h2>碰面：和其他宠物遇上</h2>
+    <p class="lead">
+      她到站时会看一眼「这座城市、这个时段还有谁」，有的话在当天那条消息末尾带一句。
+      <b>只能看，不能说话</b> —— 没有私聊、没有好友、没有留言，
+      拉回来的只有「宠物名 + 在干嘛」两样。
+    </p>
+
+    <ol class="meet-steps">
+      <li>
+        <h3>自己起一个服务器</h3>
+        <p>不用等别人给地址。Cloudflare Workers 免费版十分钟能搭好，一天两万次上报够两千人用；
+          腾讯云开发也能，见仓库里的 <code class="inline">cloud/</code>。</p>
+      </li>
+      <li>
+        <h3>用配置助手把它试通</h3>
+        <p>填地址、生成身份、点一下测连通 —— 通了再填进设置，省得「填完没反应不知道是坏了还是没人」。</p>
+      </li>
+      <li>
+        <h3>填进设置</h3>
+        <p>设置 → 环游世界 →「她的日子」→ 碰面。填完不用重启，下次到站就生效。</p>
+      </li>
+    </ol>
+
+    <div class="note">
+      <b>一个人用是完全正常的。</b>只有你自己在用的时候，「谁也在这儿」那句永远不会出现 ——
+      不是坏了，是真的没人。
+    </div>
+
+    <div class="cta" style="margin-top:26px">
+      <a class="btn primary" href="meet-setup.html">打开配置助手</a>
+    </div>
+  </section>
+
+  <section id="install">
+    <h2>怎么装</h2>
+    <p class="lead">需要 Coopani 0.2.17 以上。</p>
+
+    <ol class="install">
+      <li>在 <code>data/extensions/package.json</code> 的 <code>dependencies</code> 里加一行</li>
+      <li>跑 <code>pnpm install</code></li>
+      <li>把 <code>config.json</code> 里的 <code>worlds.journey.enabled</code> 设成 <code>true</code>，
+        或者直接从 World 页面打开</li>
+      <li><b>重启 Core</b> —— 改了代码之后必须重启，用页面上的「重启世界」不算</li>
+    </ol>
+
+    <pre><span class="c">// data/extensions/package.json</span>
+{
+  "dependencies": {
+    "coopani-world-journey": "link:&lt;这个包的绝对路径&gt;"
+  }
+}</pre>
+  </section>
+
+  <footer>
+    <p style="margin:0 0 10px">
+      大肥鱼环游世界 · <code class="inline">coopani-world-journey</code>
+    </p>
+    <p style="margin:0 0 10px">
+      配置助手是纯静态页面，所有请求只在你的浏览器里发出，不经过任何第三方。
+    </p>
+    <p style="margin:0">
+      <a href="meet-setup.html">碰面配置助手</a>
+    </p>
+  </footer>
+
+</div>
+
+</body>
+</html>
