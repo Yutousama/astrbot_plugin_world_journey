@@ -75,6 +75,17 @@ test('sidecar：鉴权、状态、工具、提示词、事件、动作、媒体�
     assert.equal(photo.status, 409);
     assert.equal(photo.body.ok, false);
 
+    // 没有在等批的事：/api/ask 必须明确拒绝（上游会静默吞掉，套壳替用户把关）。
+    const askEmpty = await postJson('/api/ask', { ok: true });
+    assert.equal(askEmpty.status, 409);
+    assert.equal(askEmpty.body.ok, false);
+    assert.ok(String(askEmpty.body.reason).includes('没有'));
+
+    // 她在路上：/api/return-home 应该成功（面板「回来」按钮的替身）。
+    const back = await postJson('/api/return-home');
+    assert.equal(back.status, 200);
+    assert.equal(back.body.ok, true);
+
     const heartbeat = await postJson('/api/heartbeat');
     assert.equal(heartbeat.status, 200);
 

@@ -6,10 +6,10 @@
 本仓库是**开发仓库**，维护：
 
 ```text
-raw/          上游 coopani-world-journey 源码（只读基线，当前 0.5.26）
+raw/          上游 coopani-world-journey 源码（只读基线，当前 0.8.6）
 adapter/      TypeScript 套壳：宿主、配置、事件、媒体、提示词、生图提示词、HTTP、模拟
 scripts/      构建、部署、npm 源码更新、校验
-test/         43 项测试
+test/         45 项测试
 docs/         架构与上游更新文档
 plugin/       本地构建/联调目录（.gitignore 排除，不提交到本仓库）
 ```

@@ -1,5 +1,46 @@
 # 更新日志
 
+## 未发布（工作区）— 上游 raw 0.5.26 → 0.8.6 + 壳层补齐
+
+### 上游更新
+
+- `raw/` 更新到 `coopani-world-journey` **0.8.6**（npm 校验 sha512，`upstream.lock.json` 重录，45 个文件）。
+  上游这轮带来：碰面联机（`meetUrl`、邀约/接邀约）、ComfyUI 出图（协议/workflow/节点/负向提示词/超时可调）、
+  拍照六题材（`subject`）、月报/年报、水印裁除、`maxTripMonths`→`maxTripWeeks` 改名换单位。
+- 契约扫描全绿：无运行时 cortico import、`world.ts` 公开面不变、host 仍在 `log/pushEvent` 白名单、
+  `### 身体怎么动` 与 `{{journey.now}}` 原位 —— **adapter 契约层零改动**。新工具/新事件经
+  `/api/tools` 与事件泵动态透传自动生效。
+
+### 壳层未实现功能的补齐（改壳不改 raw）
+
+- **`max_trip_months` → `max_trip_weeks`**（`config_map.py` + `_conf_schema.json`）：上游改键名换单位，
+  不处理则用户设置静默失效。迁移：旧月份值 ×4.345 换算成周（6 月 → 26 周，与新默认等价），
+  新键被显式改成非默认值时以新键为准；日志写明换算结果。
+- **13 个上游新配置进 AstrBot 表单**：`max_trip_weeks`、`has_license`、`meet_url`、
+  `image_protocol`、`image_workflow`、`image_prompt_node`、`comfy_negative`、`comfy_negative_node`、
+  `image_timeout_sec`、`image_cast`、`image_size`、`image_watermark`、`photo_dir`（此前只能靠 `extra_config` 手拼）。
+- **点头卡片进聊天**（`bridge.ts` `askAnswer` + `server.ts` `/api/ask` + `main.py`
+  `/journey_yes|/点头`、`/journey_no|/摇头`）：上游「出门等点头/接邀约」只有面板按钮一个入口，
+  AstrBot 没有面板；现在 `journey.ask` 事件末尾附回答指令，`/journey_yes` 即点头。没有待批的事时
+  明确回「她现在没有在等你点头」，不静默。
+- **`/journey_back`（/叫她回来）**：`bridge.ts` `returnHome` + `/api/return-home` 路由，面板
+  「回来」按钮的聊天替身（模型侧本来就有 `journey_return_home` 工具）。
+- **`/journey_photo [题材]`**：带参数时按关键词映射上游 `subject` 六档（菜单/特写→detail 优先于
+  饭/面→food，防子串误判），走 `journey_photo` 工具；不带参数保持原面板补拍行为。
+- **ComfyUI 与自拍套壳互斥**（`bridge.ts`）：`image_protocol=comfyui` 且未单独配 `selfie_api` 时
+  自拍套壳与主动汇报配图整体停用并写日志 —— 自拍打的是 `/images/generations`，对着 Comfy 地址
+  必然 404；单配 `selfie_api` 可组合「ComfyUI 画风景 + 云端画自拍」。
+- **出图等待上限跟随 `image_timeout_sec`**（`bridge.py`）：`/api/photo` 与题材拍照工具的客户端超时
+  从固定 150s 改为 `max(150, 配置 + 60)`，用户把渲染超时调到 300/600 时套壳不再先掐自己。
+- `/jy` 简写与 `/journey help` 同步新指令；插件 README 增补 ComfyUI 接入、碰面联机、
+  配置表与新故障排查条目。
+
+### 测试
+
+- 新增：`bridge.test.ts` 点头拒绝/回程 + ComfyUI 自拍停用；`server.test.ts` `/api/ask`、
+  `/api/return-home`；`npm test` 共 **45 项**，全过。`config_map` 迁移逻辑手工表驱动验证
+  （12 月→52 周、6 月→26、显式周优先）。
+
 ## 1.0.5 — 2026-11-06
 
 ### 拍照场景描述统一：画风、时段、在路上的城市真的生效

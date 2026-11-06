@@ -182,6 +182,27 @@ async function handle(req: IncomingMessage, res: ServerResponse, opts: ServerOpt
   }
 
   /*
+   * 「出门等点头 / 接邀约」卡片的两个按钮，和「叫她回来」。
+   * 面板（cortico 宿主）点按钮走 webUi().invoke；AstrBot 没有面板，
+   * 这两个路由就是那两只按钮在聊天里的替身。
+   */
+  if (method === 'POST' && path === '/api/ask') {
+    const raw = await readJsonBody(req);
+    const ok = raw && typeof raw === 'object' && !Array.isArray(raw)
+      ? (raw as Record<string, unknown>).ok === true
+      : false;
+    const result = await opts.bridge.askAnswer(ok);
+    json(res, result.ok ? 200 : 409, result);
+    return;
+  }
+
+  if (method === 'POST' && path === '/api/return-home') {
+    const result = await opts.bridge.returnHome();
+    json(res, result.ok ? 200 : 409, result);
+    return;
+  }
+
+  /*
    * 主动汇报配图：和 `/api/photo` 不同，它不走上游的 photo 事件，只借自拍配置生成
    * 一张图交给 Python 随汇报发出去。失败时返回 `image: null` —— 调用方只发文字，
    * 不因为配图失败而丢整条汇报。

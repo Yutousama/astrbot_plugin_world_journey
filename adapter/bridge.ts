@@ -250,6 +250,35 @@ export class RawBridge {
     }
   }
 
+  /**
+   * 回答「出门等点头」/「接邀约」的卡片（上游面板的两个按钮）。
+   *
+   * 先读快照里的 `ask`：没有在等批的事时上游会静默吞掉（`answerAsk` 直接 return），
+   * 用户在聊天里得不到任何反馈 —— 这里把「她现在没在问你」变成明确的一句话。
+   */
+  async askAnswer(ok: boolean): Promise<BridgeResult> {
+    try {
+      const snap = await this.snapshot();
+      const pending = snap.ask as { kind?: string; line?: string } | null | undefined;
+      if (!pending) return { ok: false, reason: '她现在没有在等你点头（也许没开「出门等点头」，也许她还没问）。' };
+      const snapshot = await this.ui.invoke('now', 'answerAsk', [ok]) as UiSnapshot;
+      const head = pending.line ? `${pending.line}\n` : '';
+      return { ok: true, text: ok ? `${head}他点了头。${this.now()}` : `${head}他答了「不好」。`, snapshot };
+    } catch (e) {
+      return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  /** 叫她回来（上游面板「回来」按钮；`journey_return_home` 工具走的是同一条腿）。 */
+  async returnHome(): Promise<BridgeResult> {
+    try {
+      const snapshot = await this.ui.invoke('now', 'returnHome', []) as UiSnapshot;
+      return { ok: true, text: this.now(), snapshot };
+    } catch (e) {
+      return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
   async photo(): Promise<BridgeResult> {
     try {
       const raw = await this.ui.invoke('album', 'shoot', []) as { ok?: boolean; reason?: string };
@@ -291,6 +320,10 @@ export class RawBridge {
   private selfieOptions(): SelfieOptions | null {
     const cfg = this.cfg as unknown as Record<string, unknown> | null;
     if (!cfg || cfg.selfieEnabled !== true) return null;
+    // ComfyUI 那条路走 workflow（POST /prompt），自拍套壳拦不到这种形状，也注入不了参考图。
+    // 除非用户单独配了 selfieApi（云端生图服务），否则直接关掉 —— 别再拿 Comfy 地址
+    // 打 `${api}/images/generations`：那是一次注定 404 的出网请求加一条没人看的 warn。
+    if (this.comfySelfieBlocked(cfg)) return null;
     const rawRefs = Array.isArray(cfg.selfieReference)
       ? cfg.selfieReference
       : typeof cfg.selfieReference === 'string'
@@ -329,6 +362,12 @@ export class RawBridge {
     const fresh = stringOf(cfg.imagePromptTemplate).trim();
     if (fresh) return fresh;
     return stringOf(cfg.selfiePrompt).trim();
+  }
+
+  /** 「出镜自拍」开了、但生图协议是 ComfyUI 且没单独配 selfieApi —— 自拍/汇报配图应整体停用。 */
+  private comfySelfieBlocked(cfg: Record<string, unknown>): boolean {
+    const proto = stringOf(cfg.imageProtocol).trim().toLowerCase();
+    return proto === 'comfyui' && !stringOf(cfg.selfieApi).trim();
   }
 
   /**
@@ -370,6 +409,9 @@ export class RawBridge {
     this.uninstallSelfie = null;
     const selfie = this.selfieOptions();
     const models = this.imageModels();
+    if (!selfie && this.cfg && this.comfySelfieBlocked(this.cfg as unknown as Record<string, unknown>)) {
+      this.log.info('生图协议是 ComfyUI：自拍套壳与主动汇报配图不生效（要用的话单独配 selfie_api 指向云端生图服务）。');
+    }
     // 开了自拍就不需要再套空镜模板 —— 两条路径互斥，同一时刻只有一套模板生效。
     const scene = selfie ? null : this.sceneOptions();
     if (!selfie && !scene && models.length === 0) return;

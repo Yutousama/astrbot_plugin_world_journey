@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { makeBridge, tempDir } from './helpers.ts';
+import { RawBridge } from '../adapter/bridge.ts';
+import { makeBridge, tempDir, T0 } from './helpers.ts';
 
 test('桥接门面：快照、工具、日记、出发、同步、照片失败原因', async () => {
   const dir = tempDir();
@@ -52,6 +53,49 @@ test('桥接门面：快照、工具、日记、出发、同步、照片失败�
 
     const missingTool = await bridge.callTool('journey_nope', {});
     assert.equal(missingTool.isError, true);
+  } finally {
+    await bridge.stop();
+  }
+});
+
+test('点头/回程桥接：没有在等批时明确拒绝；在路上能叫她回来', async () => {
+  const dir = tempDir();
+  const bridge = makeBridge(dir);
+  await bridge.start();
+  try {
+    const empty = await bridge.askAnswer(true);
+    assert.equal(empty.ok, false);
+    assert.ok((empty.reason ?? '').includes('没有'));
+
+    const depart = await bridge.depart();
+    assert.equal(depart.ok, true);
+
+    const back = await bridge.returnHome();
+    assert.equal(back.ok, true);
+    assert.ok(bridge.events.recent(30).some((e) => e.type === 'journey.depart'));
+  } finally {
+    await bridge.stop();
+  }
+});
+
+test('ComfyUI 协议下自拍套壳整体停用：reportImage 直接返回 null，不出网', async () => {
+  const dir = tempDir();
+  const bridge = new RawBridge({
+    dataDir: dir,
+    now: () => new Date(T0.getTime()),
+    nowPlaying: () => null,
+    echo: false,
+    initialOverrides: {
+      selfieEnabled: true,
+      imageProtocol: 'comfyui',
+      imageApi: 'http://127.0.0.1:8188',
+    } as never,
+  });
+  await bridge.start();
+  try {
+    // selfieEnabled=true 但协议是 comfyui 且没单独配 selfieApi —— 自拍/汇报配图应安静跳过。
+    const image = await bridge.reportImage('她在大荔看黄河');
+    assert.equal(image, null);
   } finally {
     await bridge.stop();
   }
