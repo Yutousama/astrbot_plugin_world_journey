@@ -1,32 +1,10 @@
 # 更新日志
 
-## 未发布（工作区）— 指令命中的上游版本闸
-
-- **「壳新 raw 旧」兜底**：插件更新会把 `raw/` 换回发布包基线，而旧上游没有新功能时，
-  新指令原本会**静默给错行为**（点头答不上、题材拍成普通风景）。现在命令命中时先比对
-  上游版本，不满足就不调引擎，直接回可操作指引（需求版本、当前版本、npm 最新、
-  按 `allow_upstream_update` 开关状态给出不同的升级路径）。
-- 功能门槛表（`_FEATURE_MIN_RAW`，对应上游 CHANGELOG 功能引入版本）：
-  `/journey_yes|no` ≥ 0.7.9（待批卡片 + answerAsk）、`/journey_back` ≥ 0.5.19（returnHome）、
-  `/journey_photo 带题材` ≥ 0.8.5（subject；不带题材的旧补拍路径不拦）。
-- 「npm 最新版本」查询带 6 小时缓存（`plugin_data/upstream-latest.json`），
-  失败静默沿用旧值；版本足够时零网络开销。raw 目录丢失同样给明确提示。
-- **能力实测优先，版本表只是兜底**：`adapter/bridge.ts` 新增 `capabilities()`，
-  随 `/api/health` 上报当前真加载的 raw 有没有 `answerAsk` 方法 / `journey_return_home`
-  工具 / `journey_photo` 的 `subject` 参数。壳的判定先问实测——上游更新或改名后自动跟上，
-  **忘记维护手工表也不会误拦或漏拦**（表退化为文案素材与 sidecar 不可用时的兜底）。
-  `returnHome` 探测走工具名而非 world 方法（后者只是 `ui.invoke` 路由字符串，0.5.19 与
-  `journey_return_home` 工具同批引入，工具面等价）。sidecar 就绪时正常命令只多一次回环
-  health 查询（毫秒级）。
-- 维护约定（README）：新增面板指令 = `capabilities()` 加一行 + `_FEATURE_MIN_RAW`/
-  `_FEATURE_CAP_KEY` 各加一条。
-- 验证：main.py 真实源码抽取驱动 8/8（0.8.6 全放行 / 0.5.26 ask+题材拦截、back 放行 /
-  开关文案分支 / npm 版本不够不提 / 缓存过期回退 / raw 丢失）。
-
 ## 1.0.6 — 2026-11-06
 
 本版主题：**上游 raw 0.5.26 → 0.8.6**，0.6–0.8.6 期间的功能缺口全部在壳层补齐；
-顺带完成设置页整理（68 → 66，分组重排 + 两项合并）。
+顺带完成设置页整理（68 → 66，分组重排 + 两项合并）；
+并为「壳新 raw 旧」的老用户加了**指令版本闸（能力实测）**。
 
 ### 上游更新
 
@@ -85,6 +63,30 @@
 - README 配置表按新分组重排，补上此前漏表的 `node_path`/`sidecar_port`/`request_timeout`/`log_level` 行。
 - 验证：`npm test` 共 **46 项**全过（含自拍尺寸跟随新用例）；`_recent_report_limit` 按 main.py
   真实源码抽取执行，9/9 分支符合预期（旧开关 False 优先、0=关、上限 20、坏值回退 5）。
+
+### 指令版本闸：「壳新 raw 旧」的老用户兜底（能力实测）
+
+- 场景：插件更新会把 `raw/` 换回发布包基线，而旧上游没有新功能时，新指令原本会
+  **静默给错行为**（点头答不上、题材拍成普通风景）。现在命令命中时先确认上游真有
+  这个功能，没有就不调引擎，直接回可操作指引（需求版本、当前版本、npm 最新、
+  按 `allow_upstream_update` 开关状态给出不同升级路径）。
+- **判定优先用能力实测**：`adapter/bridge.ts` 新增 `capabilities()`，随 `/api/health`
+  上报当前真加载的 raw 有没有 `answerAsk` 方法 / `journey_return_home` 工具 /
+  `journey_photo` 的 `subject` 参数——上游 `/journey_update` 升到未来版本或改名后
+  自动跟上，**忘记维护手工表也不会误拦或漏拦**。`returnHome` 探测走工具名而非
+  world 方法（后者只是 `ui.invoke` 路由字符串，0.5.19 与 `journey_return_home`
+  工具同批引入，工具面等价）。
+- 手工表（`_FEATURE_MIN_RAW`）退化为文案素材与 sidecar 不可用时的版本兜底：
+  `/journey_yes|no` ≥ 0.7.9、`/journey_back` ≥ 0.5.19、`/journey_photo 带题材` ≥ 0.8.5
+  （不带题材的旧补拍路径不拦）。
+- 「npm 最新版本」查询带 6 小时缓存（`plugin_data/upstream-latest.json`），失败静默
+  沿用旧值——只在功能缺失时才走这条网络路径；raw 目录丢失同样给明确提示。
+  sidecar 就绪时正常命令只多一次回环 health 查询（毫秒级）。
+- 维护约定（README）：新增面板指令 = `capabilities()` 加一行 + `_FEATURE_MIN_RAW`/
+  `_FEATURE_CAP_KEY` 各加一条。
+- 验证：main.py 真实源码抽取驱动 8/8（实测 true 优先于错表 / 实测 false 拦 0.8.6 /
+  无实测退表兜底与放行 / bridge 未建 / health 抛错退表 / raw 丢失 / caps 缺键退表）；
+  `bridge.test.ts`、`server.test.ts` 断言 0.8.6 实测全 `true`。
 
 ## 1.0.5 — 2026-11-06
 
