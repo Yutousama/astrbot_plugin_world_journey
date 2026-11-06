@@ -1,5 +1,52 @@
 # 更新日志
 
+## 1.0.5 — 2026-11-06
+
+### 拍照场景描述统一：画风、时段、在路上的城市真的生效
+
+- 新增 `adapter/photo-prompt.ts`：「这一张拍什么」的唯一来源。相册拍照（`bridge.photo()`）
+  和主动汇报配图（`bridge.reportImage()`）从同一处构造提示词，上游 `raw/src/photo.ts` 只
+  import 不复制 —— 用户填的「画面风格」（`image_style`）从此对两条路径都生效，
+  不再出现「相册是二次元、汇报配图是真人」的分裂。
+- 拍照城市跟着她的行程走：在路上取 `leg.toId` 一带（车窗、过站、车厢里的光），
+  不再拿出发城市原地晾衣服；快照里拿不到精确景点时退化为「城市 + 光线」，不编地名。
+- 生图模板拆成三套：`image_prompt_template`（出镜自拍）、`image_prompt_scene_template`
+  （自拍关着时的空镜，守住「画面里没有人物」）、`image_prompt_for_scene`（空镜是否套模板）。
+- 旧 `selfie_prompt` 自动迁移（`defaults.py` 新增 `LEGACY_SELFIE_PROMPT` 识别）：
+  空的直接回填新默认；填的恰好是旧默认模板的换成新模板并清空旧字段；
+  用户自己改过的一个字不动，运行期回退读旧字段。
+- `config_map.py` 增加 `imagePromptTemplate` / `imagePromptSceneTemplate` / `imagePromptForScene` 映射。
+- 新增 `test/photo-prompt.test.ts`；`npm test` 共 **43 项**，全过。
+
+### 写完日记推送给主要通知人
+
+- 自动日记落盘成功后，把当天正文（带日期和所在城市）推送到会话；新增配置
+  `diary_notify`（默认开）与 `diary_notify_target`（主要通知人，WebUI 会话选择器）。
+- 目标解析顺序：`diary_notify_target` → `event_target` → 最近和机器人说话的会话；
+  `access_scope=target` 时不用最近会话兜底；三者都没有只写日志跳过。
+- 推送失败不影响日记落盘，也不重试推送；只针对自动日记，工具写入和历史日记不推。
+
+### `/journey help` 指令列表
+
+- `/journey help`（或 `/jy help`、`/旅行 帮助`）输出当前全部可用指令：命令、参数形式、
+  中文别名、`/jy` 简写形式、管理员标注和控制范围说明。
+
+### `/jy` 简写指令
+
+- `/jy` 单独使用等同 `/journey`；`/jy diary 7`、`/jy note all`、`/jy draw 成都 一首歌`
+  等同对应的 `/journey_diary` / `/journey_note` / `/journey_draw`；
+  depart / photo / stats / sync / debug / reset / update 同样支持，未知子命令给提示。
+- 权限、管理要求、控制范围与完整命令完全一致（直接分发进原 handler，行为只有一份）。
+- 参数传递用 per-event 的覆盖值实现，不新增 handler 位置参数 ——
+  AstrBot 会按签名自动解析指令尾参，加了反而会污染参数类型。
+
+### `/journey_update` 成功时附上更新日志
+
+- 更新成功后从新版 `raw/CHANGELOG.md` 截取**旧版本 → 新版本**之间的段落一起输出，
+  一眼知道这轮升级改了什么；「已经是最新」时不输出。
+- 旧版本没收录在日志里时保守只截新版一节；超过 2500 字截断并提示看全文；
+  CHANGELOG 读不到不影响更新本身（只少一段说明，照常完成更新）。
+
 ## 1.0.4 — 2026-11-04
 
 自 1.0.3 之后合入的功能，统一在 1.0.4 发布。

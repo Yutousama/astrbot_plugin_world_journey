@@ -1,5 +1,5 @@
 /**
- * 生图代理（自拍套壳 + 模型名降级）。
+ * 生图代理（自拍套壳 + 全局提示词模板 + 模型名降级）。
  *
  * 上游 `photo.ts` 只认**一个**模型 id，而且它属于只读基线，套壳不能改。
  * 所以这里在 AstrBot 侧套一层 fetch 代理，拦上游的 `POST /images/generations`：
@@ -7,10 +7,15 @@
  *   上游请求 /images/generations
  *      → 配置了多个模型名时，按顺序逐个重发：前一个报错就换下一个
  *      → 自拍开启时，先把空镜提示词换成自拍提示词，再走参考图接口
+ *      → 只开「空镜套模板」时，换提示词但不带参考图，仍走 /images/generations
  *      → 把结果包成上游认识的 {data:[{b64_json|url}]}
  *
+ * 「提示词模板」现在是**全局**的：不管自拍开不开，最终发给接口的这句话都由
+ * `promptTemplate` + `{style}`（= 用户的「画面风格」）决定。以前模板只在自拍路径
+ * 生效，于是同一个「动漫画风」配置，相册里是二次元、主动汇报里是真人照片。
+ *
  * 只有**所有**模型都失败，才把失败回给上游（上游再照常写日志/报错）。
- * 关闭自拍、也没配模型列表时完全不介入。
+ * 自拍关闭、模板也没开、也没配模型列表时完全不介入。
  */
 import { readFile } from 'node:fs/promises';
 import { extname } from 'node:path';
@@ -31,6 +36,24 @@ export interface SelfieOptions {
   readonly imageField: string;
   readonly subject: string;
   readonly promptTemplate: string;
+  /**
+   * 用户的「画面风格」（`image_style`）。填了就是模板里的 `{style}`；
+   * 模板没写 `{style}` 时补一行「画风：X」。留空或 `none` = 不指定。
+   */
+  readonly style?: string;
+}
+
+/**
+ * 空镜（没开自拍）的模板选项。
+ *
+ * 单独一套而不是复用自拍模板：自拍模板里有 `{subject}` 和「画面里只有她一个人」，
+ * 套到空镜上就把风景照画出了人 —— 而上游的空镜纪律恰恰是「画面里没有人物」。
+ */
+export interface SceneTemplateOptions {
+  readonly enabled: boolean;
+  readonly promptTemplate: string;
+  readonly style?: string;
+  readonly subject?: string;
 }
 
 export interface SelfieLogger {
@@ -38,12 +61,14 @@ export interface SelfieLogger {
   warn(message: string): void;
 }
 
-/** 代理要做的两件事；`selfie` 为空 = 只做模型降级。 */
+/** 代理要做的三件事；`selfie` 为空 = 只做模板改写和模型降级。 */
 export interface PhotoProxyOptions {
-  /** 生图模型名列表，按顺序降级。空 = 不介入普通空镜请求。 */
+  /** 生图模型名列表，按顺序降级。空 = 不重发（除非要改写空镜提示词）。 */
   readonly models: readonly string[];
   /** 自拍套壳；`null` = 关闭。 */
   readonly selfie: SelfieOptions | null;
+  /** 空镜模板改写；`enabled` 为假 = 空镜提示词一个字都不动。 */
+  readonly scene?: SceneTemplateOptions | null;
   /**
    * 她所在城市的当地时间 `HH:MM`。每次生图前取一次；
    * 拿不到（或没传）时用本机时间兜底。
@@ -68,13 +93,50 @@ interface ReferenceImage {
   name: string;
 }
 
+/**
+ * 内置默认模板（自拍）。
+ *
+ * 这里**不写死**照片质感：质感由「画面风格」（`{style}`）决定。老版本写的是
+ * 「真实手机自拍质感，自然光，轻微手持感」，等于套壳替用户决定了画风 ——
+ * 用户填了「动漫画风」也只会在 `背景：` 里冒出来半句，出图照样是真人照片。
+ */
 const DEFAULT_PROMPT = [
   '一张自拍照片：{subject}在画面里，手机前置镜头近距离自拍，脸和上半身清晰，眼睛看着镜头，表情自然。',
+  '画风：{style}',
   '时间：{time}（{clock}）。',
   '背景：{scene}',
-  '参考图是{subject}的长相参考：保持五官、脸型、发型、肤色、年龄和气质一致；不要换脸，不要变成陌生人，不要照搬参考图的背景和衣服。',
-  '真实手机自拍质感，自然光，轻微手持感；画面里只有{subject}一个人，没有文字、水印、边框。',
+  '参考图是{subject}的长相参考：保持五官、脸型、发型、肤色、年龄和气质一致；不要换脸，不要变成陌生人，不要照搬参考图的背景和衣服；按上面的画风绘制，不要自行改成真人照片。',
+  '画面里只有{subject}一个人，没有文字、水印、边框。',
 ].join('\n');
+
+/**
+ * 内置默认模板（空镜，没开自拍时用）。
+ *
+ * 「画面里没有人物」是上游空镜的硬纪律，模板接管后必须自己守住 ——
+ * 少了这一句，模型很爱往风景里塞一个陌生人。
+ */
+const DEFAULT_SCENE_PROMPT = [
+  '画风：{style}',
+  '{scene}',
+  '时间：{time}（{clock}）。',
+  '画面里没有人物，没有文字，没有水印，没有边框。',
+].join('\n');
+
+/** 渲染提示词时要用到的最小配置（自拍和空镜共用一套规则）。 */
+export interface PromptRenderOptions {
+  readonly subject: string;
+  readonly promptTemplate: string;
+  readonly style?: string;
+}
+
+/** 模板里的「画风标签行」：整行只剩「画风：」这种空值残骸时删掉它。 */
+const EMPTY_STYLE_LINE = /^[^：:\n]*：\s*$/;
+
+/** `image_style` 里的 `none` 表示「一个字都别提风格」。 */
+export function normalizeStyle(style?: string): string {
+  const raw = (style ?? '').trim();
+  return raw.toLowerCase() === 'none' ? '' : raw;
+}
 
 const NO_PEOPLE = /画面里没有人物[^。]*。/g;
 const PASSERBY = /视角像路过的人[^。]*。/g;
@@ -156,22 +218,43 @@ export function describeTime(clock?: string): { label: string; clock: string } {
   return { label: labelFor(parsed.minutes), clock: parsed.text };
 }
 
-export function buildSelfiePrompt(
+/**
+ * 把上游的场景描述渲染成最终发给接口的提示词 —— 自拍和空镜共用这一套规则。
+ *
+ * 规则按顺序：
+ * 1. 剥掉只属于「写实空镜」的措辞（默认前缀、没有人物、路过的人、胶片质感），
+ *    以及**用户自己填的画风前缀** —— 画风要靠 `{style}` 当一级约束，
+ *    留在 `背景：` 里只是半句修饰，模型会按模板主体的「照片质感」走。
+ * 2. 逐行渲染 `{style}`：风格留空时，整行只剩「画风：」这种残骸的直接删掉。
+ * 3. 老模板没写 `{style}` / `{time}` / `{clock}` 时自动补到末尾，升级即生效，
+ *    不用用户去改配置里那段文本。
+ */
+export function renderImagePrompt(
   original: string,
-  opts: Pick<SelfieOptions, 'subject' | 'promptTemplate'>,
+  opts: PromptRenderOptions,
   clock?: string,
 ): string {
+  const style = normalizeStyle(opts.style);
+  const lead = style ? `${style}：` : '';
   const scene = original
     .replace(/^一张真实旅行照片：/, '')
     .replace(NO_PEOPLE, '')
     .replace(PASSERBY, '')
     .replace(FILM, '')
     .replace(/\s+/g, ' ')
-    .trim();
+    .trim()
+    .replace(new RegExp(`^${escapePattern(lead)}`), '');
   const subject = opts.subject.trim() || '她本人';
   const template = opts.promptTemplate.trim() || DEFAULT_PROMPT;
   const time = describeTime(clock);
-  let prompt = template
+  const hasStyle = template.includes('{style}');
+  // 先按行处理 {style}：风格为空时不能让「画风：」这种空标签行留在提示词里。
+  const styled = template
+    .split('\n')
+    .map((line) => (line.includes('{style}') ? line.replaceAll('{style}', style) : line))
+    .filter((line) => !(style === '' && EMPTY_STYLE_LINE.test(line.trim())))
+    .join('\n');
+  let prompt = styled
     .replaceAll('{scene}', scene)
     .replaceAll('{subject}', subject)
     .replaceAll('{time}', time.label)
@@ -180,13 +263,30 @@ export function buildSelfiePrompt(
   if (!template.includes('{time}') && !template.includes('{clock}')) {
     prompt += `\n时间：${time.label}（${time.clock}）。`;
   }
+  // 老模板也没写 {style}：画风补在末尾，否则「画面风格」对这条路径依然是空的。
+  if (style && !hasStyle) {
+    prompt += `\n画风：${style}`;
+  }
   return prompt.trim();
+}
+
+/** 兼容旧名字：外部测试和调用方一直在用 `buildSelfiePrompt`。 */
+export const buildSelfiePrompt = renderImagePrompt;
+
+/** 空镜（没开自拍）时的默认模板。 */
+export const DEFAULT_SCENE_TEMPLATE = DEFAULT_SCENE_PROMPT;
+/** 出镜自拍时的默认模板；测试和跨语言一致性检查要用它。 */
+export const DEFAULT_SELFIE_TEMPLATE = DEFAULT_PROMPT;
+
+function escapePattern(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 /**
  * 安装生图代理。
  *
- * 普通空镜：把上游请求体里的 `model` 换成列表中的下一个重发，成功就原样返回；
+ * 普通空镜：套了「生图提示词模板」就先改写提示词，再把 `model` 换成列表中的下一个重发，
+ *   成功就原样返回；
  * 自拍：每个候选模型都走一遍参考图接口，成功就包成上游认识的结构。
  *
  * 什么时候**不**降级：
@@ -201,8 +301,15 @@ export function installPhotoProxy(
 ): PhotoProxy {
   const models = modelListOf(opts.models);
   const selfie = opts.selfie?.enabled === true ? opts.selfie : null;
-  // 只有自拍，或真正配了「第二个模型」时才需要拦请求；单个模型上游自己就发对了。
-  if (!selfie && models.length < 2) return { uninstall: () => {}, fetch: fetchImpl };
+  /*
+   * 空镜模板：开关打开且真填了模板才改写提示词。关掉就回到老行为 ——
+   * 上游 `photoPrompt()` 发什么就发什么，一个字的模板都不套。
+   */
+  const scene = opts.scene && opts.scene.enabled === true && opts.scene.promptTemplate.trim()
+    ? opts.scene
+    : null;
+  // 自拍、空镜套模板，或真正配了「第二个模型」时才需要拦请求；单个模型上游自己就发对了。
+  if (!selfie && !scene && models.length < 2) return { uninstall: () => {}, fetch: fetchImpl };
   if (selfie && selfie.references.length === 0) {
     log.warn('自拍已开启，但没有参考图；照片会失败而不是退回空镜。请在插件配置里上传 selfie_reference。');
   }
@@ -216,20 +323,26 @@ export function installPhotoProxy(
 
     // 自拍模型留空时，用上游请求里的 model（= 生图模型名的第一个）兜底。
     const selfieModels = selfie ? modelListOf(selfie.model) : [];
+    /*
+     * 只套空镜模板、没配降级列表时也得发得出去：沿用上游原本选定的模型，
+     * 只把提示词换成模板渲染的结果。
+     */
+    const fallbackModel = stringOf(body.model).trim() || 'gpt-image-1';
     const candidates = selfie
-      ? (selfieModels.length ? selfieModels : [stringOf(body.model).trim() || 'gpt-image-1'])
-      : models;
-    if (candidates.length === 0) return original(input, init);
+      ? (selfieModels.length ? selfieModels : [fallbackModel])
+      : (models.length ? models : [fallbackModel]);
 
     let reference: ReferenceImage | null = null;
     let clock: string | undefined;
-    if (selfie) {
-      try {
-        reference = await loadSelfieReference(selfie, original);
-      } catch (e) {
-        const message = errText(e);
-        log.warn(`自拍生图失败：${message}`);
-        return jsonResponse({ error: { message } }, 502);
+    if (selfie || scene) {
+      if (selfie) {
+        try {
+          reference = await loadSelfieReference(selfie, original);
+        } catch (e) {
+          const message = errText(e);
+          log.warn(`自拍生图失败：${message}`);
+          return jsonResponse({ error: { message } }, 502);
+        }
       }
       try {
         clock = (await opts.clock?.()) ?? undefined;
@@ -239,6 +352,15 @@ export function installPhotoProxy(
       }
     }
 
+    const scenePrompt = scene
+      ? renderImagePrompt(prompt, {
+        subject: scene.subject ?? '',
+        promptTemplate: scene.promptTemplate,
+        style: scene.style,
+      }, clock)
+      : prompt;
+    if (scene && !selfie) logPrompt(log, 'scene', scenePrompt);
+
     const failures: string[] = [];
     for (const model of candidates) {
       try {
@@ -246,7 +368,9 @@ export function installPhotoProxy(
           const result = await generateSelfieWithModel(selfie, model, body, prompt, original, log, reference!, clock);
           return jsonResponse({ data: [result] });
         }
-        const res = await replayWithModel(original, url, init ?? {}, body, model);
+        const res = await replayWithModel(
+          original, url, init ?? {}, scene ? { ...body, prompt: scenePrompt } : body, model,
+        );
         if (res.ok) return res;
         const detail = await peekError(res);
         if (shouldKeepResponse(res.status, detail)) return res;
@@ -339,7 +463,8 @@ async function generateSelfieWithModel(
 ): Promise<SelfieImage> {
   const api = opts.api.trim().replace(/\/+$/, '');
   if (!api) throw new Error('自拍生图接口没填（selfie_api / image_api）');
-  const prompt = buildSelfiePrompt(originalPrompt, opts, clock);
+  const prompt = renderImagePrompt(originalPrompt, opts, clock);
+  logPrompt(log, `selfie-${opts.mode}`, prompt);
   const size = opts.size.trim() || stringOf(upstreamBody.size) || '1024x1024';
   const headers: Record<string, string> = {};
   if (opts.key.trim()) headers.authorization = `Bearer ${opts.key.trim()}`;
@@ -645,6 +770,17 @@ function logSelfieImage(image: { b64_json?: string; url?: string }, log: SelfieL
     }
     log.info(`自拍图：url，host=${host}`);
   }
+}
+
+/**
+ * 把真正发给接口的提示词写进日志。
+ *
+ * 只记这一条就能回答「为什么图是真人画风」这类问题 —— 以前日志里只有
+ * `自拍接口响应：HTTP 200`，画风不对时全靠读代码猜。折成一行、截到 400 字，
+ * 免得把 sidecar.log 刷成提示词转储。
+ */
+function logPrompt(log: SelfieLogger, kind: string, prompt: string): void {
+  log.info(`生图提示词（${kind}）：${prompt.replace(/\s+/g, ' ').slice(0, 400)}`);
 }
 
 function jsonResponse(value: unknown, status = 200): Response {

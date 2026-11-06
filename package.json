@@ -1,6 +1,6 @@
 {
   "name": "astrbot-plugin-world-journey",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "private": true,
   "type": "module",
   "description": "大肥鱼环游世界 AstrBot 插件：以 raw/ 上游源码为只读引擎，通过 TypeScript 套壳与回环 HTTP 接入 AstrBot。",
@@ -19,7 +19,7 @@
   "scripts": {
     "build": "node scripts/build-engine.mjs",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "tsx --test test/upstream.test.ts test/host.test.ts test/bridge.test.ts test/config.test.ts test/prompt.test.ts test/server.test.ts test/sim.test.ts test/selfie.test.ts test/photo-proxy.test.ts",
+    "test": "tsx --test test/upstream.test.ts test/host.test.ts test/bridge.test.ts test/config.test.ts test/prompt.test.ts test/server.test.ts test/sim.test.ts test/selfie.test.ts test/photo-proxy.test.ts test/photo-prompt.test.ts",
     "check": "npm run typecheck && npm test && npm run upstream:check",
     "upstream:check": "node scripts/upstream-check.mjs",
     "upstream:accept": "node scripts/upstream-check.mjs --accept",

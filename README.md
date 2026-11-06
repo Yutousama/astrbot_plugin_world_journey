@@ -7,9 +7,9 @@
 
 ```text
 raw/          上游 coopani-world-journey 源码（只读基线，当前 0.5.26）
-adapter/      TypeScript 套壳：宿主、配置、事件、媒体、提示词、HTTP、模拟
+adapter/      TypeScript 套壳：宿主、配置、事件、媒体、提示词、生图提示词、HTTP、模拟
 scripts/      构建、部署、npm 源码更新、校验
-test/         31 项测试
+test/         43 项测试
 docs/         架构与上游更新文档
 plugin/       本地构建/联调目录（.gitignore 排除，不提交到本仓库）
 ```
@@ -52,7 +52,7 @@ git status
 ## 开发
 
 ```bash
-npm run check          # typecheck + 31 项测试 + upstream hash/契约
+npm run check          # typecheck + 43 项测试 + upstream hash/契约
 npm run sim -- --days 7 --speed 24 --seed 42 --data ./data/sim --offline
 npm run status -- --data ./data/sim --offline
 npm run prompt -- --data ./data/sim --offline
@@ -112,7 +112,7 @@ raw/                     上游源码基线（只读）
   ↓ 构建时复制
 plugin/.../raw/          安装后的上游源码（运行时动态加载/更新目标）
 plugin/.../engine/
-  sidecar.mjs            adapter 套壳（动态 import raw，约 58KB）
+  sidecar.mjs            adapter 套壳（动态 import raw，约 73KB）
   update.mjs             npm registry 更新器
   ↓ 回环 HTTP（token）
 main.py / bridge.py      AstrBot 命令、工具、提示词、主动消息、sidecar 生命周期
@@ -128,6 +128,7 @@ main.py / bridge.py      AstrBot 命令、工具、提示词、主动消息、si
 | `JourneyWorld` 构造 | `adapter/raw.ts`（动态 import） | 改这一处 |
 | `start/stop/tools/envPromptVars/webUi` | `adapter/bridge.ts` + `contract.ts` | 契约测试会报 |
 | `WorldHost.log/pushEvent` | `adapter/host.ts` | 未知成员 no-op 兜底 |
+| `photo.ts` 的 `photoPrompt/spotFromBeat` | `adapter/photo-prompt.ts`（动态 import，只读复用） | 拍照与汇报配图退回旧提示词并写 warn，旅行不中断 |
 | 私有 `tick`/定时器 | 只在 `adapter/compat/private.ts` 的模拟里 | 只影响模拟，不影响插件 |
 
 安装后的 sidecar 用 Node 直接运行 `plugin/raw/src/*.ts`，所以更新源码只要替换 raw 目录 +

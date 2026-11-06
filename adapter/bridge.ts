@@ -21,7 +21,11 @@ import { EventLog, type EventRecord } from './events.ts';
 import { RawHost, SILENT_LOGGER, withHostFallback, type Logger } from './host.ts';
 import { LocalMediaStore } from './media.ts';
 import { buildPrompt, sanitizePlatformText } from './prompt.ts';
-import { generateSelfieBytes, installPhotoProxy, type SelfieOptions } from './selfie.ts';
+import {
+  DEFAULT_SCENE_TEMPLATE, generateSelfieBytes, installPhotoProxy,
+  type SceneTemplateOptions, type SelfieOptions,
+} from './selfie.ts';
+import { buildScenePrompt } from './photo-prompt.ts';
 
 export interface ToolResult {
   readonly text: string;
@@ -309,8 +313,46 @@ export class RawBridge {
       size: stringOf(cfg.selfieSize),
       imageField: stringOf(cfg.selfieImageField) || 'image_url',
       subject: stringOf(cfg.selfieSubject) || '她本人',
-      promptTemplate: stringOf(cfg.selfiePrompt),
+      promptTemplate: this.selfieTemplate(cfg),
+      // 画风从这条路径起也生效：模板里的 {style} 就是它。
+      style: this.imageStyle(),
     };
+  }
+
+  /**
+   * 自拍模板的取值顺序：新字段 `imagePromptTemplate` → 旧字段 `selfiePrompt` → 空串。
+   *
+   * 空串交给 `selfie.ts` 回落到内置默认模板；老用户只填过 `selfie_prompt` 的，
+   * 内容原样生效，不要求他重填一遍。
+   */
+  private selfieTemplate(cfg: Record<string, unknown>): string {
+    const fresh = stringOf(cfg.imagePromptTemplate).trim();
+    if (fresh) return fresh;
+    return stringOf(cfg.selfiePrompt).trim();
+  }
+
+  /**
+   * 空镜（没开自拍）的模板配置。
+   *
+   * 单独一套模板而不是复用自拍那套：自拍模板里有「画面里只有她一个人」，
+   * 套到风景上就把空镜画成了人像 —— 上游空镜的纪律恰恰是「画面里没有人物」。
+   * `image_prompt_for_scene=false` 时返回 null，回到「上游发什么就发什么」的老行为。
+   */
+  private sceneOptions(): SceneTemplateOptions | null {
+    const cfg = this.cfg as unknown as Record<string, unknown> | null;
+    if (!cfg || cfg.imagePromptForScene === false) return null;
+    return {
+      enabled: true,
+      promptTemplate: stringOf(cfg.imagePromptSceneTemplate).trim() || DEFAULT_SCENE_TEMPLATE,
+      style: this.imageStyle(),
+      subject: stringOf(cfg.selfieSubject),
+    };
+  }
+
+  /** 用户填的「画面风格」（`image_style`）；`none` 与空串在模板渲染时才区分。 */
+  private imageStyle(): string {
+    const cfg = this.cfg as unknown as Record<string, unknown> | null;
+    return cfg ? stringOf(cfg.imageStyle).trim() : '';
   }
 
   /**
@@ -328,8 +370,10 @@ export class RawBridge {
     this.uninstallSelfie = null;
     const selfie = this.selfieOptions();
     const models = this.imageModels();
-    if (!selfie && models.length === 0) return;
-    const proxy = installPhotoProxy({ models, selfie, clock: () => this.localClock() }, this.log);
+    // 开了自拍就不需要再套空镜模板 —— 两条路径互斥，同一时刻只有一套模板生效。
+    const scene = selfie ? null : this.sceneOptions();
+    if (!selfie && !scene && models.length === 0) return;
+    const proxy = installPhotoProxy({ models, selfie, scene, clock: () => this.localClock() }, this.log);
     this.uninstallSelfie = proxy.uninstall;
     this.proxyFetch = proxy.fetch;
     if (selfie) {
@@ -340,6 +384,17 @@ export class RawBridge {
     if (models.length > 1) {
       this.log.info(`生图模型降级已启用：${models.join(' → ')}`);
     }
+    /*
+     * 把「画风从哪来」写在一行里。排查出图风格时，这行比读代码快 ——
+     * 画面风格对自拍、空镜、主动汇报配图是不是真的生效，看这一行就知道。
+     */
+    const cfg = this.cfg as unknown as Record<string, unknown> | null;
+    const templateSource = cfg && stringOf(cfg.imagePromptTemplate).trim()
+      ? 'image_prompt_template'
+      : cfg && stringOf(cfg.selfiePrompt).trim() ? 'selfie_prompt（旧字段）' : '内置默认';
+    this.log.info(
+      `生图提示词：画风「${this.imageStyle() || '（留空=真实旅行照片）'}」｜模板 ${templateSource}｜空镜套模板 ${scene ? '开' : '关'}`,
+    );
   }
 
   /**
@@ -359,14 +414,28 @@ export class RawBridge {
     }
   }
 
-  /** 主动汇报附图：用汇报文本 + 当前状态生成，不写上游 photo 事件。 */
+  /**
+   * 主动汇报附图：和 `/journey_photo`、自动拍照用**同一个场景描述**（上游
+   * `photoPrompt()`，含用户的「画面风格」），末尾再附一行她此刻在做什么。
+   * 不写上游 photo 事件、不进相册。
+   *
+   * 以前这里直接拿汇报文本当提示词，`image_style` 一个字都不参与 —— 同一个人设，
+   * 相册里是动漫、主动汇报里是真人照片。上游导入失败或快照缺字段时退回旧写法，
+   * 汇报照发，绝不因为配图链路挂掉而丢整条消息。
+   */
   async reportImage(scene?: string): Promise<Uint8Array | null> {
     const options = this.selfieOptions();
     if (!options) return null;
-    const reportText = (scene ?? '').trim();
-    const prompt = reportText
-      ? `${reportText}\n\n此刻：${this.now()}`
-      : this.now();
+    // 汇报文本只当「她此刻在做什么」，截一段就够：提示词越长，画风指令越容易被冲淡。
+    const reportText = (scene ?? '').trim().slice(0, 120);
+    const fallback = reportText ? `${reportText}\n\n此刻：${this.now()}` : this.now();
+    let prompt = fallback;
+    try {
+      const base = await buildScenePrompt(await this.snapshot(), this.imageStyle());
+      prompt = reportText ? `${base}\n\n她此刻：${reportText}` : base;
+    } catch (e) {
+      this.log.warn(`汇报配图退回旧提示词：${e instanceof Error ? e.message : String(e)}`);
+    }
     try {
       const clock = await this.localClock();
       const image = await generateSelfieBytes(prompt, options, this.proxyFetch, this.log, clock ?? undefined);
