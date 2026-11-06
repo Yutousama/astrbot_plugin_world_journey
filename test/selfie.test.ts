@@ -118,6 +118,56 @@ test('自拍代理把上游 text-to-image 换成带参考图的 edits，并返�
   }
 });
 
+test('自拍尺寸留空时跟随上游请求体（即「出图尺寸」imageSize）', async () => {
+  const dir = tempDir();
+  const ref = join(dir, 'ref.png');
+  writeFileSync(ref, Buffer.from(PNG_B64, 'base64'));
+  const bodies: string[] = [];
+  const server = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => chunks.push(c));
+    req.on('end', () => {
+      if (req.url === '/v1/images/edits') {
+        bodies.push(Buffer.concat(chunks).toString('utf8'));
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ data: [{ b64_json: PNG_B64 }] }));
+      } else {
+        res.writeHead(404);
+        res.end('nope');
+      }
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  const api = `http://127.0.0.1:${address.port}/v1`;
+  const restore = installSelfieProxy({
+    enabled: true,
+    references: [ref],
+    api,
+    key: 'test-key',
+    model: 'gpt-image-1',
+    mode: 'edit',
+    size: '',
+    imageField: 'image_url',
+    subject: '大肥鱼',
+    promptTemplate: '',
+  }, { info: () => {}, warn: () => {} });
+  try {
+    const res = await fetch('http://upstream.invalid/v1/images/generations', {
+      method: 'POST',
+      body: JSON.stringify({ model: 'gpt-image-1', prompt: '一张真实旅行照片：大理。', size: '1664x928' }),
+    });
+    assert.equal(res.status, 200);
+    assert.equal(bodies.length, 1);
+    // selfieSize 留空 → 用上游 body 的 size（来自 image_size），不再硬写 1024 方图。
+    assert.match(bodies[0]!, /name="size"\r\n\r\n1664x928/);
+  } finally {
+    restore();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
 test('native 模式把 data URL 放进万相 input.messages，并解析 output.choices 图片', async () => {
   const dir = tempDir();
   const ref = join(dir, 'ref.png');

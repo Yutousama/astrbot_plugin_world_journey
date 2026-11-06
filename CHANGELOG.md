@@ -38,8 +38,27 @@
 ### 测试
 
 - 新增：`bridge.test.ts` 点头拒绝/回程 + ComfyUI 自拍停用；`server.test.ts` `/api/ask`、
-  `/api/return-home`；`npm test` 共 **45 项**，全过。`config_map` 迁移逻辑手工表驱动验证
-  （12 月→52 周、6 月→26、显式周优先）。
+  `/api/return-home`；`config_map` 迁移逻辑手工表驱动验证（12 月→52 周、6 月→26、显式周优先）。
+
+### 设置页整理：分组重排 + 两项合并（68 → 66）
+
+- `_conf_schema.json` 全部按使用动线重排，`description` 加【分组】前缀（基本 / 旅行 /
+  日记 / 数据 / 生图 / 生图·ComfyUI / 模板 / 自拍 / 主动消息 / 聊天注入 / 权限 /
+  上游更新 / 高级），AstrBot 配置页按此顺序渲染。此前 `image_protocol` 夹在云端参数
+  中间、更新组排最前、运行时项散落头尾。
+- **删 `upstream_source`**：代码零引用的死字段（只有 README 在讲它）。
+- **`inject_recent_reports` 并入 `recent_report_count`**：0 = 关闭注入（语义等价）。
+  `main.py` 三处判断统一成 `_recent_report_limit()`；老配置里显式 False 的旧开关仍优先，
+  行为不翻转。
+- **`selfie_size` 默认改留空 = 跟随 `image_size`**：兜底链（自拍尺寸 → 上游请求体尺寸 →
+  方形）本就存在，只是旧默认值 `1024x1024` 把它盖住了；旧配置里存过的值照旧生效。
+  `test/selfie.test.ts` 新增锁定用例。
+- 易混项的 hint 讲清分工：`beat_gap`（她想一句的频率）vs `debounce_seconds`（壳层发送
+  合并窗口）、`request_timeout`（普通命令）vs `image_timeout_sec`（出图等待）；
+  `ask_before_depart` hint 补上 `/journey_yes|no` 的实际用法。
+- README 配置表按新分组重排，补上此前漏表的 `node_path`/`sidecar_port`/`request_timeout`/`log_level` 行。
+- 验证：`npm test` 共 **46 项**全过（含自拍尺寸跟随新用例）；`_recent_report_limit` 按 main.py
+  真实源码抽取执行，9/9 分支符合预期（旧开关 False 优先、0=关、上限 20、坏值回退 5）。
 
 ## 1.0.5 — 2026-11-06
 
