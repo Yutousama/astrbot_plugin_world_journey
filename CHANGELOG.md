@@ -11,6 +11,15 @@
   `/journey_photo 带题材` ≥ 0.8.5（subject；不带题材的旧补拍路径不拦）。
 - 「npm 最新版本」查询带 6 小时缓存（`plugin_data/upstream-latest.json`），
   失败静默沿用旧值；版本足够时零网络开销。raw 目录丢失同样给明确提示。
+- **能力实测优先，版本表只是兜底**：`adapter/bridge.ts` 新增 `capabilities()`，
+  随 `/api/health` 上报当前真加载的 raw 有没有 `answerAsk` 方法 / `journey_return_home`
+  工具 / `journey_photo` 的 `subject` 参数。壳的判定先问实测——上游更新或改名后自动跟上，
+  **忘记维护手工表也不会误拦或漏拦**（表退化为文案素材与 sidecar 不可用时的兜底）。
+  `returnHome` 探测走工具名而非 world 方法（后者只是 `ui.invoke` 路由字符串，0.5.19 与
+  `journey_return_home` 工具同批引入，工具面等价）。sidecar 就绪时正常命令只多一次回环
+  health 查询（毫秒级）。
+- 维护约定（README）：新增面板指令 = `capabilities()` 加一行 + `_FEATURE_MIN_RAW`/
+  `_FEATURE_CAP_KEY` 各加一条。
 - 验证：main.py 真实源码抽取驱动 8/8（0.8.6 全放行 / 0.5.26 ask+题材拦截、back 放行 /
   开关文案分支 / npm 版本不够不提 / 缓存过期回退 / raw 丢失）。
 
