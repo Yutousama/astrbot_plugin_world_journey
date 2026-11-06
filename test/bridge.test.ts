@@ -73,6 +73,11 @@ test('点头/回程桥接：没有在等批时明确拒绝；在路上能叫她�
     const back = await bridge.returnHome();
     assert.equal(back.ok, true);
     assert.ok(bridge.events.recent(30).some((e) => e.type === 'journey.depart'));
+
+    // 能力实测：0.8.6 的 raw 真有这三样，health 应如实上报（壳的版本闸信这个）。
+    const caps = bridge.capabilities();
+    assert.deepEqual(caps, { answerAsk: true, returnHome: true, photoSubject: true });
+    assert.deepEqual(bridge.health().capabilities, caps);
   } finally {
     await bridge.stop();
   }

@@ -293,6 +293,7 @@ export class RawBridge {
 
   health(): {
     ok: true; version: string; upstreamVersion: string; eventLogId: string; lastSeq: number;
+    capabilities: Record<string, boolean>;
   } {
     return {
       ok: true,
@@ -300,7 +301,38 @@ export class RawBridge {
       upstreamVersion: this.upstreamVersion,
       eventLogId: this.events.eventLogId,
       lastSeq: this.events.lastSeq,
+      capabilities: this.capabilities(),
     };
+  }
+
+  /** 能力实测：当前**真加载进来的 raw** 有没有这些方法/参数，如实上报给壳层。
+   *
+   * 壳层的指令版本闸优先信这份实测，而不是手工维护的「功能→最低版本」表 ——
+   * 上游一更新这里自动跟上，忘记登记表也不会误拦（表退化为文案素材和离线兜底）。
+   * world 还没起来返回空对象：壳层视作「测不到」，走版本表兜底。
+   */
+  capabilities(): Record<string, boolean> {
+    const world = this.world as unknown as Record<string, unknown> | null;
+    if (!world) return {};
+    let answerAsk = false;
+    let returnHome = false;
+    let photoSubject = false;
+    try {
+      // answerAsk 是 world 的 private 方法（TS 层面），运行时在原型上可见，直接探。
+      answerAsk = typeof world.answerAsk === 'function';
+      const tools = this.tools();
+      // returnHome 只是 ui.invoke 的路由字符串，不是 world 方法 —— 用同批引入的
+      // journey_return_home 工具（0.5.19）作为能力面。
+      const names = new Set(tools.map((t) => t.name));
+      returnHome = names.has('journey_return_home');
+      const photo = tools.find((t) => t.name === 'journey_photo');
+      const props = (photo?.parameters as { properties?: Record<string, unknown> } | undefined)?.properties;
+      photoSubject = !!props && 'subject' in props;
+    } catch {
+      // tools() 异常时按「测不到」上报，让壳层走版本表兜底。
+      return {};
+    }
+    return { answerAsk, returnHome, photoSubject };
   }
 
   defaultConfig(): JourneyConfigSection {

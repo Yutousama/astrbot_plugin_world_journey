@@ -41,6 +41,8 @@ test('sidecar：鉴权、状态、工具、提示词、事件、动作、媒体�
     assert.equal(health.status, 200);
     assert.equal(health.body.upstreamVersion, LOCK_VERSION);
     assert.ok(health.body.eventLogId);
+    assert.equal(health.body.capabilities.answerAsk, true);
+    assert.equal(health.body.capabilities.photoSubject, true);
 
     const status = await getJson('/api/status');
     assert.equal(status.status, 200);
