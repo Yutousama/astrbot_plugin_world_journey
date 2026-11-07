@@ -82,6 +82,8 @@
 - 「npm 最新版本」查询带 6 小时缓存（`plugin_data/upstream-latest.json`），失败静默
   沿用旧值——只在功能缺失时才走这条网络路径；raw 目录丢失同样给明确提示。
   sidecar 就绪时正常命令只多一次回环 health 查询（毫秒级）。
+  （审核修正：该查询最初用同步 `urllib` 在异步命令链里发起，会卡 AstrBot 事件循环
+  最长 5 秒——已改为 `aiohttp` 异步请求，与 `bridge.py` 同款依赖。）
 - 维护约定（README）：新增面板指令 = `capabilities()` 加一行 + `_FEATURE_MIN_RAW`/
   `_FEATURE_CAP_KEY` 各加一条。
 - 验证：main.py 真实源码抽取驱动 8/8（实测 true 优先于错表 / 实测 false 拦 0.8.6 /
