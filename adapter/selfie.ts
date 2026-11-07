@@ -31,6 +31,12 @@ export interface SelfieOptions {
    */
   readonly model: string | readonly string[];
   readonly mode: 'edit' | 'generation' | 'native';
+  /**
+   * `edit` 模式直接发 JSON（带 data URL），跳过 multipart。
+   *
+   * 有些中转站/上游只认 `application/json`，multipart 直接 415/502；打开后省一轮无效请求。
+   */
+  readonly editJson?: boolean;
   readonly nativeUrl?: string;
   readonly size: string;
   readonly imageField: string;
@@ -41,6 +47,24 @@ export interface SelfieOptions {
    * 模板没写 `{style}` 时补一行「画风：X」。留空或 `none` = 不指定。
    */
   readonly style?: string;
+  /**
+   * 兼容开关：不发送 `response_format`。
+   *
+   * 有的中转站/上游不认这个字段，带上就 400；关掉后改用服务商默认返回格式。
+   */
+  readonly noResponseFormat?: boolean;
+  /**
+   * 兼容开关：不发送 `size`。
+   *
+   * 有的上游只认自己的默认尺寸，带 `size` 会报 `Argument not supported: size`。
+   */
+  readonly noSize?: boolean;
+}
+
+/** 生图接口的「请求形状兼容」开关；空镜重放与自拍共用同一组语义。 */
+export interface ImageCompatOptions {
+  readonly noResponseFormat?: boolean;
+  readonly noSize?: boolean;
 }
 
 /**
@@ -69,6 +93,11 @@ export interface PhotoProxyOptions {
   readonly selfie: SelfieOptions | null;
   /** 空镜模板改写；`enabled` 为假 = 空镜提示词一个字都不动。 */
   readonly scene?: SceneTemplateOptions | null;
+  /**
+   * 请求形状兼容开关：作用于「空镜 / 原样重放」这条路径的请求体
+   * （自拍路径读 `SelfieOptions` 里的同名字段）。
+   */
+  readonly compat?: ImageCompatOptions;
   /**
    * 她所在城市的当地时间 `HH:MM`。每次生图前取一次；
    * 拿不到（或没传）时用本机时间兜底。
@@ -308,8 +337,10 @@ export function installPhotoProxy(
   const scene = opts.scene && opts.scene.enabled === true && opts.scene.promptTemplate.trim()
     ? opts.scene
     : null;
-  // 自拍、空镜套模板，或真正配了「第二个模型」时才需要拦请求；单个模型上游自己就发对了。
-  if (!selfie && !scene && models.length < 2) return { uninstall: () => {}, fetch: fetchImpl };
+  const compat = opts.compat ?? {};
+  const compatActive = compat.noResponseFormat === true || compat.noSize === true;
+  // 自拍、空镜套模板、配了「第二个模型」或开了兼容开关时才需要拦请求；都没有时上游自己就发对了。
+  if (!selfie && !scene && models.length < 2 && !compatActive) return { uninstall: () => {}, fetch: fetchImpl };
   if (selfie && selfie.references.length === 0) {
     log.warn('自拍已开启，但没有参考图；照片会失败而不是退回空镜。请在插件配置里上传 selfie_reference。');
   }
@@ -368,8 +399,10 @@ export function installPhotoProxy(
           const result = await generateSelfieWithModel(selfie, model, body, prompt, original, log, reference!, clock);
           return jsonResponse({ data: [result] });
         }
+        const outgoing: Record<string, unknown> = scene ? { ...body, prompt: scenePrompt } : { ...body };
+        applyCompat(outgoing, compat);
         const res = await replayWithModel(
-          original, url, init ?? {}, scene ? { ...body, prompt: scenePrompt } : body, model,
+          original, url, init ?? {}, outgoing, model,
         );
         if (res.ok) return res;
         const detail = await peekError(res);
@@ -479,40 +512,74 @@ async function generateSelfieWithModel(
       model,
       prompt,
       n: 1,
-      size,
-      response_format: 'b64_json',
       [opts.imageField.trim() || 'image_url']: opts.imageField.trim() === 'image'
         ? Buffer.from(reference.bytes).toString('base64')
         : dataUrl,
     };
+    applyCompat(payload, opts);
     const res = await postJson(`${api}/images/generations`, headers, payload, fetchImpl);
+    if (!res.ok) {
+      const detail = (await res.text()).slice(0, 500);
+      throw new Error(`自拍接口 HTTP ${res.status}${detail ? `：${detail}` : ''}`);
+    }
     log.info(`自拍接口响应：HTTP ${res.status}（generation），content-length=${res.headers.get('content-length') ?? '?'}`);
     const image = parseImagePayload(await readJson(res, log));
     logSelfieImage(image, log);
     return image;
   }
 
-  const form = new FormData();
-  form.set('model', model);
-  form.set('prompt', prompt);
-  form.set('n', '1');
-  form.set('size', size);
-  form.set('response_format', 'b64_json');
-  form.set('image', new Blob([reference.bytes], { type: reference.mime }), reference.name);
-  let res = await fetchImpl(`${api}/images/edits`, { method: 'POST', headers, body: form });
-  if (res.status === 400 || res.status === 415) {
-    const peek = (await res.clone().text()).slice(0, 500);
-    // 有些中转站不收 multipart，只认 JSON 的 data URL；再试一次。
-    if (/multipart|content-type|image|图片/i.test(peek)) {
-      const dataUrl = `data:${reference.mime};base64,${Buffer.from(reference.bytes).toString('base64')}`;
-      res = await postJson(`${api}/images/edits`, headers, {
-        model,
-        prompt,
-        n: 1,
-        size,
-        response_format: 'b64_json',
-        image: dataUrl,
-      }, fetchImpl);
+  /*
+   * 编辑接口的两套形状：
+   *   - multipart（OpenAI 原生 /images/edits 只认这个）；
+   *   - JSON + data URL（不少中转站/上游只认 application/json，multipart 直接 415/502）。
+   * `selfie_edit_json` 打开时直接发 JSON，省掉那一轮注定失败的 multipart；
+   * 关着时仍先发 multipart，失败再按错误内容兜底一次 JSON。
+   */
+  const editField = opts.imageField.trim() || 'image_url';
+  const editImage = editField === 'image'
+    ? Buffer.from(reference.bytes).toString('base64')
+    : `data:${reference.mime};base64,${Buffer.from(reference.bytes).toString('base64')}`;
+  const editJsonBody = (): Record<string, unknown> => {
+    const jsonBody: Record<string, unknown> = {
+      model,
+      prompt,
+      n: 1,
+      [editField]: editImage,
+    };
+    if (opts.noSize !== true) jsonBody.size = size;
+    if (opts.noResponseFormat !== true) jsonBody.response_format = 'b64_json';
+    return jsonBody;
+  };
+  const postEditJson = (): Promise<Response> =>
+    postJson(`${api}/images/edits`, headers, editJsonBody(), fetchImpl);
+
+  let res: Response;
+  if (opts.editJson === true) {
+    res = await postEditJson();
+  } else {
+    const form = new FormData();
+    form.set('model', model);
+    form.set('prompt', prompt);
+    form.set('n', '1');
+    if (opts.noSize !== true) form.set('size', size);
+    if (opts.noResponseFormat !== true) form.set('response_format', 'b64_json');
+    form.set('image', new Blob([reference.bytes], { type: reference.mime }), reference.name);
+    res = await fetchImpl(`${api}/images/edits`, { method: 'POST', headers, body: form });
+    /*
+     * 415：对方明确不收 multipart。
+     * 5xx：中转站把上游的「形状不对」包成了 502/500，正文里往往看不出原因，也值得换一次 JSON。
+     * 400/422：只有正文点名 multipart / content-type / image 时才换，避免把真正的参数错误重试一遍。
+     */
+    const retryable = res.status === 415
+      || res.status >= 500
+      || res.status === 400
+      || res.status === 422;
+    if (retryable) {
+      const peek = await res.clone().text().catch(() => '');
+      if (res.status >= 500 || res.status === 415
+        || /multipart|content-type|application\/json|image|图片/i.test(peek)) {
+        res = await postEditJson();
+      }
     }
   }
   if (!res.ok) {
@@ -529,6 +596,17 @@ async function loadSelfieReference(opts: SelfieOptions, fetchImpl: typeof fetch)
   const references = opts.references.filter(Boolean);
   if (!references.length) throw new Error('没有参考图：请在插件配置里上传 selfie_reference');
   return loadReference(references[0]!, fetchImpl);
+}
+
+/**
+ * 按兼容开关删掉请求体里的字段。
+ *
+ * 只动 `response_format` / `size` 两个：前者有的上游不认、后者有的上游只收自己的默认尺寸。
+ * 其余字段（model/prompt/n/参考图）原样保留。
+ */
+function applyCompat(payload: Record<string, unknown>, opts: ImageCompatOptions): void {
+  if (opts.noResponseFormat === true) delete payload.response_format;
+  if (opts.noSize === true) delete payload.size;
 }
 
 /**
@@ -611,6 +689,12 @@ async function generateNative(
   const nativeUrl = (opts.nativeUrl ?? '').trim()
     || `${new URL(api).origin}/api/v1/services/aigc/multimodal-generation/generation`;
   const dataUrl = `data:${reference.mime};base64,${Buffer.from(reference.bytes).toString('base64')}`;
+  const parameters: Record<string, unknown> = {
+    n: 1,
+    watermark: false,
+    thinking_mode: false,
+  };
+  if (opts.noSize !== true) parameters.size = nativeSize(size);
   const payload = {
     model,
     input: {
@@ -619,12 +703,7 @@ async function generateNative(
         content: [{ image: dataUrl }, { text: prompt }],
       }],
     },
-    parameters: {
-      size: nativeSize(size),
-      n: 1,
-      watermark: false,
-      thinking_mode: false,
-    },
+    parameters,
   };
   const res = await postJson(nativeUrl, headers, payload, fetchImpl);
   log.info(`自拍接口响应：HTTP ${res.status}（native），content-length=${res.headers.get('content-length') ?? '?'}`);

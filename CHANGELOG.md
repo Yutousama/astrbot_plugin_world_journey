@@ -1,5 +1,43 @@
 # 更新日志
 
+## 1.0.8 — 2026-11-07
+
+本版主题：**生图接口兼容层**——按服务商的报错逐个关掉不认的字段，参考图过大时自动压缩。
+
+### 新增：三个请求形状开关（默认关，保持老行为）
+
+- `image_no_response_format`：不发 `response_format`，给不认这个字段的接口；
+- `image_no_size`：不发 `size`，给回 `Argument not supported: size` 的接口
+  （此时「出图尺寸」「自拍尺寸」不生效）；
+- `selfie_edit_json`：`edit` 模式直接发 JSON（参考图放 `selfie_image_field` 的 data URL），
+  给只认 `application/json` 的中转站/上游；关着时 multipart 失败、错误点名
+  multipart / Content-Type 也会自动兜底一次 JSON。
+
+### 修复：编辑模式 JSON 兜底
+
+- 兜底字段从写死的 `image` 改为 `selfie_image_field`（默认 `image_url`）——不少上游只认后者；
+- 触发条件从「400/415 + 正文点名」放宽到 415 与所有 5xx（中转站把上游形状错误包成 502 的情况）；
+- JSON 编辑体会按开关正确携带 `response_format` 与 `size`（上一轮重写时漏掉过，本版补上）。
+
+### 新增：参考图自动压缩（`selfie_reference_shrink`，默认开）
+
+- 超过 600 KB 的参考图压一份（最长边 1024、JPEG q82）再发给接口，**原图不动**，
+  产物在 `files/selfie_reference/_cache/`；
+- 背景：3 MB 的 PNG base64 后请求体接近 4 MB，有的上游直接 `502`，有的收下图却不用 ——
+  表现是「人物和参考图完全不像」；压缩后同一请求 20–30 秒出图，人物一致；
+- 没装 Pillow / 压缩失败时退回原图，只记一条 warning。
+
+### 修复：generation 模式错误可读
+
+- 以前上游 400 会被吞成「返回里没有图片」；现在直接抛
+  `自拍接口 HTTP <status>：<正文>`。
+
+### 验证
+
+- `npm run check` 全绿（typecheck + 51 个测试 + 上游校验）；
+- 实测链路：中转站 JSON + `image_url` + 150 KB 参考图 → 200，27 秒，人物与参考图一致；
+- 打包产物 `engine/sidecar.mjs` 冒烟：请求体带 `response_format=b64_json`、按开关不带 `size`。
+
 ## 1.0.7 — 2026-11-07
 
 审核修复版：**1.0.6 的完整功能都包含在本版**（1.0.6 已过审读但未分发，本版随审核修正定版）。

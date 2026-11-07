@@ -374,6 +374,8 @@ export class RawBridge {
       // 自拍模型没单独填时，用「生图模型名」的整个列表按顺序降级。
       model: selfieModel ? [selfieModel] : this.imageModels(),
       mode: modeRaw === 'generation' || modeRaw === 'native' ? modeRaw : 'edit',
+      // 编辑接口直接发 JSON：给只认 application/json 的中转站/上游。
+      editJson: cfg.selfieEditJson === true,
       nativeUrl: stringOf(cfg.selfieNativeUrl),
       size: stringOf(cfg.selfieSize),
       imageField: stringOf(cfg.selfieImageField) || 'image_url',
@@ -381,6 +383,9 @@ export class RawBridge {
       promptTemplate: this.selfieTemplate(cfg),
       // 画风从这条路径起也生效：模板里的 {style} 就是它。
       style: this.imageStyle(),
+      // 兼容开关：有些上游不认 response_format / size，带上就 400。
+      noResponseFormat: cfg.imageNoResponseFormat === true,
+      noSize: cfg.imageNoSize === true,
     };
   }
 
@@ -446,8 +451,15 @@ export class RawBridge {
     }
     // 开了自拍就不需要再套空镜模板 —— 两条路径互斥，同一时刻只有一套模板生效。
     const scene = selfie ? null : this.sceneOptions();
-    if (!selfie && !scene && models.length === 0) return;
-    const proxy = installPhotoProxy({ models, selfie, scene, clock: () => this.localClock() }, this.log);
+    // 兼容开关是全局的：即使没开自拍/模板，也要拦下来把字段删掉再发。
+    const cfg = this.cfg as unknown as Record<string, unknown> | null;
+    const compat = {
+      noResponseFormat: cfg?.imageNoResponseFormat === true,
+      noSize: cfg?.imageNoSize === true,
+    };
+    const compatActive = compat.noResponseFormat || compat.noSize;
+    if (!selfie && !scene && models.length === 0 && !compatActive) return;
+    const proxy = installPhotoProxy({ models, selfie, scene, compat, clock: () => this.localClock() }, this.log);
     this.uninstallSelfie = proxy.uninstall;
     this.proxyFetch = proxy.fetch;
     if (selfie) {
@@ -462,7 +474,6 @@ export class RawBridge {
      * 把「画风从哪来」写在一行里。排查出图风格时，这行比读代码快 ——
      * 画面风格对自拍、空镜、主动汇报配图是不是真的生效，看这一行就知道。
      */
-    const cfg = this.cfg as unknown as Record<string, unknown> | null;
     const templateSource = cfg && stringOf(cfg.imagePromptTemplate).trim()
       ? 'image_prompt_template'
       : cfg && stringOf(cfg.selfiePrompt).trim() ? 'selfie_prompt（旧字段）' : '内置默认';

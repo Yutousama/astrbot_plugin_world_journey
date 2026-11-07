@@ -18,14 +18,15 @@
 4. 停事件泵、停 sidecar、注销工具；
 5. 备份 `raw/` 为 `.raw.bak-<旧版本>`，把 staging 换到 `raw/`；
 6. 启动 sidecar，跑公开面契约检查；
-7. 成功：重新注册工具、恢复事件泵、删备份；
+7. 成功：重新注册工具、恢复事件泵、删备份（成功回复默认不附更新日志，看 `update_show_changelog`）；
 8. 失败：删新 `raw/`、恢复备份、重启旧 sidecar，然后把错误回给管理员。
 
 配置项：
 
 | 项 | 默认 | 说明 |
 |---|---|---|
-| `allow_upstream_update` | `true` | 关闭后 `/journey_update` 拒绝执行 |
+| `allow_upstream_update` | `false` | 关闭后 `/journey_update` 拒绝执行 |
+| `update_show_changelog` | `false` | 打开后更新成功时附上新版 `raw/CHANGELOG.md` 里「旧版 → 新版」的段落；关闭只报版本与结果 |
 | `upstream_package` | `coopani-world-journey` | npm 包名 |
 | `upstream_registry` | `https://registry.npmjs.org` | registry 根 |
 | `upstream_source` | npm 页面 | 只用于展示 |

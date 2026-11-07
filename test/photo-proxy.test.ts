@@ -245,6 +245,65 @@ test('RawBridge 关掉 imagePromptForScene 后，空镜不吃模板；开着才�
   }
 });
 
+test('兼容开关：重放时代理真的不发 response_format 和 size', async () => {
+  const seen: Array<Record<string, unknown>> = [];
+  const server = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => chunks.push(c));
+    req.on('end', () => {
+      seen.push(JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(jsonText({ data: [{ b64_json: PNG_B64 }] }));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  const proxy = installPhotoProxy({
+    models: [],
+    selfie: null,
+    scene: { enabled: true, promptTemplate: '画风：{style}\n{scene}', style: '' },
+    compat: { noResponseFormat: true, noSize: true },
+  }, { info: () => {}, warn: () => {} });
+  try {
+    const res = await fetch(`http://127.0.0.1:${address.port}/v1/images/generations`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: jsonText({
+        model: 'only-model',
+        prompt: '一张真实旅行照片：大理。',
+        size: '1024x1024',
+        response_format: 'b64_json',
+        watermark: false,
+      }),
+    });
+    assert.equal(res.status, 200);
+    assert.equal(seen.length, 1);
+    assert.equal('size' in seen[0]!, false);
+    assert.equal('response_format' in seen[0]!, false);
+    // 其余字段原样保留：兼容开关只删这两个。
+    assert.equal(seen[0]!.model, 'only-model');
+    assert.equal(seen[0]!.watermark, false);
+  } finally {
+    proxy.uninstall();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test('只开兼容开关、没自拍没模板没模型列表时也要拦下来删字段', async () => {
+  const before = globalThis.fetch;
+  const proxy = installPhotoProxy(
+    { models: [], selfie: null, compat: { noSize: true } },
+    { info: () => {}, warn: () => {} },
+  );
+  try {
+    assert.notEqual(globalThis.fetch, before);
+  } finally {
+    proxy.uninstall();
+    assert.equal(globalThis.fetch, before);
+  }
+});
+
 test('RawBridge 从 imageModels 读列表，上游 album.shoot 真的自动降级', async () => {
   const seen: string[] = [];
   const server = createServer((req, res) => {

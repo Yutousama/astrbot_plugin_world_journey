@@ -1,6 +1,6 @@
 {
   "name": "astrbot-plugin-world-journey",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "private": true,
   "type": "module",
   "description": "大肥鱼环游世界 AstrBot 插件：以 raw/ 上游源码为只读引擎，通过 TypeScript 套壳与回环 HTTP 接入 AstrBot。",

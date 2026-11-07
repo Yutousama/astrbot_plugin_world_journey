@@ -168,6 +168,167 @@ test('自拍尺寸留空时跟随上游请求体（即「出图尺寸」imageSiz
   }
 });
 
+test('兼容开关：自拍请求不带 response_format / size，edit 与 generation 都生效', async () => {
+  for (const mode of ['edit', 'generation'] as const) {
+    const dir = tempDir();
+    const ref = join(dir, 'ref.png');
+    writeFileSync(ref, Buffer.from(PNG_B64, 'base64'));
+    const bodies: string[] = [];
+    const server = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (c: Buffer) => chunks.push(c));
+      req.on('end', () => {
+        bodies.push(Buffer.concat(chunks).toString('utf8'));
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ data: [{ b64_json: PNG_B64 }] }));
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    assert.ok(address && typeof address === 'object');
+    const restore = installSelfieProxy({
+      enabled: true,
+      references: [ref],
+      api: `http://127.0.0.1:${address.port}/v1`,
+      key: '',
+      model: 'mock-model',
+      mode,
+      size: '1024x1024',
+      imageField: 'image_url',
+      subject: '大肥鱼',
+      promptTemplate: '',
+      noResponseFormat: true,
+      noSize: true,
+    }, { info: () => {}, warn: () => {} });
+    try {
+      const res = await fetch('http://upstream.invalid/v1/images/generations', {
+        method: 'POST',
+        body: JSON.stringify({ model: 'mock-model', prompt: '一张真实旅行照片：大理。' }),
+      });
+      assert.equal(res.status, 200);
+      assert.equal(bodies.length, 1);
+      const sent = bodies[0]!;
+      assert.doesNotMatch(sent, /response_format/);
+      if (mode === 'generation') {
+        const json = JSON.parse(sent) as Record<string, unknown>;
+        assert.equal('size' in json, false);
+        assert.equal('response_format' in json, false);
+        assert.ok('image_url' in json);
+      } else {
+        assert.doesNotMatch(sent, /name="size"/);
+        assert.doesNotMatch(sent, /name="response_format"/);
+        assert.match(sent, /name="image"/);
+      }
+    } finally {
+      restore();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  }
+});
+
+test('selfie_edit_json：编辑接口直接发 JSON，参考图放在 image_url', async () => {
+  const dir = tempDir();
+  const ref = join(dir, 'ref.png');
+  writeFileSync(ref, Buffer.from(PNG_B64, 'base64'));
+  const bodies: string[] = [];
+  const server = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => chunks.push(c));
+    req.on('end', () => {
+      bodies.push(Buffer.concat(chunks).toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ data: [{ b64_json: PNG_B64 }] }));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  const restore = installSelfieProxy({
+    enabled: true,
+    references: [ref],
+    api: `http://127.0.0.1:${address.port}/v1`,
+    key: '',
+    model: 'mock-model',
+    mode: 'edit',
+    editJson: true,
+    size: '1024x1024',
+    imageField: 'image_url',
+    subject: '大肥鱼',
+    promptTemplate: '',
+  }, { info: () => {}, warn: () => {} });
+  try {
+    const res = await fetch('http://upstream.invalid/v1/images/generations', {
+      method: 'POST',
+      body: JSON.stringify({ model: 'mock-model', prompt: '一张真实旅行照片：大理。' }),
+    });
+    assert.equal(res.status, 200);
+    assert.equal(bodies.length, 1);
+    const sent = JSON.parse(bodies[0]!) as Record<string, unknown>;
+    assert.match(String(sent.image_url), /^data:image\/png;base64,/);
+    assert.equal('image' in sent, false);
+    // 默认形状：要 b64_json（外链在这台机器上下不动），尺寸照常带。
+    assert.equal(sent.response_format, 'b64_json');
+    assert.equal(sent.size, '1024x1024');
+  } finally {
+    restore();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test('multipart 被中转站包成 502 时，自动兜底一次 JSON（image_url）', async () => {
+  const dir = tempDir();
+  const ref = join(dir, 'ref.png');
+  writeFileSync(ref, Buffer.from(PNG_B64, 'base64'));
+  const bodies: string[] = [];
+  const server = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => chunks.push(c));
+    req.on('end', () => {
+      const body = Buffer.concat(chunks).toString('utf8');
+      bodies.push(body);
+      if (String(req.headers['content-type'] ?? '').includes('multipart')) {
+        res.writeHead(502, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'openai_error', type: 'bad_response_status_code' } }));
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ data: [{ b64_json: PNG_B64 }] }));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  const restore = installSelfieProxy({
+    enabled: true,
+    references: [ref],
+    api: `http://127.0.0.1:${address.port}/v1`,
+    key: '',
+    model: 'mock-model',
+    mode: 'edit',
+    size: '1024x1024',
+    imageField: 'image_url',
+    subject: '大肥鱼',
+    promptTemplate: '',
+    noSize: true,
+    noResponseFormat: true,
+  }, { info: () => {}, warn: () => {} });
+  try {
+    const res = await fetch('http://upstream.invalid/v1/images/generations', {
+      method: 'POST',
+      body: JSON.stringify({ model: 'mock-model', prompt: '一张真实旅行照片：大理。' }),
+    });
+    assert.equal(res.status, 200);
+    assert.equal(bodies.length, 2);
+    const retried = JSON.parse(bodies[1]!) as Record<string, unknown>;
+    assert.match(String(retried.image_url), /^data:image\/png;base64,/);
+    assert.equal('size' in retried, false);
+    assert.equal('response_format' in retried, false);
+  } finally {
+    restore();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
 test('native 模式把 data URL 放进万相 input.messages，并解析 output.choices 图片', async () => {
   const dir = tempDir();
   const ref = join(dir, 'ref.png');
