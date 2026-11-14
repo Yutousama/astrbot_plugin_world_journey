@@ -44,6 +44,12 @@ plugin/         AstrBot Python 插件
   Python 从 `/media/<file>` 取图。
 - 配置：Python 写 `engine-config.json`（`{engine:...,wrapper:{offline}}`），sidecar 每请求检查 mtime
   并合并到 raw 的活配置对象。
+- **还有第二条通道：上游的构造参数**。有些东西上游**不放在配置里**，而是 `new JourneyWorld({...})`
+  时一次注入 —— 目前就一个：`botName`（她在碰面池里的宠物名，Coopani 那边来自 `ctx.botName`）。
+  链路是 `_conf_schema.json` 的 `pet_name` → `bridge.py` spawn 时 `--bot-name` →
+  `cli.ts` → `RawBridgeOptions.botName` → `normalizeBotName()` → `JourneyWorld`。
+  它**不进 `engine-config.json`**（`config_map.py` 的白名单不加，写了上游也不认），
+  也因此**不受 mtime 热更影响：改名要重启 sidecar**。
 - 生图代理：`selfie.ts` 在 sidecar 进程内包一层 `fetch`，只拦截 `POST .../images/generations`：
   - **接口形状**：把请求改成这家服务商认的写法。**面板上已经没有这一项，固定 `auto`** ——
     `config_map.py` 不再映射 `image_shape`，也不再映射那四个会被 TS 当成显式形状的旧键
