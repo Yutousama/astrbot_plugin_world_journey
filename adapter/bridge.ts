@@ -688,7 +688,8 @@ export class RawBridge {
         + '但形状被钉死在别的写法上：Grok 的 /images/edits 只收 application/json，'
         + '参考图必须是 image:{url} 对象，也没有 size 这个字段。'
         + '最坏的情况是它收下请求、把不认识的字段丢掉，出一张和参考图毫无关系的照片。'
-        + '把「生图·接口形状」改成 grok，或留 auto 让它按模型名认。',
+        + '要钉死这一家的写法，在【高级】额外引擎配置里写 {"imageShape":"grok"}；'
+        + '不钉就删掉这个键，缺省会按模型名自己认。',
       );
       return;
     }

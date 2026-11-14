@@ -39,8 +39,10 @@ export interface SelfieOptions {
    */
   readonly model: string | readonly string[];
   /**
-   * 面板上的「接口形状」（`image_shape`）。`auto` / 空 / 认不出的值交给 `resolveImageShape`
-   * 按旧字段和接口地址推断。
+   * 「接口形状」（引擎键 `imageShape`）。**面板上已经没有这一项**：形状默认由
+   * `resolveImageShape` 按模型名、接口地址和旧三件套自己认（实测按模型名认的都对）。
+   * 真要钉死某种方言，走 `extra_config` 的 `{"imageShape":"grok"}`；`auto` / 空 /
+   * 认不出的值都落回自动判断。
    */
   readonly shape?: string;
   /**
@@ -111,7 +113,9 @@ export type ImageShape = 'grok' | 'openai' | 'relay' | 'generation' | 'wan';
 /** 这个形状是谁定的 —— 日志要能说清「这是你选的，还是我们替你认的、凭什么认的」。 */
 export type ShapeSource = 'panel' | 'legacy' | 'model' | 'host' | 'default';
 
-/** 解析形状要看的输入：面板值优先，其次旧三件套，再按模型名认，最后按接口地址认。 */
+/** 解析形状要看的输入：显式钉住的值优先（`imageShape`，现在只能来自 extra_config），
+ *  其次旧三件套（`selfie_mode` / `selfie_edit_json` / `selfie_image_field`），
+ *  再按模型名认，最后按接口地址认。 */
 export interface ShapeInput {
   readonly shape?: string;
   readonly api?: string;
@@ -139,7 +143,7 @@ export interface ResolvedShape {
    */
   readonly imageField: string;
   readonly source: ShapeSource;
-  /** 不是面板选的、也不是旧字段折出来的（= 我们替用户认的）。 */
+  /** 不是用户钉死的、也不是旧字段折出来的（= 我们替用户认的）。 */
   readonly guessed: boolean;
 }
 
@@ -216,7 +220,7 @@ export function resolveImageShape(input: ShapeInput): ResolvedShape {
 /** 日志用的一行话：形状 + 是谁定的。认出来的必须说清凭什么，否则排查时是猜谜。 */
 export function describeShape(shape: ResolvedShape, model?: string): string {
   switch (shape.source) {
-    case 'panel': return `${shape.shape}（面板选的）`;
+    case 'panel': return `${shape.shape}（extra_config 钉的）`;
     case 'legacy': return `${shape.shape}（由旧的自拍字段折出来）`;
     case 'model': return `${shape.shape}（按模型名${model ? ` ${model}` : ''}认出）`;
     case 'host': return `${shape.shape}（按接口地址认出）`;
