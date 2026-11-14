@@ -17,8 +17,18 @@
   措辞必须跟实际走的那条链路一致，否则排查方向直接被带偏；
 - 只有**真的试过了且失败**才有这句：`report_image_mode=off`、概率没抽中、
   事件本身已带照片，都不补；
-- 原因取自 sidecar 的错误文本并压缩：优先取 JSON 里的 `message`，其次只留 `HTTP <码>`，
-  都没有就剥掉 `{}"[]` 后截 60 字。
+- 原因取自 sidecar 的错误文本并压缩：优先取 `message`、**剥掉 `(request id: …)`**
+  （那串号在聊天里没用，要查去看日志），其次只留 `HTTP <码>`，都没有就剥掉 `{}"[]`；
+  最后统一 `_clip` 压到 60 字。压缩规则是拿**实测回来的真实错误**校准的：
+  中转站不存在的模型会回 180 字的 `No available channel for model … under group 管理员
+  (distributor) (request id: 2026…)`，不封顶不剔号就是一坨没法看的东西。
+
+### 实测（部署后的代码，两条失败路径都不出图、不花配额）
+
+```
+【死端口（连接级失败）】  图片：null   reason："gpt-image-1：fetch failed"
+【中转站上不存在的模型名】 图片：null   reason："wj-no-such-model-xyz：生图接口 HTTP 503：{...180 字...}"
+```
 
 ### 接线
 
