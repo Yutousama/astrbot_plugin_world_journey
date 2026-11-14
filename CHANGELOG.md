@@ -1,5 +1,59 @@
 # 更新日志
 
+## 未发布 — 补上「她的名字」：碰面池里的宠物名不再写死 `astrbot`
+
+1.8.0 时代就漏在壳上的一处接线，**不动版本号**。
+
+### 症状与根因
+
+别人的鱼在公共池里都有名字（「玄月的大肥鱼」「风子家的鱼宝宝」），我们的那一条叫 `astrbot`。
+
+上游根本没有「宠物名」这个配置项 —— 名字只能由宿主在**构造引擎时**注入：
+`JourneyWorldOptions.botName`（Coopani 那边是 `ctx.botName`，即桌宠的名字）。套壳把这一行写成了
+`botName: 'astrbot'`，于是所有 AstrBot 用户在 `https://cooppetsjourney.top` 里互相同名。
+
+名字在上游有三处实际用途，前两处只是难看，第三处是**真漏功能**：
+
+| 上游位置 | 拿名字干什么 | 同名时的实际后果 |
+|---|---|---|
+| `raw/src/world.ts:1835` | 每个碰面请求的 `pet`（心跳、邀约、接邀约、路标、名片） | 别人看到的一律 `astrbot`；接了她的约，发起者那边落库也是 `astrbot` |
+| `raw/src/world.ts:2011` `nameOf()` | 输出时把同名的人标出来 | 同行者显示成「astrbot（另一位同名的鱼）」 |
+| `raw/src/world.ts:2202` `handleInvites()` | 判「这条是不是我自己发的」，判据是 `x.pet !== mine` | **别的 AstrBot 用户发的邀约被她当成自己发的，一句都不提**（池子里不回 uid，只能按名字比） |
+
+数据没错：服务端另有 `meetUid`（`engine/meet-uid.txt`），约定、认领仍对得上人 —— 乱的只是称呼与提示。
+
+### 接线
+
+- `adapter/bridge.ts`：`RawBridgeOptions.botName` → `RawBridge.botName`；新增
+  `DEFAULT_BOT_NAME = 'AstrBot大肥鱼'` 与 `normalizeBotName()`；`new raw.JourneyWorld({ botName: this.botName })`。
+  构造时 info 一行「碰面池里的名字：xxx」，撞名时先看这行。
+- 清洗规则照上游 `raw/src/meet.ts:548` 的 `flat()`：控制字符压成空格、连续空白压一个、剪首尾、
+  截到上游那个 24 字。**额外**剔掉零宽/软连字符（`INVISIBLE`）—— 上游和服务端都只清 `\u0000-\u001f`，
+  而名字要参与字符串相等比较，两份「看着一样」的名字失配会静默把自己发的邀约当别人的。
+  清完为空就回退默认名，**绝不传空串**：上游 `!clean(opt.pet)` 会直接判「没配碰面服务器」，整个联机静默失效。
+- `adapter/cli.ts`：新增 `--bot-name`；`adapter/server.ts` `/api/health` 多回一个 `botName`。
+- `bridge.py`：spawn sidecar 时带上 `--bot-name`（取配置 `pet_name`）。
+- `_conf_schema.json`：新增「【旅行】她的名字（别人看到的宠物名）」，默认 `AstrBot大肥鱼`。
+  **不进 `engine-config.json`** —— 它不是上游配置字段，`config_map.py` 的白名单不加它。
+- `main.py`：`/journey_debug` 多一行「碰面池名字」。
+
+### 边界（照上游设计，不是壳的限制）
+
+- **改名要重启 sidecar**：上游在 `create()` 时读一次（`raw/CHANGELOG.md` 那条
+  「改名需重启 Coopani，属设计」）。重启 AstrBot 或跑一次 `/journey_update` 都会带上。
+- 旧记录里的旧名不改：她已经记下的同行者、名片、印象仍写当时那个名字，改名后同一个人会拆成两条 ——
+  上游 ui.ts 里明示接受这个代价。
+
+### 实测
+
+`npm run typecheck` 通过；`test/bridge.test.ts` 新增三条（名字原样递给上游 `opts.botName`、
+留空/没配回退默认名且非空、清洗规则含零宽与 24 字截断）。
+
+### 文档
+
+`README.md`（套壳侧写明注入链路）、`plugin/.../README.md`（配置表 + 新增「她的名字」小节、
+`/journey_debug` 那一行）、`docs/multi-world-assessment.md` 更正「`botName` raw 全库无人读取」那条过期结论。
+
 ## 未发布 — 汇报配图失败时在文字末尾补一句原因
 
 1.0.9 之后加的一个小功能，**不动版本号**。

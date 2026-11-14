@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { RawBridge } from '../adapter/bridge.ts';
+import { DEFAULT_BOT_NAME, RawBridge, normalizeBotName } from '../adapter/bridge.ts';
 import { makeBridge, tempDir, T0 } from './helpers.ts';
 
 test('桥接门面：快照、工具、日记、出发、同步、照片失败原因', async () => {
@@ -210,4 +210,50 @@ test('接口形状 auto 认对了就不吵：api.x.ai 直接当 grok，不出 wa
   } finally {
     await bridge.stop();
   }
+});
+
+test('碰面池里的名字：配置传进来的就是上游那个 pet；空/超长/零宽都收成可比对的形状', async () => {
+  const bridge = new RawBridge({
+    dataDir: tempDir(),
+    botName: '玄月的小银鱼',
+    now: () => new Date(T0.getTime()),
+    nowPlaying: () => null,
+    echo: false,
+  });
+  await bridge.start();
+  try {
+    assert.equal(bridge.botName, '玄月的小银鱼');
+    // 上游每个碰面请求的 pet 都取自构造参数（raw/src/world.ts:1835）。
+    const world = bridge.rawWorld as unknown as { opts: { botName: string } };
+    assert.equal(world.opts.botName, '玄月的小银鱼');
+    assert.equal(bridge.health().botName, '玄月的小银鱼');
+  } finally {
+    await bridge.stop();
+  }
+});
+
+test('没配名字时用内置默认名，绝不把空串递给上游', async () => {
+  const bridge = new RawBridge({
+    dataDir: tempDir(),
+    now: () => new Date(T0.getTime()),
+    nowPlaying: () => null,
+    echo: false,
+  });
+  assert.equal(bridge.botName, DEFAULT_BOT_NAME);
+  // 上游 meet.ts 里 `!clean(opt.pet)` 直接判「没配碰面服务器」，空名等于联机静默失效。
+  assert.ok(bridge.botName.trim().length > 0);
+});
+
+test('名字清洗：控制字符与零宽剔干净、连续空白压一个、截到上游的 24 字', () => {
+  const zwsp = String.fromCharCode(0x200B);
+  const zwj = String.fromCharCode(0x200D);
+  const soft = String.fromCharCode(0x00AD);
+  assert.equal(normalizeBotName(''), DEFAULT_BOT_NAME);
+  assert.equal(normalizeBotName('   '), DEFAULT_BOT_NAME);
+  assert.equal(normalizeBotName(undefined), DEFAULT_BOT_NAME);
+  assert.equal(normalizeBotName(`  克罗艾${zwsp}的小银鱼  `), '克罗艾的小银鱼');
+  assert.equal(normalizeBotName(`astr${zwj}bot`), 'astrbot');
+  assert.equal(normalizeBotName(`${soft}鱼`), '鱼');
+  assert.equal(normalizeBotName('a\r\nb'), 'a b');
+  assert.equal(normalizeBotName('一'.repeat(40)).length, 24);
 });

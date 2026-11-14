@@ -18,6 +18,13 @@ const OPTIONS = {
   data: { type: 'string' as const },
   config: { type: 'string' as const },
   prompt: { type: 'string' as const },
+  /**
+   * 她在碰面池里的名字（= 上游 `botName`，别人看到的宠物名）。
+   *
+   * 由插件的「她的名字」配置项传进来；不传就用 `DEFAULT_BOT_NAME`。
+   * 名字在构造时读一次，改完要重启 sidecar 才生效。
+   */
+  'bot-name': { type: 'string' as const },
   port: { type: 'string' as const },
   token: { type: 'string' as const },
   offline: { type: 'boolean' as const },
@@ -46,6 +53,7 @@ async function main(): Promise<void> {
     dataDir,
     ...(values.config ? { configPath: resolve(values.config) } : {}),
     ...(values.prompt ? { promptPath: resolve(values.prompt) } : {}),
+    ...(typeof values['bot-name'] === 'string' ? { botName: values['bot-name'] } : {}),
   };
 
   switch (cmd) {
@@ -72,7 +80,7 @@ async function main(): Promise<void> {
 }
 
 async function cmdServe(
-  common: { dataDir: string; configPath?: string; promptPath?: string },
+  common: { dataDir: string; configPath?: string; promptPath?: string; botName?: string },
   values: Record<string, unknown>,
 ): Promise<void> {
   const token = typeof values.token === 'string' && values.token
@@ -110,7 +118,7 @@ async function cmdServe(
 }
 
 async function cmdStatus(
-  common: { dataDir: string; configPath?: string; promptPath?: string },
+  common: { dataDir: string; configPath?: string; promptPath?: string; botName?: string },
   values: Record<string, unknown>,
 ): Promise<void> {
   const restoreNetwork = values.offline === true ? disableNetwork() : null;
@@ -132,7 +140,7 @@ async function cmdStatus(
 }
 
 async function cmdPrompt(
-  common: { dataDir: string; configPath?: string; promptPath?: string },
+  common: { dataDir: string; configPath?: string; promptPath?: string; botName?: string },
   values: Record<string, unknown>,
 ): Promise<void> {
   const restoreNetwork = values.offline === true ? disableNetwork() : null;
@@ -205,7 +213,7 @@ function printHelp(): void {
     '  sim     虚拟时钟模拟（默认 7 天、24x、seed 1）',
     '  check   打印上游版本',
     '',
-    '通用：--data <dir> --config <file> --prompt <file> --offline --verbose',
+    '通用：--data <dir> --config <file> --prompt <file> --bot-name <名字> --offline --verbose',
     'serve：--port 0 --token <token> --require-heartbeat',
     'sim：--days --speed --seed --step --from --home --reset',
     'prompt：--out <file>',

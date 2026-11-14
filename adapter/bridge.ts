@@ -49,6 +49,25 @@ export interface RawBridgeOptions {
   readonly promptPath?: string;
   /** 启动时覆盖 raw 默认值（模拟器/测试用）。 */
   readonly initialOverrides?: Partial<JourneyConfigSection>;
+  /**
+   * 她在碰面池里的名字 —— 也就是**别人看到的宠物名**。
+   *
+   * 上游只有这一个入口：`JourneyWorldOptions.botName`，由宿主在构造时注入
+   * （Coopani 那边是 `ctx.botName`，即桌宠的名字，见 `raw/src/definition.ts:13`）。
+   * 上游把它当三件事用：
+   *
+   * 1. 每个碰面请求里的 `pet`（`raw/src/world.ts:1835`）—— 上报位置、发邀约、接邀约
+   *    （服务端把这个名字写进 `taken_pet`，发起者才知道是谁接的）、留路标、存名片；
+   * 2. `nameOf()` 的同名判定（`raw/src/world.ts:2011`）—— 撞名时输出会多一句「（另一位同名的鱼）」；
+   * 3. `handleInvites()` 判「这条是不是我自己发的」（`raw/src/world.ts:2202`）—— 池子里不回 uid，
+   *    只能按名字比；名字一样就会把别人的邀约当成自己发的，一句都不提。
+   *
+   * 所以套壳必须给一个**可配置**的名字，不能再像以前那样写死 `astrbot`：
+   * 那样所有 AstrBot 用户在公共池里互相撞名，上面第 2、3 条天天命中。
+   * 留空回退 `DEFAULT_BOT_NAME`，绝不传空串 —— 上游 `raw/src/meet.ts` 里
+   * `!clean(opt.pet)` 直接判定「没配碰面服务器」，整个联机功能静默关掉。
+   */
+  readonly botName?: string;
   readonly now?: () => Date;
   readonly nowPlaying?: () => { title: string; artist: string; at: number } | null;
   readonly echo?: boolean;
@@ -61,6 +80,37 @@ export interface RawBridgeOptions {
 declare const __BRIDGE_VERSION__: string;
 /** 构建时由 esbuild 注入（scripts/build-engine.mjs 读根 package.json）；tsx/测试里回退。 */
 const BRIDGE_VERSION = typeof __BRIDGE_VERSION__ === 'string' ? __BRIDGE_VERSION__ : 'dev';
+
+/** 她在碰面池里的默认名字：邀约、路标、名片上别人看到的「宠物名」就是它。 */
+export const DEFAULT_BOT_NAME = 'AstrBot大肥鱼';
+
+/** 上游对 `pet` 的截断长度（`raw/src/meet.ts`：`clean(opt.pet).slice(0, 24)`）。 */
+const PET_NAME_LIMIT = 24;
+
+/**
+ * 肉眼看不见的字符：软连字符、零宽空格/连接符、word joiner、BOM。
+ *
+ * 上游那道 `flat()`（`raw/src/meet.ts:548`）只压 U+0000–U+001F 那一段控制字符，服务端也只清控制字符，
+ * 这些全都溜得过去。而名字要参与**字符串相等**比较（`raw/src/world.ts:2213`：
+ * `x.pet !== mine`），两处看着一样、实际一个带零宽一个不带，就会把自己发的邀约当成别人的、
+ * 或者反过来 —— 这两种都静默，事后从日志里看不出来。所以壳层先剔一遍。
+ */
+const INVISIBLE = /[\u00AD\u200B-\u200F\u2060\uFEFF]/g;
+
+/**
+ * 把用户填的名字收成一份能发出去的：剔不可见字符、控制字符压成空格、
+ * 连续空白压成一个、剪首尾、截到 24 字。清完是空串（只填了空格、或整串都是不可见字符）
+ * 就回退默认名，理由见 `RawBridgeOptions.botName`。
+ */
+export function normalizeBotName(raw: string | null | undefined): string {
+  const cleaned = String(raw ?? '')
+    .replace(INVISIBLE, '')
+    .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, PET_NAME_LIMIT);
+  return cleaned || DEFAULT_BOT_NAME;
+}
 
 function readLocalNowPlaying(dataDir: string): { title: string; artist: string; at: number } | null {
   try {
@@ -88,6 +138,14 @@ export class RawBridge {
   readonly events: EventLog;
   readonly media: LocalMediaStore;
   readonly log: Logger;
+  /**
+   * 她在碰面池里的名字，别人看到的就是这个。
+   *
+   * 构造期定死：上游在 `create()` 时读一次存进 `opts.botName`，**改名要重启 sidecar**
+   * （`raw/CHANGELOG.md` 里那条「改名需重启 Coopani，属设计」）。插件改配置后重启
+   * sidecar 即可，不必重启 AstrBot。
+   */
+  readonly botName: string;
   private readonly opts: RawBridgeOptions;
   private raw: RawModule | null = null;
   private world: JourneyWorldType | null = null;
@@ -123,6 +181,7 @@ export class RawBridge {
       ...(opts.onEvent ? { onEvent: opts.onEvent } : {}),
     });
     this.log = opts.log ?? this.host.log;
+    this.botName = normalizeBotName(opts.botName);
   }
 
   async start(): Promise<void> {
@@ -136,10 +195,11 @@ export class RawBridge {
     this.watcher = new ConfigWatcher(this.configPath, defaults);
     for (const note of loaded.notes) this.log.warn(note);
 
+    this.log.info(`碰面池里的名字：${this.botName}`);
     this.world = new raw.JourneyWorld({
       cfg: loaded.cfg,
       dataDir: this.dataDir,
-      botName: 'astrbot',
+      botName: this.botName,
       ...(this.opts.now ? { now: this.opts.now } : {}),
       nowPlaying: this.opts.nowPlaying ?? (() => readLocalNowPlaying(this.dataDir)),
     });
@@ -303,6 +363,7 @@ export class RawBridge {
 
   health(): {
     ok: true; version: string; upstreamVersion: string; eventLogId: string; lastSeq: number;
+    botName: string;
     capabilities: Record<string, boolean>;
   } {
     return {
@@ -311,6 +372,8 @@ export class RawBridge {
       upstreamVersion: this.upstreamVersion,
       eventLogId: this.events.eventLogId,
       lastSeq: this.events.lastSeq,
+      // 诊断用：碰面池里她对外叫什么。撞名（多个 AstrBot 实例同名）时先看这一行。
+      botName: this.botName,
       capabilities: this.capabilities(),
     };
   }

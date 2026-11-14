@@ -179,6 +179,10 @@ SWC/WASM loader，`raw/` 仍是磁盘上的 TS，热更新不受影响）。具�
 - **配了 `meet_url` 才有对外上报**：位置心跳（20 分钟）、到站写足迹（1.8.0）、路标（`/journey_signpost`）、
   名片/同行卡（1.6.x）。可见内容是宠物名/城市/时段（24 小时过期）与你自己留下的那句话；
   留空则一条都不发。1.7.1 起上游不再随包提供自建服务端，只能填公共池或留空。
+- **那个「宠物名」由套壳注入**：上游没有配置项，只在构造引擎时读宿主的 `botName`
+  （Coopani 那边是桌宠的名字）。以前套壳写死 `astrbot`，所有 AstrBot 用户在公共池里互相撞名；
+  现在走插件配置 `pet_name` → `adapter/cli.ts --bot-name` → `RawBridgeOptions.botName`，
+  留空回退 `AstrBot大肥鱼`。改名要重启 sidecar，且只认前 24 字（清洗见 `normalizeBotName`）。
 - **填了 `amap_key` 会多出餐厅 POI 查询**（1.6.18 的 `journey_eat`/吃饭编排），和高德酒店查询同一个 key、
   同样带本地缓存（`engine/eatery-cache.json`）。额度敏感的用户知道这一项再去填。
 - 上游 `bridgeSpend/bridgeDiary/bridgeLive`（车费桥）默认关：它读同数据目录下第三方打车扩展写的
