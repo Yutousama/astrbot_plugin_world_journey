@@ -118,6 +118,28 @@ function offsetMs(atMs: number, tz: string): number {
 }
 
 /**
+ * 某时区在某时刻的 UTC 偏移（**小时**，含夏令时）。
+ *
+ * 2026-11-12 加：生图提示词要用**真太阳时**算太阳高度角，
+ * 而「当地钟点」不等于「太阳在哪儿」——
+ *
+ * - 中国全境用一个时区（东经 120° 那条线），喀什（东经 76°）的钟点比太阳时快将近三小时：
+ *   北京时间 20 点，喀什的太阳才刚落下；而对上海来说 20 点早已黑透。
+ * - 欧洲、北美有夏令时，偏移随月份变，写死 8 / 0 / +9 会在换表那两周错一小时，
+ *   而一小时足够把「太阳贴地平线」挪成「天已经黑透」。
+ *
+ * 所以这个数交给 `Intl`，不手写。取整到分钟再换算，避免 `offsetMs` 的精度残渣。
+ */
+export function tzOffsetHours(tz: string, at: Date = new Date()): number {
+  try {
+    const base = Math.floor(at.getTime() / 60_000) * 60_000;
+    return offsetMs(base, tz) / 3_600_000;
+  } catch {
+    return Number.NaN;
+  }
+}
+
+/**
  * 她那边现在是几点时区 —— `UTC+9`、`UTC-3`、`UTC+5:30`。
  *
  * 2026-11-02 由 Mr.Q 换掉面板上那句「比你快 1 天 21 小时」：

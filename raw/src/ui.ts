@@ -25,6 +25,25 @@ export interface UiTimelineItem {
   readonly past: boolean;
 }
 
+/** 别人叫的车。字段与 `src/bridge.ts` 的 `LiveRide` 同形，这里是给前端看的那份。 */
+export interface UiRide {
+  readonly id: string;
+  /** `hailing` / `charter`，原样透传。**空串或没见过的值都按叫车显示。** */
+  readonly service: string;
+  /** `assigned` / `arriving` / `in_trip` / `arrived`，原样透传。 */
+  readonly status: string;
+  readonly car: string;
+  readonly plate: string;
+  readonly from: string;
+  readonly to: string;
+  readonly cityName: string;
+  readonly fare: number;
+  /** 0–100。别人算好的，这里不重算。 */
+  readonly progress: number;
+  readonly secondsToPickup: number;
+  readonly secondsToDropoff: number;
+}
+
 export interface UiLeg {
   readonly from: string;
   readonly to: string;
@@ -54,6 +73,35 @@ export interface UiPhoto {
    * 粘到资源管理器里就能定位。比编一个「打开」按钮诚实。
    */
   readonly file: string;
+  /**
+   * 生成这张用的提示词（2026-11-11）。
+   *
+   * 空串 = 这张拍得早、那会儿还不存提示词，相册上「按这段重拍」置灰。
+   * 给空串而不是 `undefined`，前端少一个分支。
+   */
+  readonly prompt: string;
+}
+
+/**
+ * 一起走过的人（2026-11-11）。
+ *
+ * 数据来自 `travel-memory.json` 的 `pets` —— 那份是**跨设备**的，
+ * 换台电脑她也还是记得谁跟她走过。面板上这一页只是把已经存在的东西露出来：
+ * 在这之前她心里有数，用户一个字都看不到，只能靠开口问她。
+ *
+ * 名字做 key，是因为服务端刻意不发 uid（见 `meet.ts` 那条「能看见，摸不着」的线）。
+ * 代价：对方改一次名，同一个人会变成两条记录。这是已知的、接受的。
+ */
+export interface UiMate {
+  readonly name: string;
+  /** 一起走过几次。 */
+  readonly times: number;
+  /** 上次一起的日子，`2026-11-06`。空串 = 不知道（老数据）。 */
+  readonly last: string;
+  /** 她写的一句话。空串 = 还没写 —— 面板上不该显示成「无印象」，那像判了她冷漠。 */
+  readonly impression: string;
+  /** 熟络度 0–100。 */
+  readonly warmth: number;
 }
 
 export interface UiSnapshot {
@@ -80,6 +128,13 @@ export interface UiSnapshot {
   readonly feeling: string;
   readonly weather: string;
   readonly leg: UiLeg | null;
+  /**
+   * 别人叫的车（2026-11-10）：第三方打车扩展写的那张卡。
+   *
+   * 面板只负责画，不自己跑倒计时 —— 每次轮询拿到的是当前值，
+   * 本地计时器会和轮询打架，进度条一抖一抖。
+   */
+  readonly ride: UiRide | null;
   /** 今晚住哪。她不在目的地时是 null。 */
   readonly lodging: {
     readonly kind: string;
@@ -121,6 +176,13 @@ export interface UiSnapshot {
     readonly daysLeft: number;
   } | null;
   readonly photos: readonly UiPhoto[];
+  /**
+   * 一起走过的人，最近的排前面（2026-11-11）。
+   *
+   * 空数组 = 还没跟谁走过。**不要用 null** —— 那要多一个分支，
+   * 而「没有」和「没有这一页」本来就是同一件事。
+   */
+  readonly mates: readonly UiMate[];
   /**
    * 同城有谁 + 她手上的约定。**都没配、也没约人时是 `null`** —— 那一行整条不出现。
    *
@@ -221,6 +283,20 @@ export interface UiSnapshot {
    */
   readonly clockDriftMs: number;
   /**
+   * **此刻在城里移动**（打车 / 公交 / 骑车去下一个点），不在路上时是 `null`。
+   *
+   * 2026-11-11 Mr.Q：「把路上的时间段得加上去，不然 sub 扩展没法搞了」。
+   *
+   * 面板原来只有「此刻在X」和「下一个点 14:34 在兵马俑」两条，
+   * 中间那 34 分钟两条都不命中 —— 别的扩展读这个快照，拿到的是
+   * 「她不在任何地方」，于是没法做「路上」这一档。
+   *
+   * `leftMin` 是**还剩几分钟**，不是总时长；总时长请用
+   * `leftMin + 已经过去的分钟` 反推，或者直接读 `arriveAt`。
+   * 后端只搬事实：格式化（「还有 21 分钟」「21 min left」）是调用方的事。
+   */
+  readonly onWay: { readonly what: string; readonly leftMin: number; readonly arriveAt: string } | null;
+  /**
    * 这几天没有天气，是因为她的日期跑出了预报窗口。
    *
    * 单占一个布尔，不跟 `weather` 的空串混着：空串说不出是没网还是超窗，
@@ -236,6 +312,13 @@ export interface UiSnapshot {
    * 第一件事就是回头问「你装的哪版」。
    */
   readonly version: string;
+  /**
+   * npm 上的最新版（2026-11-08）。**查不到就是空串** ——
+   * 空串和「已经是最新」必须分开：前者是不知道，后者是确认过。
+   */
+  readonly latestVersion: string;
+  /** 确实知道有新版才为 true。查不到时一律 false。 */
+  readonly versionOutdated: boolean;
   /**
    * 反馈收件地址。**空串 = 面板上不显示那一栏**，不是显示一个空的输入框。
    *

@@ -58,8 +58,52 @@
   .box h2 { font-size: 14px; margin: 0 0 12px; font-weight: 650; }
   .box h2 small { font-weight: 400; color: var(--dim); margin-left: 8px; font-size: 12px; }
 
+  /*
+   * 「此刻」那块。故意做得比下面的表轻：三四个数 + 一列人。
+   * 它是**每分钟都在变**的东西，不该跟历史数据长一个样。
+   */
+  .live { display: flex; flex-wrap: wrap; gap: 10px; }
+  .live .num {
+    flex: 0 0 auto; min-width: 104px; padding: 10px 12px; border: 1px solid var(--line);
+    border-radius: 9px; background: #fbfcfd;
+  }
+  .live .num b { display: block; font-size: 22px; line-height: 1.15; font-variant-numeric: tabular-nums; }
+  .live .num span { font-size: 12px; color: var(--dim); }
+  .live .who { flex: 1 1 100%; font-size: 13.5px; color: var(--ink); line-height: 1.9; }
+  .live .who em { font-style: normal; color: var(--dim); }
+  .live .none { flex: 1 1 100%; color: var(--dim); font-size: 14px; padding: 6px 2px; }
+  /* 此刻那张表比在册窄：四列，手机上也不用左右拖太远。 */
+  .live-tbl { min-width: 700px; }
+  .live-tbl th.t, .live-tbl td.t { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  /*
+   * 「在干嘛」是这一页唯一的长文本（最多 40 字）。
+   *
+   * 原来只给了颜色、没给宽度约束 —— 长句子要么把「最近上报」挤到屏幕外，
+   * 要么自己折成三四行、行高参差。给它一个上限宽度并允许换行，
+   * 句子就在自己的格子里老实断行；`word-break` 是给没有空格的中文用的。
+   *
+   * 2026-11-12 Mr.Q：「给在干嘛列加个活动栏，写的话我看不全」。
+   */
+  .live-tbl td.doing { color: var(--dim); max-width: 260px; white-space: normal; word-break: break-word; line-height: 1.5; }
+  #liveTable .scroller { margin-top: 10px; }
+
+  /*
+   * 两个页签。像标签页，不像按钮 —— 它是「换一页」，不是「做一件事」。
+   * 选中的那条底下压一条实线，跟内容连起来。
+   */
+  .tabs { display: flex; gap: 4px; margin: 18px 0 0; border-bottom: 1px solid var(--line); }
+  .tab {
+    font: inherit; font-size: 14px; padding: 9px 14px; cursor: pointer;
+    border: 0; border-bottom: 2px solid transparent; background: none; color: var(--dim);
+    margin-bottom: -1px;
+  }
+  .tab:hover { color: var(--ink); }
+  .tab.on { color: var(--ink); font-weight: 650; border-bottom-color: var(--accent); }
+  .view[hidden] { display: none; }
+  .viewhint { margin: 0 0 12px; font-size: 12.5px; line-height: 1.65; color: var(--dim); }
+
   .scroller { overflow-x: auto; border-radius: 8px; border: 1px solid var(--line); }
-  table { width: 100%; min-width: 720px; border-collapse: collapse; font-size: 14px; }
+  table { width: 100%; min-width: 820px; border-collapse: collapse; font-size: 14px; }
   th, td { padding: 9px 11px; text-align: left; border-bottom: 1px solid var(--line); }
   th { background: #f3f5f8; font-weight: 600; font-size: 13px; color: #374151; white-space: nowrap; }
   tbody tr:last-child td { border-bottom: none; }
@@ -106,17 +150,69 @@
 
   <p class="msg" id="msg"></p>
 
-  <div class="box">
-    <h2>在册 <small id="countNote">连上之后才有数据</small></h2>
+  <!--
+    两块分开，不是两段文字分开（2026-11-11 Mr.Q：「把实时数据和累计数据分开」）。
+
+    上面这块是**此刻**：谁在线、在哪、在干嘛。走 `/admin/live`，只碰最近 30 分钟的行，
+    代价极小，所以自动刷新只打它。
+    下面那块是**累计**：在册几只、覆盖几天、每个人的历史格数。要扫全表，只在点「刷新」时拉。
+
+    原来三个数挤在一行（在册 / 今天来过 / 此刻在线），2026-11-06 和 11-10 两次被误读成
+    「哪边坏了」。这次是把它们**从接口上分开**，不只是换个说法。
+  -->
+  <!--
+    两个页签 = 两个页面（2026-11-11 Mr.Q：「分成两页显示，现在我也分不清哪些是实时哪些是累计」）。
+
+    上一版把两块上下摆在同一页 —— 数分开了，眼睛没分开。这一版：
+      · 地址不同：`/pets` 是此刻，`/pets/all` 是在册；收藏哪个打开就是哪个
+      · 同屏只显示一块，页签在顶上，标题跟着变
+      · 切页签不重载页面（`history.replaceState`），密钥和地址不用重输
+      · **只有「此刻」那页会自动刷新**，在册那页停掉定时器 —— 它变得慢，也省额度
+  -->
+  <div class="tabs">
+    <button id="tabLive" class="tab on" data-view="live" type="button">此刻</button>
+    <button id="tabAll" class="tab" data-view="all" type="button">在册（累计）</button>
+  </div>
+
+  <section class="box view" data-view="live">
+    <h2>此刻在线 <small id="liveNote">连上之后才有数据</small></h2>
+    <p class="viewhint">
+      「此刻在线」= 最近 30 分钟有上报；「今天来过」= 今天任意时刻有过上报。
+      超过半小时没动静的鱼会掉出这个列表 —— 她在家待着就不报，这是正常的。
+      <b>这两个数是全站口径，下面的名单只列最近上报的 60 只</b>（人多的时候，
+      在线数会比名单长得多）。要找自己那只，切到「在册」页用搜索框按名字找。
+    </p>
+    <div class="live" id="liveNum"></div>
+    <!-- 名单单独一张表：挤成一行「名字 在 城市 · 干嘛 ｜ …」既难读，也看不出谁最后报的。 -->
+    <div class="scroller" id="liveTable" hidden></div>
+  </section>
+
+  <section class="box view" data-view="all" hidden>
+    <h2>在册 · 累计 <small id="countNote">连上之后才有数据</small></h2>
+    <p class="viewhint">
+      只留最近 4 天，每只鱼按**最近一次上报**合并成一行。这里是历史，不会自己刷新 ——
+      想看新的就点上面的「刷新」。
+    </p>
+    <!--
+      找人（2026-11-13）。
+      池子上 300 多只之后，「我在哪一行」变成了一个真实的问题 ——
+      Mr.Q 报「看不到我的鱼名字，但她在线一整天」，查下来是上面那块只列 60 只、
+      而全站在报的有 160 多只。这里给一个纯前端过滤：数据已经在内存里，
+      输入即筛，不多读一行库。
+    -->
+    <div class="field" id="findWrap" style="max-width:340px;margin:0 0 12px">
+      <label for="find">找自己那只</label>
+      <input id="find" type="search" spellcheck="false" placeholder="名字或 uid，输几个字就筛">
+    </div>
     <div class="scroller">
       <table>
         <thead><tr>
-          <th>名字</th><th>最近在哪</th><th>最近出现</th><th>上报</th><th>状态</th><th>操作</th>
+          <th>名字</th><th>最近在哪</th><th>最近出现</th><th>上报（4 天内）</th><th>名片</th><th>状态</th><th>操作</th>
         </tr></thead>
-        <tbody id="rows"><tr><td colspan="6" class="empty">—</td></tr></tbody>
+        <tbody id="rows"><tr><td colspan="7" class="empty">—</td></tr></tbody>
       </table>
     </div>
-  </div>
+  </section>
 
   <footer>
     <b>封禁不是删除。</b>封掉之后她报不上来，池子里立刻没有她；数据一行没动，
@@ -131,6 +227,8 @@
 (function () {
   var $ = function (id) { return document.getElementById(id); };
   var urlIn = $('url'), keyIn = $('key'), msg = $('msg'), rows = $('rows');
+  /* 筛选框与它用的那份数据（2026-11-13）。`allPets` 是服务端回的全量，`findIn` 变了就重画。 */
+  var findIn = $('find'), allPets = [];
   var STORE = 'journey.pets.admin';
   var base = '', hdr = null, flags = {};
 
@@ -141,7 +239,7 @@
    * 但面板是给人看的 —— 显示 `jiuzhaigou` 等于没显示。
    * 这份表从 `src/geo/cities.ts` 的 CITIES 导出来，127 座，改城市时记得重导。
    */
-  var CITY = {"lanzhou":"兰州","xining":"西宁","yinchuan":"银川","xian":"西安","hanzhong":"汉中","yanan":"延安","huashan":"华山","tianshui":"天水","zhangye":"张掖","jiayuguan":"嘉峪关","dunhuang":"敦煌","geermu":"格尔木","wulumuqi":"乌鲁木齐","kashi":"喀什","lasa":"拉萨","linzhi":"林芝","beijing":"北京","tianjin":"天津","shijiazhuang":"石家庄","qinhuangdao":"秦皇岛","chengde":"承德","datong":"大同","taiyuan":"太原","pingyao":"平遥","huhehaote":"呼和浩特","hailaer":"呼伦贝尔","shenyang":"沈阳","dalian":"大连","changchun":"长春","haerbin":"哈尔滨","mohe":"漠河","shanghai":"上海","nanjing":"南京","xuzhou":"徐州","suzhou":"苏州","wuxi":"无锡","changshu":"常熟","yangzhou":"扬州","hangzhou":"杭州","shaoxing":"绍兴","ningbo":"宁波","zhoushan":"舟山","wenzhou":"温州","hefei":"合肥","huangshan":"黄山","fuzhou":"福州","xiamen":"厦门","quanzhou":"泉州","nanchang":"南昌","jingdezhen":"景德镇","ganzhou":"赣州","wuyuan":"婺源","jinan":"济南","qingdao":"青岛","yantai":"烟台","weihai":"威海","qufu":"曲阜","taian":"泰安","zhengzhou":"郑州","luoyang":"洛阳","wuhan":"武汉","yichang":"宜昌","xiangyang":"襄阳","changsha":"长沙","zhangjiajie":"张家界","yueyang":"岳阳","guangzhou":"广州","foshan":"佛山","shenzhen":"深圳","zhuhai":"珠海","shaoguan":"韶关","zhanjiang":"湛江","nanning":"南宁","guilin":"桂林","liuzhou":"柳州","beihai":"北海","haikou":"海口","sanya":"三亚","chengdu":"成都","chongqing":"重庆","jiuzhaigou":"九寨沟","daochengyading":"稻城亚丁","kunming":"昆明","dali":"大理","lijiang":"丽江","xianggelila":"香格里拉","jinghong":"西双版纳","guiyang":"贵阳","xianggang":"中国香港","aomen":"中国澳门","tokyo":"东京","osaka":"大阪","seoul":"首尔","bangkok":"曼谷","singapore":"新加坡","hanoi":"河内","paris":"巴黎","london":"伦敦","rome":"罗马","moscow":"莫斯科","newyork":"纽约","losangeles":"洛杉矶","sydney":"悉尼","auckland":"奥克兰","dubai":"迪拜","istanbul":"伊斯坦布尔","honolulu":"檀香山","sapporo":"札幌","kyoto":"京都","rio":"里约热内卢","buenosaires":"布宜诺斯艾利斯","iguazu":"伊瓜苏","elcalafate":"埃尔卡拉法特","ushuaia":"乌斯怀亚","sanfrancisco":"旧金山","santabarbara":"圣巴巴拉","monterey":"蒙特雷","yosemite":"优胜美地","lasvegas":"拉斯维加斯","grandcanyon":"大峡谷","toronto":"多伦多","vancouver":"温哥华","montreal":"蒙特利尔","mexicocity":"墨西哥城","guanajuato":"瓜纳华托","cancun":"坎昆","merida":"梅里达"};
+  var CITY = {"lanzhou":"兰州","xining":"西宁","yinchuan":"银川","xian":"西安","hanzhong":"汉中","yanan":"延安","huashan":"华山","tianshui":"天水","zhangye":"张掖","jiayuguan":"嘉峪关","dunhuang":"敦煌","geermu":"格尔木","aletai":"阿勒泰","wulumuqi":"乌鲁木齐","kashi":"喀什","lasa":"拉萨","linzhi":"林芝","beijing":"北京","tianjin":"天津","shijiazhuang":"石家庄","qinhuangdao":"秦皇岛","chengde":"承德","datong":"大同","taiyuan":"太原","pingyao":"平遥","huhehaote":"呼和浩特","hailaer":"呼伦贝尔","shenyang":"沈阳","dalian":"大连","changchun":"长春","haerbin":"哈尔滨","mohe":"漠河","shanghai":"上海","nanjing":"南京","xuzhou":"徐州","suzhou":"苏州","wuxi":"无锡","changshu":"常熟","yangzhou":"扬州","hangzhou":"杭州","shaoxing":"绍兴","ningbo":"宁波","zhoushan":"舟山","wenzhou":"温州","hefei":"合肥","huangshan":"黄山","fuzhou":"福州","xiamen":"厦门","quanzhou":"泉州","nanchang":"南昌","jingdezhen":"景德镇","ganzhou":"赣州","wuyuan":"婺源","jinan":"济南","qingdao":"青岛","yantai":"烟台","weihai":"威海","qufu":"曲阜","taian":"泰安","zhengzhou":"郑州","xinxiang":"新乡","luoyang":"洛阳","wuhan":"武汉","yichang":"宜昌","xiangyang":"襄阳","changsha":"长沙","zhangjiajie":"张家界","yueyang":"岳阳","guangzhou":"广州","foshan":"佛山","shenzhen":"深圳","zhuhai":"珠海","shaoguan":"韶关","zhanjiang":"湛江","nanning":"南宁","guilin":"桂林","liuzhou":"柳州","beihai":"北海","haikou":"海口","sanya":"三亚","chengdu":"成都","chongqing":"重庆","jiuzhaigou":"九寨沟","daochengyading":"稻城亚丁","kunming":"昆明","dali":"大理","lijiang":"丽江","xianggelila":"香格里拉","jinghong":"西双版纳","guiyang":"贵阳","xianggang":"中国香港","aomen":"中国澳门","tokyo":"东京","osaka":"大阪","seoul":"首尔","bangkok":"曼谷","singapore":"新加坡","hanoi":"河内","paris":"巴黎","london":"伦敦","rome":"罗马","moscow":"莫斯科","newyork":"纽约","losangeles":"洛杉矶","sydney":"悉尼","auckland":"奥克兰","dubai":"迪拜","istanbul":"伊斯坦布尔","honolulu":"檀香山","sapporo":"札幌","kyoto":"京都","rio":"里约热内卢","buenosaires":"布宜诺斯艾利斯","iguazu":"伊瓜苏","elcalafate":"埃尔卡拉法特","ushuaia":"乌斯怀亚","sanfrancisco":"旧金山","santabarbara":"圣巴巴拉","monterey":"蒙特雷","yosemite":"优胜美地","lasvegas":"拉斯维加斯","grandcanyon":"大峡谷","toronto":"多伦多","vancouver":"温哥华","montreal":"蒙特利尔","mexicocity":"墨西哥城","guanajuato":"瓜纳华托","cancun":"坎昆","merida":"梅里达","petersburg":"圣彼得堡","kazan":"喀山","irkutsk":"伊尔库茨克","vladivostok":"符拉迪沃斯托克","yekaterinburg":"叶卡捷琳堡","murmansk":"摩尔曼斯克","sochi":"索契","kaliningrad":"加里宁格勒","suzdal":"苏兹达尔","nizhnynovgorod":"下诺夫哥罗德","warsaw":"华沙","krakow":"克拉科夫","gdansk":"格但斯克","wroclaw":"弗罗茨瓦夫","poznan":"波兹南","lodz":"罗兹","torun":"托伦","zakopane":"扎科帕内","berlin":"柏林","munich":"慕尼黑","hamburg":"汉堡","cologne":"科隆","dresden":"德累斯顿","heidelberg":"海德堡","nuremberg":"纽伦堡","vienna":"维也纳","salzburg":"萨尔茨堡","hallstatt":"哈尔施塔特","zurich":"苏黎世","interlaken":"因特拉肯","lucerne":"卢塞恩","lyon":"里昂","marseille":"马赛","nice":"尼斯","bordeaux":"波尔多","strasbourg":"斯特拉斯堡","avignon":"阿维尼翁","edinburgh":"爱丁堡","bath":"巴斯","york":"约克","manchester":"曼彻斯特","oxford":"牛津","dublin":"都柏林","galway":"戈尔韦","amsterdam":"阿姆斯特丹","rotterdam":"鹿特丹","thehague":"海牙","bruges":"布鲁日","brussels":"布鲁塞尔","ghent":"根特","prague":"布拉格","krumlov":"克鲁姆洛夫","kutnahora":"库特纳霍拉","budapest":"布达佩斯","eger":"埃格尔","shanwei":"汕尾","changde":"常德"};
   function cityName(id) {
     if (!id) return '—';
     return CITY[id] || id;
@@ -173,11 +271,22 @@
     stopAuto();
     var box = $('auto');
     if (!box || !box.checked || !base) return;
+    /* 在册那页不自动刷：它变得慢，而且一次就是全表。 */
+    if (view !== 'live') return;
     timer = setInterval(function () {
       if (!base || loading) return;
       loading = true;
-      load().then(function () { loading = false; }, function () { loading = false; });
-    }, 30000);
+      /*
+       * **自动刷新只打 `/live`**（2026-11-11）。
+       *
+       * 原来这里每 30 秒拉一次 `/pets?limit=800` 的全量明细 —— 单次几千行读
+       * （800 行 × 2 个相关子查询），一天下来几百万行，把 D1 免费额度直接打光。
+       * 2026-11-10 Cloudflare 发信说「D1 每日 500 万行读已超额」，池子停了一整天。
+       *
+       * 累计那份不再自动拉：它是历史，本来就变得慢，手动点「刷新」就够。
+       */
+      loadLive().then(function () { loading = false; }, function () { loading = false; });
+    }, 60000);
   }
 
   function setMode(on) {
@@ -212,21 +321,36 @@
     return s;
   }
 
-  function render(pets, todayN) {
+  function render(list) {
     /*
-     * 两个数字**口径不同**，摆在一起省得猜：
-     * 这个列表是累计（所有历史上报过的 uid），面板那句「今天一共 N 只」是当天去重。
-     * 2026-11-06 用户看到「管理页 25、面板 15」以为哪边坏了。
+     * 这块只讲**累计**。此刻在线 / 今天来过的数已经搬到上面那块了 ——
+     * 三个数挤在一行，2026-11-06 和 11-10 两次被读成「哪边坏了」；
+     * 这次不是改文案，是拆接口（`/admin/live` 与 `/admin/pets`）。
      */
-    var today = Number(todayN) || 0;
-    var tail = (pets.length >= 800 ? '（已截断，看最近 800 条上报）' : '')
-      + (today ? '　·　今天 ' + today + ' 只' : '');
+    allPets = list || [];
+    /*
+     * 筛选（2026-11-13）：纯前端，数据已经在内存里，输入即筛，不多读一行库。
+     * 名字和 uid 都能搜 —— uid 给「名字重名、分不清哪个是我」时用。
+     */
+    var q = (findIn && findIn.value ? findIn.value : '').trim().toLowerCase();
+    var pets = q
+      ? allPets.filter(function (p) {
+        return String(p.pet || '').toLowerCase().indexOf(q) >= 0
+          || String(p.uid || '').toLowerCase().indexOf(q) >= 0;
+      })
+      : allPets;
+    var tail = (allPets.length >= 800 ? '（已截断，看最近 800 条上报）' : '')
+      + (allPets.length ? '　·　只留最近 4 天' : '');
     if (!pets.length) {
-      rows.innerHTML = '<tr><td colspan="6" class="empty">池子里现在没人。</td></tr>';
-      $('countNote').textContent = '0 只' + tail;
+      rows.innerHTML = '<tr><td colspan="7" class="empty">'
+        + (q ? '没有名字或 uid 含「' + esc(q) + '」的鱼。' : '池子里现在没人。')
+        + '</td></tr>';
+      $('countNote').textContent = (q ? '筛出 0 / 共 ' + allPets.length + ' 只' : '0 只') + tail;
       return;
     }
-    $('countNote').textContent = pets.length + ' 只（累计）' + tail;
+    $('countNote').textContent = (q
+      ? '筛出 ' + pets.length + ' / 共 ' + allPets.length + ' 只'
+      : pets.length + ' 只（累计）') + tail;
     rows.innerHTML = pets.map(function (p) {
       var f = flags[p.uid] || null;
       var kind = f ? f.kind : '';
@@ -237,7 +361,33 @@
         + '<td class="name">' + esc(p.pet || '（没名字）') + '<div class="uid">' + esc(p.uid) + '</div></td>'
         + '<td>' + esc(cityName(p.city)) + '</td>'
         + '<td>' + esc(fmtTime(p.lastAt)) + '</td>'
-        + '<td>' + esc(p.rows) + '</td>'
+        /*
+         * **只写一个数字会被读错。**
+         *
+         * 2026-11-07 Mr.Q 看到面板上「31」就去查是不是有人刷屏 —— 那一列统计的
+         * 其实是 presence 表的行数（保留 4 天，每「日期 + 时段」一行）。
+         * 一天最多 4 行，跑两座城就是 8 行，四天三十来行很正常。
+         * 把「几格 / 几城 / 几天」一起写出来，看的人不用再推一遍。
+         */
+        + '<td>' + esc(p.rows) + ' 格'
+        + (p.cities ? '<div class="uid">' + esc(p.cities) + ' 城'
+          + (p.days ? ' · ' + esc(p.days) + ' 天' : '') + '</div>' : '')
+        + '</td>'
+        /*
+         * **名片（2026-11-12）。**
+         *
+         * 只显示前 24 个字，全文塞进 title —— 名片最多 120 字，
+         * 整段铺进表格会把这一列撑到整屏宽，别的列全被挤扁。
+         * 要看全的就悬停（或看下面那条注释里说的手机端长按）。
+         *
+         * 三种状态分开写，因为处理方式不一样：
+         *   —       从没写过
+         *   有字     正常挂着
+         *   已过期   写过，但过了 30 天
+         *
+         * `esc()` 是必须的：这段是用户自己敲的字，页面上不转义就是 XSS。
+         */
+        + '<td>' + profileCell(p.profile) + '</td>'
         + '<td>' + st + (f && f.note ? '<div class="uid">' + esc(f.note) + '</div>' : '') + '</td>'
         + '<td><div class="ops">'
         + '<button class="mini" data-uid="' + esc(p.uid) + '" data-pet="' + esc(p.pet) + '" data-kind="rename">请她改名</button>'
@@ -247,6 +397,162 @@
         + '</div></td>'
         + '</tr>';
     }).join('');
+  }
+
+  /*
+   * 「此刻」那块。
+   *
+   * 只画四个数 + 一列人，不画表 —— 它每分钟都在变，画成表会让人以为
+   * 「这就是全部数据」，而真正的明细在下面那块。
+   *
+   * `doing` 是这一栏唯一的自由文本：它来自她自己的上报（一句话在干嘛），
+   * 只在这里露脸，不进累计表（那表按 uid 分组，放不下一句话）。
+   */
+  /**
+   * 名片那一格（2026-11-12）。
+   *
+   * 截断到 24 个字：名片最多 120 字，整段铺进表格会把这一列撑成整屏宽。
+   * 全文放 title，鼠标停上去能看全 —— 这一页是给人核对内容的，
+   * 「看见前几个字想起来是谁」比「字全但挤成一团」有用。
+   */
+  function profileCell(pr) {
+    if (!pr || !pr.text) return '<span class="uid">—</span>';
+    var t = pr.text;
+    var short = t.length > 24 ? t.slice(0, 24) + '…' : t;
+    var out = '<span title="' + esc(t) + '">' + esc(short) + '</span>';
+    if (pr.expired) out += '<div class="uid">已过期</div>';
+    else if (pr.at) out += '<div class="uid">' + esc(fmtTime(pr.at)) + ' 写的</div>';
+    return out;
+  }
+
+  /** 最近上报时刻，只要时分 —— 这一页看「刚刚」，年份日期没意义。 */
+  function clockOf(iso) {
+    var d = new Date(iso);
+    if (isNaN(d)) return '—';
+    var z = function (n) { return String(n).padStart(2, '0'); };
+    return z(d.getHours()) + ':' + z(d.getMinutes());
+  }
+
+  function renderLive(data) {
+    var num = $('liveNum'), tbl = $('liveTable');
+    if (!num || !tbl) return;
+    var n = Number(data.online) || 0;
+    var today = Number(data.today) || 0;
+    var win = Number(data.onlineWindowMin) || 30;
+    var who = (data.pets || []);
+    /*
+     * 名单只有 60 条，而「此刻在线」是全站口径（2026-11-13）。
+     * 两个数并排摆着、又不说为什么不一样，就是「我明明在线，列表里找不到我」的来源。
+     */
+    $('liveNote').textContent = n
+      ? '最近 ' + win + ' 分钟 ' + n + ' 只在报　·　下面列最近 ' + who.length + ' 只　·　'
+        + clockOf(data.at) + ' 更新'
+      : '最近 ' + win + ' 分钟没有上报';
+
+    num.innerHTML = ''
+      + '<div class="num"><b>' + n + '</b><span>此刻在线</span></div>'
+      + '<div class="num"><b>' + today + '</b><span>今天来过</span></div>';
+
+    if (!who.length) {
+      tbl.hidden = true;
+      tbl.innerHTML = '';
+      num.insertAdjacentHTML('beforeend',
+        '<div class="none">这会儿没人上报。池子里空空的是正常的 —— 她在家待着就不报。</div>');
+      return;
+    }
+    /*
+     * 名单进表（2026-11-11 Mr.Q：「按表格形式列出来，挤到一起也不好看」）。
+     *
+     * 上一版把所有人拼成一行「名字 在 城市 · 干嘛 ｜ 名字 …」，一屏塞十几只就糊成一片，
+     * 也看不出谁最后报的。四列：名字 / 在哪 / 在干嘛 / 最近上报（只看时分）。
+     */
+    tbl.hidden = false;
+    tbl.innerHTML = '<table class="live-tbl">'
+      + '<thead><tr><th>名字</th><th>在哪</th><th>在干嘛</th><th>名片</th><th class="t">最近上报</th></tr></thead>'
+      + '<tbody>' + who.map(function (p) {
+        return '<tr>'
+          + '<td class="name">' + esc(p.pet || '（没名字）') + '</td>'
+          + '<td>' + esc(cityName(p.city)) + '</td>'
+          + '<td class="doing" title="' + esc(p.doing || '') + '">' + esc(p.doing || '—') + '</td>'
+          + '<td>' + profileCell(p.profile) + '</td>'
+          + '<td class="t">' + esc(clockOf(p.at)) + '</td>'
+          + '</tr>';
+      }).join('') + '</tbody></table>';
+  }
+
+  function loadLive() {
+    /*
+     * 没连上时**必须说话**（2026-11-11）。
+     *
+     * 第一版这里直接 `return`，页面刚打开、还没点「连上」时那块是**完全空白**的 ——
+     * 看着像坏了。Mr.Q 一打开就问「怎么上面一只鱼都没了」，
+     * 而事实是：接口没问题，只是还没连。
+     */
+    if (!base) {
+      $('liveNote').textContent = '还没连上 —— 点上面的「连上」';
+      var box = $('liveNum');
+      if (box) box.innerHTML = '<div class="none">填好地址和密钥，点「连上」。</div>';
+      return Promise.resolve();
+    }
+    return fetch(base + '/live', { headers: hdr, cache: 'no-store' })
+      .then(function (res) {
+        if (res.status === 401) { showMsg('bad', '密钥不对。'); setMode(false); return null; }
+        /*
+         * 404 单独说：这套管理口是后加的，服务端还是旧版时整条路由都不存在，
+         * 报「服务没有这个口」比报「连不上」准。
+         */
+        if (res.status === 404) {
+          showMsg('bad', '服务端没有 /admin/live 这个口（404）—— Worker 还是旧版，需要重新部署。');
+          setMode(false);
+          return null;
+        }
+        if (res.status !== 200) { showMsg('bad', '服务返回了 ' + res.status + '。'); setMode(false); return null; }
+        return res.json();
+      })
+      .then(function (data) {
+        if (!data) return;
+        renderLive(data);
+        setMode(true);
+      })
+      .catch(function (err) {
+        var m = err && err.message ? err.message : '请求被浏览器拦下';
+        showMsg('bad', '连不上 ' + base + '：' + m);
+        setMode(false);
+      });
+  }
+
+  /*
+   * 「此刻」和「在册」是两页（2026-11-11）。
+   *
+   * 地址定页：`/pets` = 此刻，`/pets/all` = 在册 —— 收藏哪个，打开就是哪个。
+   * 切换用 `history.replaceState` 不重载页面：现在每次切页签都要重输一遍密钥，
+   * 那是「分成两页」最容易做歪的地方。
+   */
+  var view = /\/all\/?$/.test(location.pathname) ? 'all' : 'live';
+
+  function paint() {
+    var boxes = document.querySelectorAll('.view');
+    for (var i = 0; i < boxes.length; i++) {
+      boxes[i].hidden = boxes[i].getAttribute('data-view') !== view;
+    }
+    $('tabLive').classList.toggle('on', view === 'live');
+    $('tabAll').classList.toggle('on', view === 'all');
+    document.title = (view === 'live' ? '此刻' : '在册') + ' · 池子里的鱼';
+  }
+
+  /** 当前这页该拉哪个接口。连上、切页签、点刷新都走它。 */
+  function loadView() {
+    return view === 'live' ? loadLive() : load();
+  }
+
+  function go(v) {
+    if (v === view) return;
+    view = v;
+    try { history.replaceState(null, '', v === 'live' ? '/pets' : '/pets/all'); } catch (e) {}
+    paint();
+    if (base) loadView();
+    /* 自动刷新只属于「此刻」那页；切到在册就把它停掉。 */
+    schedule();
   }
 
   function load() {
@@ -285,7 +591,7 @@
       });
     }).then(function (data) {
       if (!data) return;
-      render(data.pets || [], data.today);
+      render(data.pets || []);
       setMode(true);
       showMsg('ok', '连上了。' + (data.truncated ? '上报条数到上限了，列表只覆盖最近一段。' : ''));
     }).catch(function (err) {
@@ -341,7 +647,7 @@
     hdr = { 'x-admin-key': key };
     var btn = $('connect');
     btn.disabled = true; btn.textContent = '连…';
-    load().then(function () {
+    loadView().then(function () {
       btn.disabled = false; btn.textContent = '连上';
       try { localStorage.setItem(STORE, JSON.stringify({ url: urlIn.value, key: key })); } catch (e) {}
       schedule();
@@ -349,9 +655,13 @@
   }
 
   $('connect').addEventListener('click', connect);
-  $('reload').addEventListener('click', function () { load(); });
+  /* 刷新只刷当前这页：在「此刻」页点刷新不该顺手把全表拉一遍。 */
+  $('reload').addEventListener('click', function () { loadView(); });
+  $('tabLive').addEventListener('click', function () { go('live'); });
+  $('tabAll').addEventListener('click', function () { go('all'); });
   $('auto').addEventListener('change', schedule);
   keyIn.addEventListener('keydown', function (e) { if (e.key === 'Enter') connect(); });
+  if (findIn) findIn.addEventListener('input', function () { render(allPets); });
   rows.addEventListener('click', function (e) {
     var b = e.target.closest('button[data-kind]');
     if (!b) return;
@@ -371,6 +681,9 @@
    * 从本地文件打开（file://）时 origin 是 `null`，那就什么都不填，保持原来的行为。
    */
   if (!urlIn.value && /^https?:/.test(location.protocol)) urlIn.value = location.origin;
+
+  /* 进来先按地址定页：`/pets/all` 直接落在「在册」上。 */
+  paint();
 })();
 </script>
 </body>

@@ -52,6 +52,25 @@ export interface ComfyRequest {
   /** 负向节点 id。留空 = 自动找（见 `findNegativeNode`）。 */
   readonly negativeNode?: string;
   /**
+   * 负向**补语**：追加在已有负向后面，不替换（2026-11-10）。
+   *
+   * `negative` 是替换语义 —— 用户填了就完全取代 workflow 里那串
+   * （那是他要的：他自己写「不要油菜花」）。但夜拍这种**系统自己补的**不该
+   * 把人家调好的 `low quality, bad anatomy...` 挤掉，所以单独给一个追加位。
+   *
+   * 用途：夜里追加 `stars, moon, sky glow...` ——
+   * Mr.Q 实测「天空为啥还有鱼肚白」，正向里写「地平线不发白」压不住。
+   */
+  readonly negativeAppend?: string;
+  /**
+   * cfg。留空 = 用 workflow 原值。
+   *
+   * 2026-11-10 加，只给夜拍用。Qwen-Image 默认 2.5，服从性偏松：
+   * 正向写死「没有星」，实测照样画出三颗。夜里提到 3.3 才干净。
+   * 白天不动 —— 那套参数是调过的，没必要为了夜里的毛病一起改。
+   */
+  readonly cfg?: number;
+  /**
    * 出图尺寸 `宽x高`，如 `1664x928`。留空 = workflow 里原来写死的尺寸。
    *
    * 2026-11-04 加的。原来是「一个字都不动 workflow」—— 那是为了不破坏别人调好的
@@ -344,6 +363,25 @@ export function parseSize(size: string | undefined): [number, number] | null {
  * 返回 0 说明这份 workflow 压根没有可改的根 latent（尺寸可能写死在别处），
  * 上层据此报错，而不是假装成功。
  */
+/**
+ * 改采样器的 cfg。返回命中几个节点。
+ *
+ * 只改**数值型**的 cfg —— 有些节点把 cfg 当成输入连线（数组），那种不能碰。
+ * 命中 0 个不报错：workflow 里可能压根没有采样器叫这个名，
+ * 那这张图照出，只是不生效（和 `withSize` 一个态度）。
+ */
+export function withCfg(wf: Record<string, unknown>, value: number): number {
+  let hit = 0;
+  for (const node of Object.values(wf)) {
+    const inputs = (node as { inputs?: Record<string, unknown> })?.inputs;
+    if (!inputs) continue;
+    if (typeof inputs.cfg !== 'number') continue;
+    inputs.cfg = value;
+    hit += 1;
+  }
+  return hit;
+}
+
 export function withSize(
   wf: Record<string, unknown>,
   width: number,
@@ -588,14 +626,32 @@ export async function shootComfy(req: ComfyRequest): Promise<PhotoBytes> {
    * **失败不致命**：找不到节点就跳过，照片照样出 —— 一张构图对了但多开了一片油菜花，
    * 远好过整张拍不出来。所以这里 try 包住，只记日志。
    */
+  /*
+   * 负向：`negative` 是替换，`negativeAppend` 是追加（2026-11-10）。
+   *
+   * 两者可以同时出现：用户自己在设置里写了负向，夜里系统再补一句
+   * 「不许有星星」—— 这时候不该二选一，该拼起来。
+   */
   const neg = String(req.negative ?? '').trim();
-  if (neg) {
+  const negExtra = String(req.negativeAppend ?? '').trim();
+  if (neg || negExtra) {
     try {
       const negNode = String(req.negativeNode ?? '').trim() || findNegativeNode(wf);
-      if (negNode) payload = withNegative(payload, negNode, neg);
+      if (negNode) {
+        const cur = String(
+          ((wf[negNode] as { inputs?: { text?: unknown } } | undefined)?.inputs?.text) ?? '',
+        ).trim();
+        /* 没给 `negative` 就沿用 workflow 原来那串，再把补语接上。 */
+        const joined = [neg || cur, negExtra].filter(Boolean).join(', ');
+        if (joined) payload = withNegative(payload, negNode, joined);
+      }
     } catch {
       // workflow 里没有负向节点，或者那个 id 不存在。跳过。
     }
+  }
+
+  if (typeof req.cfg === 'number' && Number.isFinite(req.cfg) && req.cfg > 0) {
+    withCfg(payload, req.cfg);
   }
 
   /*

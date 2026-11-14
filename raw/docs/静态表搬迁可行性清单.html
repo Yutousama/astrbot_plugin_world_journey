@@ -1,0 +1,977 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>静态表能不能搬出去 · 可行性清单</title>
+<style>
+:root{
+  --bg:#f6f7f9; --bg2:#ffffff; --bg3:#eef1f5;
+  --line:#e3e7ec; --line2:#d3d9e0;
+  --tx:#1f2328; --tx2:#57606a; --tx3:#8b949e;
+  --acc:#0b6bcb; --acc-bg:#eef5fd;
+  --ok:#1a7f4b; --ok-bg:#f0f8f3;
+  --warn:#9a5b00; --warn-bg:#fdf6e9;
+  --red:#b42318; --red-bg:#fdf3f2;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg); color:var(--tx);
+  font-family:system-ui,-apple-system,"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif;
+  font-size:15px; line-height:1.75; -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:900px;margin:0 auto;padding:36px 28px 80px}
+
+header{border-bottom:2px solid var(--tx);padding-bottom:18px;margin-bottom:26px}
+.kicker{font-size:12px;letter-spacing:.14em;color:var(--tx3);text-transform:uppercase;margin-bottom:8px}
+h1{font-size:27px;line-height:1.35;margin:0 0 10px;font-weight:700;letter-spacing:-.01em}
+.sub{font-size:13.5px;color:var(--tx2);margin:0}
+.sub b{color:var(--tx);font-weight:600}
+
+h2{font-size:19px;margin:44px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--line);font-weight:700}
+h2 .n{color:var(--tx3);font-weight:600;margin-right:8px;font-variant-numeric:tabular-nums}
+h3{font-size:15.5px;margin:26px 0 8px;font-weight:600}
+p{margin:0 0 13px}
+ul,ol{margin:0 0 14px;padding-left:22px}
+li{margin:5px 0}
+code{
+  font-family:"Cascadia Mono",Consolas,"SF Mono",monospace;
+  font-size:.88em;background:#eef1f5;border:1px solid var(--line);
+  border-radius:4px;padding:1px 5px;color:#0a3069;
+  /* pre-wrap 而不是 nowrap：短词不会断（没有断点），长路径在窄屏里能折行，不撑破页面 */
+  white-space:pre-wrap;overflow-wrap:anywhere;
+}
+pre{
+  background:#f7f9fb;border:1px solid var(--line);border-radius:8px;
+  padding:13px 15px;overflow-x:auto;margin:0 0 15px;
+  font-family:"Cascadia Mono",Consolas,"SF Mono",monospace;
+  font-size:12.5px;line-height:1.7;color:#24292f;
+}
+pre code{background:none;border:0;padding:0;white-space:pre;font-size:inherit;color:inherit}
+.mono{font-family:"Cascadia Mono",Consolas,monospace;font-size:.9em;font-variant-numeric:tabular-nums}
+
+.summary{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:0 0 8px}
+.card{background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.card .k{font-size:11.5px;color:var(--tx3);letter-spacing:.04em;margin-bottom:5px}
+.card .v{font-size:21px;font-weight:700;line-height:1.25;font-variant-numeric:tabular-nums}
+.card .d{font-size:12px;color:var(--tx2);margin-top:4px;line-height:1.5}
+.card.ok .v{color:var(--ok)}
+.card.bad .v{color:var(--red)}
+@media(max-width:640px){.summary{grid-template-columns:1fr}}
+
+.tip{
+  background:var(--acc-bg);border:1px solid #cfe3f8;border-left:3px solid var(--acc);
+  border-radius:6px;padding:11px 15px;font-size:13px;color:#0d4a86;margin:0 0 20px;
+}
+.note{
+  background:var(--warn-bg);border:1px solid #f0e0bf;border-left:3px solid var(--warn);
+  border-radius:6px;padding:11px 15px;font-size:13.5px;color:#6b4400;margin:14px 0;
+}
+.bad-note{
+  background:var(--red-bg);border:1px solid #f3d6d3;border-left:3px solid var(--red);
+  border-radius:6px;padding:11px 15px;font-size:13.5px;color:#7a1d15;margin:14px 0;
+}
+.quote{
+  border-left:3px solid var(--line2);padding:2px 0 2px 15px;margin:14px 0;
+  color:var(--tx2);font-size:14px;
+}
+
+.tbl{overflow-x:auto;margin:16px 0;border:1px solid var(--line);border-radius:10px;background:var(--bg2)}
+.tbl>table{margin:0;border-collapse:collapse;width:100%;min-width:520px;font-size:13.5px}
+.tbl thead th{position:sticky;top:0;background:var(--bg3);color:var(--tx);font-weight:600;
+  font-size:12.5px;white-space:nowrap;border-bottom:1px solid var(--line2);text-align:left}
+.tbl tbody tr:nth-child(even){background:#fafbfc}
+.tbl tbody tr.hl{background:#fdf3f2}
+.tbl tbody tr.hl2{background:#f1f7f3}
+.tbl th,.tbl td{padding:10px 13px;border-bottom:1px solid var(--line);text-align:left;
+  vertical-align:top;word-break:break-word;overflow-wrap:anywhere}
+.tbl tbody tr:last-child td{border-bottom:0}
+.tbl td:first-child{color:var(--tx);font-weight:600}
+@media(max-width:640px){
+  .tbl>table{font-size:12.5px;min-width:460px}
+  .tbl th,.tbl td{padding:8px 10px}
+}
+
+/* ── 列多的表：手动定列宽 ───────────────────
+   容器 844 − 两侧 padding，5 列内边距合计 130，剩 714 分给内容。
+   不写死 px 而是 percentage + fixed：窄屏一律在容器内滚动，不会撑破页面。 */
+.tbl-list>table{table-layout:fixed;min-width:760px}
+.tbl-list th:nth-child(1),.tbl-list td:nth-child(1){width:13%}
+.tbl-list th:nth-child(2),.tbl-list td:nth-child(2){width:20%}
+.tbl-list th:nth-child(3),.tbl-list td:nth-child(3){width:10%}
+.tbl-list th:nth-child(4),.tbl-list td:nth-child(4){width:29%}
+.tbl-list th:nth-child(5),.tbl-list td:nth-child(5){width:28%}
+
+.tbl-route>table{table-layout:fixed;min-width:700px}
+.tbl-route th:nth-child(1),.tbl-route td:nth-child(1){width:32%}
+.tbl-route th:nth-child(2),.tbl-route td:nth-child(2){width:18%}
+.tbl-route th:nth-child(3),.tbl-route td:nth-child(3){width:26%}
+.tbl-route th:nth-child(4),.tbl-route td:nth-child(4){width:24%}
+
+.tbl-ask>table{table-layout:fixed;min-width:640px}
+.tbl-ask th:nth-child(1),.tbl-ask td:nth-child(1){width:24%}
+.tbl-ask th:nth-child(2),.tbl-ask td:nth-child(2){width:32%}
+.tbl-ask th:nth-child(3),.tbl-ask td:nth-child(3){width:44%}
+
+/* 08/09/10/11 四节的三列、四列版式（.tbl-list 是按 4–5 列设的，三列会塌） */
+.tbl-3a>table{table-layout:fixed;min-width:640px}
+.tbl-3a th:nth-child(1),.tbl-3a td:nth-child(1){width:21%}
+.tbl-3a th:nth-child(2),.tbl-3a td:nth-child(2){width:31%}
+
+.tbl-4a>table{table-layout:fixed;min-width:720px}
+.tbl-4a th:nth-child(1),.tbl-4a td:nth-child(1){width:18%}
+.tbl-4a th:nth-child(2),.tbl-4a td:nth-child(2){width:28%}
+.tbl-4a th:nth-child(3),.tbl-4a td:nth-child(3){width:15%}
+
+.tbl-3b>table{table-layout:fixed;min-width:680px}
+.tbl-3b th:nth-child(1),.tbl-3b td:nth-child(1){width:35%}
+.tbl-3b th:nth-child(2),.tbl-3b td:nth-child(2){width:15%}
+
+.tbl-3c>table{table-layout:fixed;min-width:640px}
+.tbl-3c th:nth-child(1),.tbl-3c td:nth-child(1){width:40%}
+.tbl-3c th:nth-child(2),.tbl-3c td:nth-child(2){width:21%}
+
+/* 11 节那张：第一列是完整 URL（22 字符等宽），21% 放不下会被断成 github.c|om */
+.tbl-3d>table{table-layout:fixed;min-width:600px}
+.tbl-3d th:nth-child(1),.tbl-3d td:nth-child(1){width:34%}
+.tbl-3d th:nth-child(2),.tbl-3d td:nth-child(2){width:16%}
+
+.badge{display:inline-block;font-size:11px;padding:1px 7px;border-radius:20px;font-weight:600;
+  white-space:nowrap;line-height:1.7}
+.b-ok{background:var(--ok-bg);color:var(--ok);border:1px solid #cfe8da}
+.b-warn{background:var(--warn-bg);color:var(--warn);border:1px solid #f0e0bf}
+.b-red{background:var(--red-bg);color:var(--red);border:1px solid #f3d6d3}
+.b-gray{background:var(--bg3);color:var(--tx2);border:1px solid var(--line2)}
+
+footer{margin-top:52px;padding-top:18px;border-top:1px solid var(--line);font-size:12.5px;color:var(--tx3)}
+footer b{color:var(--tx2)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="kicker">Coopani · 大肥鱼环游世界 · 架构取舍</div>
+  <h1>静态表能不能搬出去：<br>把「写死的池子」换成「她自己说」</h1>
+  <p class="sub">
+    针对 Discussion #586 的最新反馈 ·
+    实测数据来自 <b>本地源码 + 高德接口实调</b> · 报告日期 <b>2026-11-13</b>
+  </p>
+</header>
+
+<div class="tip">
+  <b>这份报告只做一件事：</b>把「哪些静态数据可以改成运行时生成或查询」列清楚，
+  每条都标上性质（事实还是判断）、代价和风险。
+  <b>正文 01–06 是拍板之前写的，一个字没改</b>；07–12 是当天做出来的、
+  发出去之后又补的落地记录 —— 两边对得上对不上，你自己看。08–10 是
+  <b>1.6.18 上线当天下午</b>补的，11–12 是<b>同一天推完公开仓库、回完 #659</b> 之后补的。
+</div>
+
+<div class="summary">
+  <div class="card bad">
+    <div class="k">美食池现状</div>
+    <div class="v">中位数 3 样</div>
+    <div class="d">185 座城里 133 座 ≤3 样，全部加起来只有 613 条</div>
+  </div>
+  <div class="card">
+    <div class="k">静态数据体积</div>
+    <div class="v">252 KB</div>
+    <div class="d">cities.ts 一个文件，占源码 15.7%</div>
+  </div>
+  <div class="card ok">
+    <div class="k">但每回合进上下文的</div>
+    <div class="v">42 KB</div>
+    <div class="d">工具 schema + 提示词，<b>与这些表无关</b></div>
+  </div>
+</div>
+
+<h2><span class="n">01</span>先把反馈核实一遍</h2>
+
+<p>DonahueMa 的原话是这样的：</p>
+
+<div class="quote">
+  「旅行的饮食安排好像有点太单一了，比如重启 ['重庆小面', '毛血旺', '酸辣粉']，最标志性的火锅和串串啥的没有，
+  我喊鱼自己去吃了 3 天她也没去，连续吃了两天串串。如果不想增加池子的可选数量，那么建议可以不把池子定死，
+  留一些她自行选择的机会。」
+</div>
+
+<p>我按他说的城市查了代码，<b>两句都成立，而且比他说得更严重</b>：</p>
+
+<div class="tbl">
+  <table>
+    <thead><tr><th>项目</th><th>实测</th></tr></thead>
+    <tbody>
+      <tr class="hl"><td>重庆美食池</td><td><code>['重庆小面', '毛血旺', '酸辣粉']</code>，3 样，确实没有火锅和串串</td></tr>
+      <tr class="hl"><td>同一座城的标签表</td><td><code>FEATURES.chongqing.food = '火锅'</code> —— <b>两个表自己打架</b></td></tr>
+      <tr class="hl"><td>成都</td><td>美食池也是 3 样，也没有火锅；标签同样写着「火锅」</td></tr>
+      <tr><td>全量分布</td><td>185 城全覆盖，<b>中位 3 样</b>，最少 3、最多 8，133 座城 ≤3 样</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>
+  也就是说这不是「漏了重庆」，是<b>整张表的密度本来就只有三行</b>。
+  先前已经打过两轮补丁：不够三样就从大区菜补、再不够从国家菜补、
+  「Mr.Q 说每城要 10 种」于是硬凑到 12 样 —— 补池表本身又加了 7.7 KB。
+  <b>补丁叠到第三层，说明这条路已经到极限了。</b>
+</p>
+
+<h3>他提的第二件事，跟池子无关</h3>
+
+<p>
+  「我喊鱼自己去吃了 3 天她也没去」—— 这不是池子大小的问题。
+  改日程的工具有两个，<code>journey_set_slot</code>（改某一格）和 <code>journey_plan_change</code>（改景点），
+  都能用，我 11-13 还给 <code>set_slot</code> 补了「凌晨无格可改时新增一格」。
+  她没去，是<b>她没调工具</b> —— 那属于提示词和工具描述的说服力问题，靠扩充池子永远修不好。
+</p>
+
+<div class="note">
+  <b>所以反馈里其实是两件事：</b>① 池子窄（数据问题）② 她不听指令（提示词问题）。
+  报告下面只解决 ①。<b>② 单独立一项</b>，别混在一起改，否则改完池子她照样不去。
+</div>
+
+<h2><span class="n">02</span>先纠一个账：什么进上下文，什么不进</h2>
+
+<p>
+  你说「文件大小和上下文都会少很多」。<b>文件大小对，上下文不对。</b>
+  这个区分很重要，因为它决定了该不该为「省上下文」去重构。
+</p>
+
+<p>
+  <code>cities.ts</code> 是<b>代码</b>。她读不到代码，只有工具回执和提示词会进上下文。
+  我实测了三条回执：
+</p>
+
+<pre><code>journey_now     107 字   「重庆。在家，随时可以动身。家里这样：潮……」
+journey_stats    90 字
+envPromptVars   9 个变量，1.8 KB</code></pre>
+
+<p>没有一条夹带景点清单或菜名列表。真正每回合固定出现在上下文里的是这些：</p>
+
+<div class="tbl">
+  <table>
+    <thead><tr><th>内容</th><th>体积</th><th>什么时候进上下文</th><th>能不能省</th></tr></thead>
+    <tbody>
+      <tr class="hl"><td>21 个工具的 schema</td><td class="mono">23.3 KB</td><td><b>每回合</b></td>
+        <td>能，但精简描述会掉准确率</td></tr>
+      <tr><td>ENV_PROMPT.md</td><td class="mono">17.3 KB</td><td>每回合</td><td>能，但要逐条核「删了会不会让她犯错」</td></tr>
+      <tr><td>提示词变量（9 个）</td><td class="mono">1.8 KB</td><td>每回合</td><td>不能，都是当前状态</td></tr>
+      <tr><td>cities.ts 里的 11 张静态表</td><td class="mono">200.2 KB</td><td><b>从不</b></td>
+        <td>省的是<b>包体积和维护成本</b>，不是上下文</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>
+  <b>口径说明：</b>上面三行<b>全部按 UTF-8 字节数</b>，不是字符数（中文一字三字节，两者差得远）。
+  工具那行是紧凑 JSON 实测 23 910 字节；美化版（带缩进）是 27 521 字符，<b>那个形状不会真的进上下文</b>，别拿它算。
+  工具的 description 本身已经是英文（面向模型写的），能压的主要是参数说明那 9.6 KB。
+  不同端口对 token 的折算不一样，这里不换算成 token。
+</p>
+
+<h2><span class="n">03</span>「让 coop 自己调大模型」有三条路，只有两条走得通</h2>
+
+<p>
+  我把三条路都查到底了。<b>结论先说：宿主留了一个「另起一次模型调用」的接口，但当前版本没有接上</b>，
+  所以最省那条捷径现在不能用。
+</p>
+
+<div class="tbl tbl-route">
+  <table>
+    <thead><tr><th>路线</th><th>谁付账</th><th>准确度</th><th>现在能用吗</th></tr></thead>
+    <tbody>
+      <tr class="hl2"><td><b>A. 让她自己说</b><br>把「从池子里挑」改成「按约束报一个」</td>
+        <td>零额外调用</td><td>模型常识级：知道重庆有火锅串串，<b>不知道哪家店还开着</b></td>
+        <td><span class="badge b-ok">能，今天就能改</span></td></tr>
+      <tr class="hl"><td><b>B. 扩展自己调一次模型</b><br><code>host.cognition.request()</code></td>
+        <td>走已有端点计费</td><td>和 A 差不多，还多一次延迟</td>
+        <td><span class="badge b-red">不能用</span></td></tr>
+      <tr class="hl2"><td><b>C. 查真实世界</b><br>高德 <code>place/text</code></td>
+        <td>你的 key，有日配额</td><td><b>真实</b>：店名、地址、类型都是真的</td>
+        <td><span class="badge b-ok">能用，已有样板</span></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<h3>为什么 B 走不通</h3>
+
+<div class="bad-note">
+  <b>一句话：不是难做，是那条线在宿主里根本没接上。</b>
+  宿主确实留了一个「另外再问一次模型」的插口，但插口后面是空的 ——
+  当前人格层（<code>cormini</code>，就是「可缇mini」）没有实现这个能力。
+  扩展里写 <code>host.cognition.request(...)</code>，拿到的是 <code>undefined</code>，第一行就崩。
+  <b>不是配置错、不是 key 没填、也不是我们调用姿势不对。</b>
+</div>
+
+<h4>一、先把 B 想干的事翻译成人话</h4>
+
+<p>三条路的区别只有一条：<b>她这次思考，是一次还是两次。</b></p>
+
+<ul>
+  <li><b>A（让她自己说）</b>：她本来就要想一次「今天干嘛」，顺手说了「吃火锅」。
+    <b>不额外调用，不额外等待。</b></li>
+  <li><b>B（扩展另起一次调用）</b>：她说完，扩展再单独发一个请求给模型：
+    「重庆这个点有什么该吃的？」<b>再买一次调用。</b></li>
+  <li><b>C（查高德）</b>：不问模型，直接查外部库，拿真店名。</li>
+</ul>
+
+<p>
+  A 和 B 的<b>知识面完全一样</b> —— 都是「模型知道重庆有火锅，不知道哪家店今天还开着」。
+  差别只在钱和延迟。所以 B 要多花的钱，买的不是「更准」，是「隔离」：<b>在她主对话之外再开一次口</b>。
+</p>
+
+<h4>二、断在哪一步</h4>
+
+<pre><code>[1] 扩展发起申请    host.cognition.request()
+         |
+         v
+[2] 宿主检查        makeCognition()   &lt;-- 先看人格层有没有实现
+         |
+         v
+[3] 人格层 cormini  persona.cognition  &lt;-- 这一项不存在
+         |
+         v
+    取到空值，直接返回 undefined</code></pre>
+
+<p>宿主那边的代码只有三行（<code>core/core.ts:378</code>）：</p>
+
+<pre><code>const impl = this.persona.cognition;
+if (!impl) return undefined;   // 没人接，把电话收回去
+// 后面还有三十几行校验、并发计数、异常转换 —— 一行都执行不到</code></pre>
+
+<p>
+  <code>this.persona</code> 就是正在跑的那套人格。它的定义里有记忆（<code>memoryName: 'GitMem'</code>）、
+  有工具、有提示词，<b>没有 <code>cognition</code> 这一项</b>。于是第二行永远命中。
+</p>
+
+<h4>三、怎么确认「真没有」，而不是「我没找到」</h4>
+
+<div class="tbl tbl-list">
+  <table>
+    <thead><tr><th>层面</th><th>查了什么</th><th>结果</th></tr></thead>
+    <tbody>
+      <tr><td>接口定义</td><td>整个 <code>resources/app</code>（连打包产物 <code>dist</code>）搜 <code>PersonaCognition</code></td>
+        <td>只命中 <code>core/types.ts</code> 一处 —— <b>那是「电话的形状」，不是「电话」</b></td></tr>
+      <tr><td>人格实现</td><td><code>bots/</code> 下所有文件搜 <code>cognition</code></td>
+        <td>只命中两句界面文案（「元认知笔记」标签），<b>跟这功能无关</b>；cormini 定义里确实没这个字段</td></tr>
+      <tr class="hl"><td>我们自己的代码</td><td>扩展 <code>src/</code> 搜 <code>cognition</code> / <code>reportUsage</code></td>
+        <td><b>零命中</b> —— 说明它从未可用过，不是「以前能用后来坏了」</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>
+  换个说法：宿主把这个能力<b>设计好了、接口写好了、连「请求只能点名自己的工具」这种越权校验都写了</b>，
+  就差最后一步接线。而接线是人格层的事，<b>不是扩展能补的</b>。
+</p>
+
+<h4>四、「自己带 key 直接调一个模型」为什么也不推荐</h4>
+
+<p>
+  这条技术上能写，而且宿主明显预留了位置 —— <code>reportUsage</code> 的注释写着
+  「Core 不管理 World 自有模型的运行时」，意思就是「你可以自己调，把用量报给我记账就行」。
+  但代价对不上收益：
+</p>
+
+<div class="tbl">
+  <table>
+    <thead><tr><th>代价</th><th>具体是什么</th></tr></thead>
+    <tbody>
+      <tr><td>第二份账单</td><td>多一套 key、多一处计费口径</td></tr>
+      <tr><td>多一层缓存</td><td>不想阻塞她说话，就得后台预生成 + 缓存失效，等于又多一个定时任务</td></tr>
+      <tr><td>维护翻倍</td><td>扩展里多一套提示词、一套模型配置、一套重试</td></tr>
+      <tr class="hl"><td><b>换不来 A 拿不到的东西</b></td>
+        <td><b>那个脑子并不比现在这个脑子多知道什么</b></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>
+  最后一条是致命的。<b>B 花钱买的是「另开一个脑子的机会」，但那个脑子照样不知道「哪家火锅店今天还开着」</b> ——
+  知道这件事的只有 C。所以 B 被 A 和 C 夹在中间：<b>比 A 贵，比 C 假。</b>
+</p>
+
+<p>
+  还有一个更隐蔽的坑：模型对「重庆有啥吃的」的回答，一年四季都不会变。
+  你真把它缓存下来，<b>缓存内容本身就会变成一张新的写死的表</b> ——
+  问题原地复活，只是从 <code>cities.ts</code> 搬到了缓存里。
+</p>
+
+<h4>五、B 什么时候才真的值得</h4>
+
+<p>
+  只有一种场景：<b>你要的是跟她主对话隔离的一段文字</b> —— 比如让她在后台给自己写内心独白、写日记，
+  这段字不能污染主上下文。A 做不到（A 只能在她那一回合里说），C 也做不到（C 是查库不是写字）。
+</p>
+
+<p>
+  那种场景是<b>内容生成问题</b>，不是数据来源问题。真到那天，得先请上游把 <code>PersonaCognition</code>
+  接上 —— <b>那是宿主作者的活</b>。Coopani 是打包好的 exe，我们改宿主等于本地分叉，下次升级就丢
+  （跟 #659 那个 amapKey 明文一个道理：能绕就绕，不碰宿主）。
+</p>
+
+<h4>六、顺带纠正一个容易混的点</h4>
+
+<p>
+  B 和「让模型帮忙」不是一回事 —— <b>A 也是让模型帮忙</b>。
+  A 免费，是因为它搭在她<b>本来就要花的那一次</b>调用上；B 收费，是因为它要多买一次。
+</p>
+
+<h3>C 我实调了一次，能查到真东西</h3>
+
+<p>用你配置里那个高德 key，查「重庆 火锅」：</p>
+
+<pre><code>status 1 OK · count 600
+- 丁眼镜火锅总店  餐饮服务;中餐厅;火锅店
+- 大彬火锅        餐饮服务;中餐厅;火锅店
+- 春红火锅(洪崖洞店) 餐饮服务;中餐厅;火锅店
+- 陈胖子火锅(总店)  餐饮服务;中餐厅;火锅店</code></pre>
+
+<p>
+  查景点同样是干净的：<code>洪崖洞民俗风貌区 / 风景名胜;风景名胜;风景名胜</code>。
+  <b>而且这套范式你已经有了</b> —— <code>geo/hotels.ts</code> 就是走 <code>place/text</code> 查真酒店名、
+  按城市缓存 7 天、查不到就退回泛称。搬餐饮和景点，是<b>照抄一个跑通的模块</b>，不是新造架构。
+</p>
+
+<h2><span class="n">04</span>候选清单：哪些能搬，搬了会怎样</h2>
+
+<p>
+  判据用的是这个项目自己的设计原则（<code>skills/coopani-world-extension/SKILL.md</code>）：
+  <b>「这是事实，还是我替她下的结论？」</b>
+  —— 事实必须查或写死，判断该交给她。以及第 26 条：
+  <b>「别把当前模型的局限固化进系统，为弱模型做的妥协写成 fallback，不进主语义。」</b>
+</p>
+
+<div class="tbl tbl-list">
+  <table>
+    <thead><tr><th>项目</th><th>现在</th><th>性质</th><th>建议怎么改</th><th>风险</th></tr></thead>
+    <tbody>
+      <tr class="hl2"><td>美食菜名</td>
+        <td>15.5 KB + 补池 7.7 KB<br>中位 3 样 / 城</td>
+        <td><span class="badge b-gray">判断</span></td>
+        <td><b>A</b>：<b>已经这么做了一部分</b>（见 07）。池子留住当起手，但她可以报表外的；
+          另外把「标签说有、池里没有」那 31 座城补上了（<code>FEATURES.food</code> 标签菜入池）</td>
+        <td>低。菜名是常识，不会编出不存在的菜；要防的是连着三顿同一样</td></tr>
+
+      <tr class="hl2"><td>具体店名</td>
+        <td>现在没有</td>
+        <td><span class="badge b-warn">事实</span></td>
+        <td><b>C</b>：<b>已落地</b>（见 07）。<code>journey_eat</code> 只在「特意去吃」时查一次，缓存 7 天</td>
+        <td>店可能已关门；另外把真店名写进她的嘴里，有人会不适应</td></tr>
+
+      <tr><td>景点清单</td>
+        <td>65.1 KB / 1502 条<br>185 城，中位 9</td>
+        <td><span class="badge b-warn">事实</span></td>
+        <td><b>保留主表</b>，只补一条：用户点名的地点优先插进当天</td>
+        <td><b>高</b>。景点还牵着路线连通（不走回头路），换来源会绕路、会编出不存在的点</td></tr>
+
+      <tr class="hl2"><td>夜景 / 值得做的事</td>
+        <td>10.5 KB<br><b>41 座城是空的</b></td>
+        <td><span class="badge b-gray">判断</span></td>
+        <td><b>A</b>：改成让她按城市自己写一句</td>
+        <td>低。是描述不是事实</td></tr>
+
+      <tr><td>城市掌故 LORE</td>
+        <td>7.4 KB，185 城</td>
+        <td><span class="badge b-gray">判断</span></td>
+        <td><b>A</b>：让她说，只保留「别编年代和数字」这一条硬约束</td>
+        <td>中。史实容易说错，但错在闲聊里代价小</td></tr>
+
+      <tr class="hl2"><td>景色描写<br>VISTA + SPOT_LOOK</td>
+        <td>24.1 + 15.6 KB</td>
+        <td><span class="badge b-gray">判断</span></td>
+        <td><b>A</b>：只给「地名 + 景点 + 光」，描写让她写</td>
+        <td><b>低</b>，而且已有证据：<code>minimal</code> 模式就是用户实测「不补反而对」才加的</td></tr>
+
+      <tr><td>演出 / 市集</td>
+        <td>19.0 KB / 201 条</td>
+        <td><span class="badge b-warn">事实</span></td>
+        <td>先不动。要动就查大麦或高德，<b>不能让她编</b></td>
+        <td>高。编一场不存在的演出，用户一搜就穿帮</td></tr>
+
+      <tr class="hl"><td>节庆 / 民俗</td>
+        <td>35.0 KB / 240 条<br>带月份</td>
+        <td><span class="badge b-warn">事实</span></td>
+        <td><b>保留</b>。这是全表里最不该交给模型的一项</td>
+        <td>极高。节庆有时有地，编出来等于撒谎，而且是最容易被戳穿的那种</td></tr>
+
+      <tr class="hl2"><td>酒店</td>
+        <td>40 KB + 44 KB</td>
+        <td><span class="badge b-warn">事实</span></td>
+        <td><b>已经是 C 了</b>，不动 —— 它是这次要照抄的样板</td>
+        <td>——</td></tr>
+
+      <tr><td>照片提示词</td>
+        <td>photo.ts 160 KB</td>
+        <td><span class="badge b-gray">判断</span></td>
+        <td>1.6.17 已经让她写 <code>describe</code> 了，方向对；模板还能再瘦</td>
+        <td>中。本地 SDXL 的 CLIP 只吃英文短句，写长写中文都会翻车</td></tr>
+
+      <tr><td>工具 schema</td>
+        <td>23.3 KB / 回合</td>
+        <td><span class="badge b-gray">——</span></td>
+        <td>这是上下文真正的大头，值得单独一轮：合并冷门工具、砍示例</td>
+        <td>中。描述少一句，她就少一次「该用哪个工具」的判断</td></tr>
+
+      <tr><td>她不听指令</td>
+        <td>——</td>
+        <td><span class="badge b-gray">——</span></td>
+        <td>改工具描述 + 提示词里的触发条件，<b>和池子无关</b></td>
+        <td>——</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<h2><span class="n">05</span>如果全按「能搬的都搬」，文件会小多少</h2>
+
+<div class="tbl">
+  <table>
+    <thead><tr><th>搬走的表</th><th>体积</th></tr></thead>
+    <tbody>
+      <tr><td>美食池 + 补池表</td><td class="mono">23.2 KB</td></tr>
+      <tr><td>夜景</td><td class="mono">10.5 KB</td></tr>
+      <tr><td>城市掌故</td><td class="mono">7.4 KB</td></tr>
+      <tr><td>景色描写（VISTA + SPOT_LOOK）</td><td class="mono">39.7 KB</td></tr>
+      <tr class="hl2"><td><b>合计</b></td><td class="mono"><b>80.8 KB</b></td></tr>
+      <tr><td>搬完之后 cities.ts</td><td class="mono">251.6 → 约 171 KB</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>
+  <b>省的是包体积和维护成本，不是上下文</b> —— 这两件事别记混。
+  真正的好处是：以后再加 20 座城，不用再手写 20 城 × 12 样的菜名；
+  用户说「重庆怎么没火锅」这种问题，从「补数据」变成「本来就不会缺」。
+</p>
+
+<h2><span class="n">06</span>我的建议：三步，先做最便宜的那一步</h2>
+
+<h3>第一步（半天量级）：美食和夜景交给 A <span class="badge b-ok">已做</span></h3>
+<p>
+  这两项性质都是「判断」，风险最低，收益最直接 —— 反馈就是冲着它们来的。
+  池子从「清单」改成「约束 + 三五样打板」，她报什么都行，只要符合「当地、这个点、不是硬菜当早饭」。
+  <b>先把反馈那一条彻底解决，再看别的。</b>
+  实际落地的做法见 07 —— 比原计划保守一档，理由也写在那边。
+</p>
+
+<h3>第二步：景色描写也交给 A <span class="badge b-gray">未做</span></h3>
+<p>
+  理由不是省体积，是<b>质量</b>：静态描写表写不出「此刻下着小雨、六点半、灯刚亮」。
+  而且 <code>minimal</code> 模式已经证明过「少写反而对」，这一步风险比看起来小。
+  <b>这一项跟这次的反馈无关，单独拎出来做，别和美食混着改。</b>
+</p>
+
+<h3>第三步：店名走 C <span class="badge b-ok">已做</span></h3>
+<p>
+  只在「特意去吃 / 打卡」这个场景查一次，其余时候她只说菜名。
+  照 <code>hotels.ts</code> 抄：按城市 + 想吃什么缓存 7 天、查不到退回泛称、失败绝不影响旅行。
+</p>
+
+<div class="bad-note">
+  <b>我不建议动的两项：</b>节庆和景点主表。
+  它们都是「事实」，而且错了最容易被戳穿 —— 编一场不存在的庙会，用户一搜就穿帮；
+  景点还牵着路线连通，换来源就得重新做避绕路的规划。<b>省 100 KB 不值得冒这个险。</b>
+</div>
+
+<h2><span class="n">07</span>已经做完了什么</h2>
+
+<p>
+  A 和 C 都落地了，代码已进工作区（版本号按惯例等你说「发」再定）。有一条要先说清楚：
+  <b>我没有删掉那张美食表</b>，而是把它从「定论」降成「起手」。理由在下面第一条，那不是偷懒。
+</p>
+
+<div class="tbl tbl-list">
+  <table>
+    <thead><tr><th>做了什么</th><th>改在哪</th><th>解决的是什么</th></tr></thead>
+    <tbody>
+      <tr class="hl"><td><b>招牌菜先入池</b></td>
+        <td><code>src/plan/dayplan.ts</code> 的 <code>pickFood()</code></td>
+        <td>「标签写着火锅，菜表里没有火锅」—— 重庆、成都等 <b>31 座城</b>的自相矛盾</td></tr>
+      <tr class="hl"><td><b>吃什么那一节提示词</b></td>
+        <td><code>ENV_PROMPT.md</code> 新增「吃什么：菜是起手，不是定论」</td>
+        <td>她可以报菜表以外的东西；连着两顿不许一样；早上不吃火锅</td></tr>
+      <tr class="hl"><td><b>「去吃」这个动作</b></td>
+        <td><code>journey_eat</code> 工具（<code>src/world.ts</code>）</td>
+        <td>「喊了她三天她也没去」—— 答应了就能真的改日程，不是嘴上说说</td></tr>
+      <tr class="hl2"><td><b>真店名查询</b></td>
+        <td>新增 <code>src/geo/eatery.ts</code></td>
+        <td>店名从高德来，不是编的；按「城 + 想吃什么」缓存 7 天，查不到退回泛称</td></tr>
+      <tr><td>测试</td><td>新增 <code>test/eat-shop.test.mjs</code>（7 条）、<code>test/eat-tool.test.mjs</code>（6 条）、
+        <code>meal-food.test.mjs</code> 加 1 条</td>
+        <td><b>996 条全过</b>（原 982 条 + 新增 14 条）</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<h3>为什么不删那张表</h3>
+
+<p>
+  原计划写的是「删掉整张池子」。动手时发现删不动，有三个实际牵连：
+</p>
+
+<ul>
+  <li><b>照片要菜名。</b><code>journey_photo</code> 的 <code>dish</code> 参数直接进生图提示词 ——
+    不给她菜名，照片就只剩「一碗饭」，标题也跟着变空。</li>
+  <li><b>12 样补池是给「一座城待十天」用的。</b>删掉表，拉萨、天津这种城只剩三四样，
+    六十天里会翻来覆去 —— 而那正是 2026-11-08 那四版代码在解决的事。</li>
+  <li><b>表是 fallback，不是主语义。</b>这正是项目第 26 条：
+    弱模型说不出菜名时得有兜底，但兜底不该变成规定动作。</li>
+</ul>
+
+<p>
+  所以改成：<b>表给起手词，她说她想吃的。</b>她说得出就用她的，说不出就用表里的 ——
+  两条都不丢，反馈那一条也解决了。
+</p>
+
+<h3>31 座城，不是 1 座</h3>
+
+<p>
+  这条值得单独说，因为原文只觉得是「重庆漏了火锅」。实测：把标签菜入池那段关掉再跑一遍，
+  <b>31 座城的招牌菜吃不到</b> —— 天水麻辣烫、北京烤鸭、太原刀削面、南京鸭血粉丝、洛阳水席、
+  广州早茶、桂林米粉…… 全都在「标签说有、池里没有」。
+</p>
+
+<p>
+  <b>这不是漏了一座城，是两张表从来没对齐过。</b>标签是逐城人工填的，菜表是另一批数据，
+  两边各写各的。修法只能从标签往菜表补 —— 反着补要动 613 行。
+</p>
+
+<h3>还差什么</h3>
+
+<ul>
+  <li><b>夜景和景色描写（第二步）还没做</b> —— 那两项跟这次反馈无关，应该单独一轮，
+    混在一起改就没法判断是哪一处起的作用。</li>
+  <li><b>「她不调工具」这一半，光加工具不够。</b><code>journey_eat</code> 只是给了她一个能落地的动作，
+    她会不会在「他说去吃火锅」时想起来调，还得看真机跑几天。这一条<b>测不出来</b>，
+    只能等用户反馈 —— 建议在版本说明里点名问一句。</li>
+  <li><b>店名有个已知的体感风险</b>：把「丁眼镜火锅总店」这种真名写进她的嘴里，有人会觉得出戏
+    （像广告）。目前只在「特意去吃」时出现，其余时候她只说菜名 —— 如果用户反馈不好，
+    关掉这个功能的开关应该是下一版要加的。</li>
+</ul>
+
+
+<h2><span class="n">08</span>发出去之后才发现的旧账</h2>
+
+<p>
+  1.6.18 上线当天下午回看了一遍包内容，翻出两处<b>早就在、只是没人同时打开来看</b>的东西。
+  都不是这一轮改坏的 —— 是「同一个包里两处说两套话」，一直没人对过账。
+</p>
+
+<div class="tbl tbl-3a">
+  <table>
+    <thead><tr><th>旧账</th><th>实际情况</th><th>影响</th></tr></thead>
+    <tbody>
+      <tr class="hl"><td><b>能力清单少了五个工具</b></td>
+        <td><code>describe.json</code> 里 <b>17</b> 个，代码里 <code>TOOL_DECLS</code> 有 <b>22</b> 个</td>
+        <td>缺 <code>plan_change</code> / <code>hotel_night</code> / <code>spot_ride</code> / <code>set_slot</code> / <code>eat</code>。
+          <b>前四个不是这一轮加的</b>（<code>set_slot</code> 1.6.15 就在）→ 前面好几个版本发出去，
+          市场卡片上她的能力一直是残缺的</td></tr>
+      <tr class="hl"><td><b>README 写的是另一套数字</b></td>
+        <td>13 行「127 座城、1094 处、每城七到十个」</td>
+        <td>实测 <b>185 城 / 1502 处 / 每城 6–10</b>。<code>package.json</code> 写 185、README 写 127，
+          同一份包自相矛盾</td></tr>
+      <tr><td>用例数</td>
+        <td>README 419 行 <code># 152 项</code></td>
+        <td>实测 <b>210 项</b></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>
+  修 <code>describe.json</code> 的办法是<b>不许手抄</b>：<code>JOURNEY_DESCRIBE</code> 本来就是
+  <code>TOOL_DECLS.map(...)</code>，直接 import 出来重写一遍。手抄一次就会再落后一次。
+  另外必须保持 2 空格缩进 + CRLF —— 否则整份文件都是 diff，看不出真正改了什么。
+  <code>docs/PATCH-1.1.0.md</code> 里写的 <code>pnpm describe:extension</code> 早跑不了（项目里没有这个 script，也没有 pnpm），别再照它做。
+</p>
+
+<h3>怎么确认「真的发出去了」</h3>
+
+<p>registry 有几分钟延迟，<code>npm view</code> 头两次读到的还是上一版。三条同时成立才算发成：</p>
+
+<ol>
+  <li><code>registry.npmjs.org/coopani-world-journey/latest</code> 的 <code>version</code> 是新的；</li>
+  <li>包主页的 <code>versions</code> 里能查到这一版；</li>
+  <li>把 tarball 拉下来解开，<b>回读内容</b> —— 工具数 22、事件 14、README 数字是新的。</li>
+</ol>
+
+<p>
+  第三条是关键：前两条只证明「传上去了」，不证明「传的是对的」。
+  这次的旧账全是在第三步回读时看出来的。
+</p>
+
+
+<h2><span class="n">09</span>同一周撞上来的另外三条反馈</h2>
+
+<p>
+  08 讲的是自己翻出来的，09 是别人找上门的。三条里<b>只有一条真属于这个扩展</b>，
+  这一节的用处不是留档，是那个判断顺序：先认清是谁的问题，再动手。
+</p>
+
+<div class="tbl tbl-4a">
+  <table>
+    <thead><tr><th>来源</th><th>说的是什么</th>
+      <th>是谁的问题</th><th>怎么处理</th></tr></thead>
+    <tbody>
+      <tr class="hl"><td><b>#659</b><br>市场审核 · Phantivia<br>（11-02 提，11-13 催）</td>
+        <td>① 高德 key 明文写在 <code>config.json</code>
+          ② 扩展会去读全量对话记录 <code>session-main.jsonl</code></td>
+        <td><b>这个扩展的</b></td>
+        <td>1.6.19：密钥搬进 <code>.env</code>（<code>JOURNEY_AMAP_KEY</code> / <code>JOURNEY_IMAGE_KEY</code>）；
+          整个 <code>src/action-wishes.ts</code> 删掉</td></tr>
+      <tr><td><b>#801</b><br>同一位作者</td>
+        <td>市场脚本统计下载量时，接口一回 429 就把数字写成 0</td>
+        <td>市场脚本，<b>不是扩展</b></td>
+        <td>他自己用 PR #809 修了（429 时沿用旧值 + 打 warning）。我提议的「并发上限」「加缓存」他没采纳</td></tr>
+      <tr><td><b>#714</b><br>用户反馈（邮箱来）</td>
+        <td>桌宠整只沉到任务栏以下，重启才回来</td>
+        <td><b>宿主主进程的</b></td>
+        <td>提到 Coopanion 仓库，给的是「resize 时重发 <code>pet:floor</code> + 加日志」，不硬猜场景</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<h3>#714 的根因，一句话</h3>
+
+<p>
+  <code>floorY = innerHeight - 2 - below</code>。<code>below</code> 只由主进程在 <code>cover()</code>（<code>host/electron-main.cjs:390</code>）
+  和 <code>did-finish-load</code>（<code>:442</code>）时推一次；页面响应 <code>resize</code>（<code>web/pet-app.js:136</code>）时
+  <b>只重算 bounds，不重新索取 below</b>。窗口高度变了而 <code>below</code> 还是旧值 → 地板落进任务栏，而且不自愈，重载才回来。
+</p>
+
+<p>
+  本机实测（2560×1440、缩放 100%）：工作区底 1392、任务栏 48、窗口 <code>(0,0)-(2560,1437)</code>、
+  <code>below = 45</code>、正常 <code>floorY = 1390</code>；<code>below</code> 归零时是 <b>1435</b> —— 低 45 DIP，脚低于工作区底 43。
+</p>
+
+<p>
+  已经排除的三类：DPI/缩放变化、任务栏自动隐藏、显示器热插拔。它们都走
+  <code>screen.on('display-metrics-changed') → place() → cover()</code>，<code>below</code> 会被重发；
+  <code>hideWhenFullscreen</code> 只是 <code>hide()</code> / <code>showInactive()</code>，不动 bounds，也排除。
+  剩下的缺口「窗口尺寸变了但没经过 <code>cover()</code>」<b>确切路径没定位到</b> ——
+  所以 issue 里写的是「请加重发 + 日志」，不是「你这里写错了」。这条区别很重要，写反了会被直接驳回。
+</p>
+
+<h3>#659 那两个坑，值得单独记</h3>
+
+<ul>
+  <li><b>试挂载里 <code>storeSecret</code> 是个空函数。</b>不抛错，也不做事。按「没抛错就算成功」判断的话，
+    试挂载一跑（宿主每次启动都跑）就把用户 <code>config.json</code> 里的 key 抹了。
+    所以写完必须<b>回读比对</b>，读不回来就保留配置不动。</li>
+  <li><b><code>patch.amapKey = ''</code> 是假值。</b>第一版写 <code>if (patch.amapKey)</code> 判断「有没有要改的」，
+    直接把「清空」这个动作吞掉 —— key 留在配置里等于没搬。改判 <code>!== undefined</code>。
+    <b>空串是合法结果的时候，真假判断一律不能用。</b></li>
+</ul>
+
+
+<h2><span class="n">10</span>缺一个字段，反馈渠道就是断的</h2>
+
+<p>
+  #659 的开头一句是：「包里没写 repository，只能在这里告知。」
+  他不是在抱怨，是在解释为什么一个安全项要提到市场审核单里去。
+</p>
+
+<p>
+  查了一下：<code>package.json</code> 里 <code>repository</code> / <code>bugs</code> / <code>homepage</code>
+  三个字段<b>一个都没有</b>。npm 页面上 Repository 那一栏是空的，用户想找源码、想提 issue 都没有入口。
+  而本地 git 也<b>没有 remote</b> —— 填不出真实地址，填一个 404 比留空更糟，所以一直空着。
+</p>
+
+<p>
+  1.6.19 补上了：仓库开在 <code>github.com/fateSSD/coopani-world-journey</code>，三个字段一起填。
+  另外补了一个 <code>LICENSE</code> 文件 —— 原来只有 <code>package.json</code> 里一行
+  <code>"license": "MIT"</code>，仓库里没有许可正文，严格说不构成完整的授权声明。
+</p>
+
+<h3>公开哪些，不公开哪些</h3>
+
+<p>这个工作目录里不少东西不适合公开，所以仓库不是「整个目录推上去」：</p>
+
+<div class="tbl tbl-3b">
+  <table>
+    <thead><tr><th>进仓库</th><th>不进仓库</th><th>为什么</th></tr></thead>
+    <tbody>
+      <tr class="hl"><td><code>src/</code> <code>data/</code> <code>dist/</code> <code>assets/</code>
+        <code>site/</code> <code>test/</code> <code>tools/</code></td>
+        <td>—</td>
+        <td>本体与测试。别人能读代码、能跑测试，才叫开源</td></tr>
+      <tr class="hl"><td><code>package.json</code> <code>describe.json</code> <code>README.md</code>
+        <code>CHANGELOG.md</code> <code>ENV_PROMPT.md</code> <code>LICENSE</code> <code>.gitignore</code></td>
+        <td>—</td>
+        <td>包的元数据与说明</td></tr>
+      <tr><td><code>docs/</code> 里的五份（架构说明、这次两份报告、PATCH-1.1.0、BRIDGE）</td>
+        <td><code>docs/</code> 里另外三份</td>
+        <td>那三份是给作者、别的扩展开发者的回复草稿，属私下沟通</td></tr>
+      <tr><td>—</td><td><code>cloud/</code></td>
+        <td>碰面服务器的 Worker、后台统计页、D1 建表语句。公开等于把后台接口的形状画成地图，
+          而没有人会照着自己部署一套 —— 收益为零，风险不为零</td></tr>
+      <tr><td>—</td><td><code>data-research/</code>、<code>PROGRESS.md</code>、
+        <code>HANDOFF-2026-11-06.md</code>、<code>_状态.md</code>、<code>.workbuddy/</code></td>
+        <td>建表中间数据与工作过程记录，对读代码的人没有用</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="bad-note">
+  <b>这一节的结论：</b>「用户反馈找不到我」，第一嫌疑人不是平台，是包里没写联系方式。
+  以后接手任何发到市场的包，先把 <code>repository</code> / <code>bugs</code> / <code>homepage</code> 三个字段看一眼。
+</div>
+
+
+<h2><span class="n">11</span>仓库是「推」上去的，不是 clone 出来的</h2>
+
+<p>
+  这一步本来以为十分钟的事，实际卡了两次，两次都不是小问题。
+</p>
+
+<h3>第一次：<code>git push</code> 挂了 8 分 28 秒，零输出</h3>
+
+<p>
+  推送命令发出去之后没有任何反应 —— 不是报错，是一个字都不吐。等了 8 分半手动停掉，
+  开始怀疑是凭证或者分支名的问题，结果都不是：<b>是这台机器到 <code>github.com</code> 的路太慢。</b>
+</p>
+
+<div class="tbl tbl-3d">
+  <table>
+    <thead><tr><th>测的地址</th><th>单请求耗时</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr class="hl"><td><code>https://github.com</code>（主站）</td><td><b>12 秒</b></td>
+        <td>能通，不是墙。慢到不能用</td></tr>
+      <tr class="hl"><td><code>https://api.github.com</code></td><td><b>3 秒</b></td>
+        <td>同一台机器，同一个代理，快四倍</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>
+  <code>git push</code> 不是一次 HTTP 请求，是十来次往返协商：查 ref、谈能力、传 pack、
+  等确认。单次 12 秒乘上去，8 分钟不够走完一轮。而 API 是「一问一答」，每次 3 秒，
+  请求数多但每次都是终局。
+</p>
+
+<div class="bad-note">
+  <b>判据：</b>「命令没输出」不等于「卡在认证」。先量一下目标域名的单请求耗时 ——
+  能通但慢到十几秒的，任何需要多次往返的 git 操作都别指望。
+</div>
+
+<h3>改走 Git Data API：158 个文件，35 秒</h3>
+
+<p>
+  这条路是四步，本质是「手工拼一个 commit」：
+</p>
+
+<ol>
+  <li><code>POST /git/blobs</code> —— 一个文件一个，拿回每份内容的 sha</li>
+  <li><code>POST /git/trees</code> —— 把「路径 → 文件 sha」列成一张树，拿回树 sha</li>
+  <li><code>POST /git/commits</code> —— 挂上树和父提交，拿回提交 sha</li>
+  <li><code>PATCH /git/refs/heads/main</code> —— 把分支指向这个提交</li>
+</ol>
+
+<h3>第二个坑：差点凭一个样本判「推对了」</h3>
+
+<p>
+  第一版是用工作区里的文件直接上传的。传完挑四个文件比 sha，<code>README.md</code> 对得上，
+  另外三个全不对 —— 当时第一反应是「上传过程损坏了」。
+</p>
+
+<p>
+  实际原因是行尾：<b>工作区是 CRLF，git 对象里存的是 LF。</b>而 <code>README.md</code>
+  恰好没有换行结构，所以只有它看起来是对的。<b>如果只挑了它一个来验，这件事就漏过去了。</b>
+</p>
+
+<p>
+  正确做法不是改文件、也不是重传，而是用 <code>git cat-file blob</code> 取出 git 里的原始字节去上传 ——
+  内容相同，sha 自然相同，于是两边可以逐文件对账，而不是「看着差不多」。
+</p>
+
+<div class="tbl tbl-3a">
+  <table>
+    <thead><tr><th>校验项</th><th>结果</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr class="hl"><td>整棵树的 sha</td><td><b>相等</b></td>
+        <td>远端 <code>main</code> 的 tree == 本地 <code>public</code> 分支的 tree</td></tr>
+      <tr class="hl"><td>逐文件 blob sha</td><td><b>158 个全等</b></td>
+        <td>含中文路径的 <code>docs/静态表搬迁可行性清单.html</code></td></tr>
+      <tr><td>白名单生效</td><td>无越权</td>
+        <td>顶层没有 <code>cloud/</code>、<code>data-research/</code>、<code>.workbuddy/</code>、
+          <code>PROGRESS.md</code>、<code>_状态.md</code></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<h3>收尾也绊了一下</h3>
+
+<p>
+  切回 <code>master</code> 时被两个文件挡住：<code>tools/.play-inbox.txt</code> 与
+  <code>docs/reply-659.md</code>。它们在 <code>public</code> 分支上被剔掉了，在
+  <code>master</code> 上仍然被跟踪，<code>checkout</code> 认为「你要切过去就得覆盖未跟踪文件」，
+  于是拒绝。
+</p>
+
+<p>
+  用 <code>-f</code> 切回之后，恢复出来的 <code>.play-inbox.txt</code> 字节数变大了 —— 那是
+  LF 被转成 CRLF 的正常结果，用 <code>diff --strip-trailing-cr</code> 核过内容一致。
+  <b>「字节数变了」和「内容变了」是两件事，别混。</b>
+</p>
+
+
+<h2><span class="n">12</span>现在还剩什么</h2>
+
+<div class="tbl tbl-3c">
+  <table>
+    <thead><tr><th>事项</th><th>性质</th><th>状态</th></tr></thead>
+    <tbody>
+      <tr class="hl"><td>回复市场审核 #659</td><td>挂了 11 天</td>
+        <td><b>已发</b>（11-13 08:04 UTC），等作者回</td></tr>
+      <tr class="hl"><td>市场索引还停在 1.6.17</td><td>cron 实测 5–8 小时才跑一次</td>
+        <td>开了 <code>[sync]</code> issue <b>#910</b>，<b>100 秒后已收录 1.6.19</b>，
+          issue 被 Action 自动关闭（WebUI 还要等约 10 分钟 CDN 缓存）</td></tr>
+      <tr><td>夜景与景色描写改成运行时生成（第二步）</td><td>没做</td>
+        <td>跟这次反馈无关，单独一轮做</td></tr>
+      <tr class="hl"><td>她会不会主动调 <code>journey_eat</code></td><td><b>测不出来</b></td>
+        <td>只能等真机反馈。版本说明里直接点名问一句</td></tr>
+      <tr class="hl"><td>真店名会不会让人觉得出戏</td><td>体感风险</td>
+        <td>只在「特意去吃」时出现；反馈不好再加开关</td></tr>
+      <tr><td><code>/admin/live</code> 的 <code>COUNT(DISTINCT uid)</code> 30 秒轮询</td>
+        <td>约 28 万行/天（N=100），占免费额度 6%</td><td>未改</td></tr>
+      <tr><td><code>.admin-key.local.txt</code> 与线上 <code>ADMIN_KEY</code> 不一致</td>
+        <td>换过 key、本地没同步</td><td><code>/admin/live</code> 一直 401，未修</td></tr>
+      <tr><td>跨零点 <code>journey_now</code> 还显示前一天的结尾</td><td>bug</td><td>未修</td></tr>
+      <tr><td>照片页缩略图空白棕块</td><td>本机复现不了</td>
+        <td>需要用户给宿主版本 + 页面 + 路径</td></tr>
+      <tr class="hl"><td><code>describe.json</code> 的工具数 == 代码里的 <code>TOOL_DECLS.length</code></td>
+        <td>已守住</td><td>列为发版前的第四条检查项</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>
+  07 里那三条「还差什么」现在仍然成立。第 2 条（她会不会主动调）只有真机数据能回答；
+  第 3 条（店名出戏）建议在版本说明里直接问用户，别自己替他们决定。
+</p>
+
+
+<footer>
+  <p style="margin:0">
+    <b>来源</b>：本地源码实测（<code>src/geo/cities.ts</code> 各表字节、<code>src/plan/dayplan.ts</code> 补池逻辑、
+    <code>src/geo/hotels.ts</code> 查询范式）· 运行时实调（<code>tools()</code> 紧凑 JSON 23 910 字节、<code>envPromptVars()</code> 1.8 KB、
+    <code>ENV_PROMPT.md</code> 17 730 字节、<code>journey_now</code> 回执 107 字）· 高德 <code>place/text</code> 实调一次（重庆·火锅，2026-11-13）·
+    宿主 <code>build/cortico/src/core/types.ts</code> 的 <code>WorldHost</code> / <code>CognitionHost</code> 定义 ·
+    高德 <code>place/text</code> 实调（重庆·火锅，2026-11-13；返回真店名与分类）·
+    项目原则引自 <code>skills/coopani-world-extension/SKILL.md</code> · 反馈原文来自 Discussion #586（邮件，11-13 03:18 UTC）。
+  </p>
+  <p style="margin:8px 0 0">
+    体积均为 UTF-8 字节数按 1024 折算；「约 171 KB」为按上表相减的估算值，不是实测。
+    07 的落地记录对应 <b>1.6.18（已发布）</b>，测试 996 / 996；
+    08–10 是发版当天下午的补记，11–12 是同日推公开仓库、回 #659 之后补的；
+    当前工作区 1.6.19 <b>已发布到 npm</b>，测试 1007 / 1007 通过。
+    外部单据：Discussion #586、市场审核 #659 / #801、宿主 issue #714、同步请求 #910。
+    耗时与 sha 比对来自本机实调（2026-11-13）；<code>[sync]</code> issue 的触发条件引自
+    <code>.github/workflows/sync.yml</code>（认标题含 <code>sync</code>，不看标签）。
+    <b>报告由 Chloé 生成</b>。
+  </p>
+</footer>
+
+</div>
+</body>
+</html>

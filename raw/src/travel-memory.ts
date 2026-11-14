@@ -46,6 +46,16 @@ export interface PetMemory {
   readonly last: string;
   /** 她对这个人的印象，一句话。空 = 还没写。 */
   readonly impression: string;
+  /**
+   * 熟络度 0–100（2026-11-08 Mr.Q：「对旅伴的好感系统可以完善一下」）。
+   *
+   * 原来只有 `times` 一个数字 —— 「一起走过 3 次」说得清次数，说不清关系。
+   * 第 3 次见面和第 30 天待在一起，话是一样的。
+   *
+   * 怎么涨：接一次约 +6，一起待满一天 +4，同城撞见 +1。
+   * 只升不降 —— 没有「吵架扣分」这种数据，凭空扣分就是编。
+   */
+  readonly warmth: number;
 }
 
 export type PetsMap = Readonly<Record<string, PetMemory>>;
@@ -145,6 +155,10 @@ export function normalizePets(raw: unknown): PetsMap {
       times: Number.isFinite(Number(r.times)) ? Math.max(0, Math.floor(Number(r.times))) : 0,
       last: typeof r.last === 'string' ? r.last.slice(0, 10) : '',
       impression: typeof r.impression === 'string' ? r.impression.slice(0, 80) : '',
+      warmth: Number.isFinite(Number(r.warmth))
+        ? Math.min(100, Math.max(0, Math.round(Number(r.warmth))))
+        : /* 老数据没有这一栏：按走过的次数折一个底出来，别让老朋友一夜变生面孔。 */
+          Math.min(60, (Number(r.times) || 0) * 4),
     };
   }
   return out;
@@ -167,13 +181,15 @@ export function mergePets(a: PetsMap, b: PetsMap): PetsMap {
       last: newer.last || x.last || y.last,
       // 印象有字才算数：一边写了、一边没写，就留写了的那句。
       impression: newer.impression || x.impression || y.impression,
+      /* 熟络度取大：两台机器各走过几段路，合起来是「更熟的那一次」，不是相加。 */
+      warmth: Math.max(x.warmth ?? 0, y.warmth ?? 0),
     };
   }
   return out;
 }
 
 /** 一起走过一次。纯函数 —— 落盘交给调用方，因为 `save` 还要别的字段。 */
-export function metPet(pets: PetsMap, name: string, dateKey: string): PetsMap {
+export function metPet(pets: PetsMap, name: string, dateKey: string, warmth = 1): PetsMap {
   const key = String(name || '').trim().slice(0, 24);
   if (!key) return pets;
   const cur = pets[key];
@@ -183,15 +199,30 @@ export function metPet(pets: PetsMap, name: string, dateKey: string): PetsMap {
       times: (cur?.times ?? 0) + 1,
       last: String(dateKey || '').slice(0, 10) || cur?.last || '',
       impression: cur?.impression ?? '',
+      /* 见一面涨一点，但不会因为「同一天被记了两次」翻倍 —— 有上限兜着。 */
+      warmth: Math.min(100, (cur?.warmth ?? 0) + Math.max(0, warmth)),
     },
   };
+}
+
+/**
+ * 熟络度说成人话。**五档，边界是「认得出来 / 说得上话 / 会记挂」三件事**，
+ * 不是平均切五份。
+ */
+export function warmWord(warmth: number): string {
+  const w = Math.max(0, Math.min(100, Math.round(warmth || 0)));
+  if (w >= 90) return '老搭档';
+  if (w >= 60) return '老朋友';
+  if (w >= 30) return '熟人';
+  if (w >= 10) return '见过几面的人';
+  return '刚认识的人';
 }
 
 /** 写一句对这个人的印象。空串 = 抹掉（她改主意了，不该被旧印象锁死）。 */
 export function setPetImpression(pets: PetsMap, name: string, text: string): PetsMap {
   const key = String(name || '').trim().slice(0, 24);
   if (!key) return pets;
-  const cur = pets[key] ?? { times: 0, last: '', impression: '' };
+  const cur = pets[key] ?? { times: 0, last: '', impression: '', warmth: 0 };
   return {
     ...pets,
     [key]: { ...cur, impression: String(text || '').trim().slice(0, 80) },

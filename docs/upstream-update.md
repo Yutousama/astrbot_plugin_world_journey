@@ -1,4 +1,4 @@
-﻿# 上游更新流程
+# 上游更新流程
 
 上游默认源：[`coopani-world-journey`](https://www.npmjs.com/package/coopani-world-journey)。
 两种更新方式共用同一个更新器逻辑：`adapter/update.ts`（构建成 `engine/update.mjs`）。
@@ -71,11 +71,15 @@ npm run deploy -- --target "<AstrBot>/data/plugins" --force
 |---|---|
 | `JourneyWorld` 文件路径/导出名 | `adapter/raw.ts` |
 | `start/stop/tools/envPromptVars/webUi` 签名 | `adapter/raw.ts` + `adapter/contract.ts` + `adapter/bridge.ts` |
+| 上游新增**可选**构造参数（如 1.6.19 的 `keys`/`persist`） | 通常不用改：`adapter/raw.ts` 补类型 + 注释说明传不传。传 `keys` 会让上游把 amapKey/imageKey 从配置搬进 `.env`，AstrBot 下**故意不传** |
 | `webUi().invoke` 方法名 | `adapter/bridge.ts` |
+| 新增面板（1.8.0 起共 `now/album/diary/mates/settings`） | 通常不用改：`assertWebUiShape` 只认 `now`/`album`。要用某一页的数据做聊天指令时，优先读快照字段（`/journey_mates` 读 `snapshot.mates`），别接 `settings` 那页 |
 | host 新增方法 | `adapter/host.ts`（未知成员已有 no-op 兜底） |
-| 私有 `tick`/定时器 | `adapter/compat/private.ts`（只影响模拟） |
-| prompt 动作段/变量改名 | `adapter/prompt.ts` |
-| 新增工具/配置/事件 | 通常不用改；工具/事件动态透传，配置默认值来自 raw |
+| 私有 `tick`/**定时器字段增删** | `adapter/compat/private.ts` 的 `TIMER_KEYS`（1.8.0 那次：删 `wishTimer`，多 `heartTimer`/`versionTimer`/`reportRetryTimer`）。漏改只影响模拟：真实定时器继续跑心跳与 npm 对账。测试 `test/sim.test.ts` 会按对象上现存的 `*Timer` 逐个查停，自动报缺 |
+| prompt 动作段/变量改名 | `adapter/prompt.ts`（1.7.1 起 `{{journey.actions}}` 只讲用法、不再读宿主词表；标题「### 身体怎么动」没变，剥离照旧） |
+| 上游新增工具/配置/事件 | 工具与事件动态透传，通常不用改；要加聊天快捷指令才动 `main.py`，并在 `_FEATURE_MIN_RAW` / `_FEATURE_CAP_KEY` 各登记一条、`adapter/bridge.ts capabilities()` 加一个探测键 |
+| 上游新增配置默认键 | `config_map.py` 的 `FIELD_MAP` + `_conf_schema.json` + `defaults.py`；`test/config.test.ts` 有守卫：映射写的引擎键必须在上游 defaults 或套壳白名单里（防「改了名用户设置静默失效」） |
+| 上游新增**必须随包的数据文件**（1.8.0 的 `data/*.json`） | 不用改：构建与更新器都整目录复制。但要确认路径解析方式（上游用 `new URL('../../data/x.json', import.meta.url)`，跟着 `raw/` 走） |
 
 每次变更在 `CHANGELOG.md` 记一条，写清上游版本和改了哪一处。
 

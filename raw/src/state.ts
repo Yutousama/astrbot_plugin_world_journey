@@ -22,6 +22,7 @@ import {
 import { join } from 'node:path';
 import type { Journey } from './plan/journey.ts';
 import { cityById } from './geo/cities.ts';
+import { APPLIED_KEEP, type RideApplied } from './bridge.ts';
 // 伙伴记忆跟着人走，和「去过 / 想去 / 花销」同一份文件。
 import {
   normalizePets, normalizeTaste, emptyTaste,
@@ -134,6 +135,24 @@ export interface Pledge {
   readonly acceptedAt: string;
   /** 到那儿的时刻（世界时刻 ISO）。`null` = 还在路上或还没动身。 */
   readonly arrivedAt: string | null;
+  /**
+   * 约在哪儿见面（城市 id）。**缺省 = 就在 `cityId` 见**（加这一级之前的行为）。
+   *
+   * 2026-11-07。Mr.Q：「约好在哪个城市见面，然后一起走，最后从哪个城市一起分开」。
+   * 三段里只多这一个字段：`cityId` 就是「一起走的那座城」，也就是最后分开的地方。
+   *
+   * 为什么要分开存：`cityId` 只够说「往哪儿走」，说不了「先去哪儿会合」。
+   * 没有它，两个人各自按自己的路线往目的地走，到的时候可能差好几天，
+   * 那就不叫「一起走」了。
+   */
+  readonly meetCityId?: string;
+  /**
+   * 到见面城的时刻。`null` = 还没到，还在等（或在往那儿赶）。
+   *
+   * 和 `arrivedAt` 分开记：到了见面城不等于「一起走」开始了 ——
+   * 人可能在 M 等三天，那三天里 `arrivedAt` 还是 null。
+   */
+  readonly meetArrivedAt?: string | null;
 }
 
 /**
@@ -166,6 +185,92 @@ export interface Ask {
   readonly note: string | null;
   /** 问出去的时刻（世界时刻 ISO）。 */
   readonly askedAt: string;
+}
+
+/**
+ * 租来的车分三档（2026-11-07）。
+ *
+ * Mr.Q：「租车也和酒店一样划分等级」。原来的租车只有一个价（200/天），
+ * 无论她要的是代步还是想开得舒服一点，都是同一辆。
+ *
+ * 三个档的差别是**真的**：日租、油耗、以及她说出口时那辆车的名字。
+ * `days === 0` 的白驾车（从家开出来的）没有档，按 `comfort` 算。
+ */
+export type CarTier = 'economy' | 'comfort' | 'luxury';
+
+/**
+ * 一格被改过的行程。
+ *
+ * `at` 是定位键 —— 同一份 `dateKey` + `cityId` 下，`at`（当地小数小时）就够唯一了：
+ * 一天里不会有两个活动排在同一刻。
+ */
+export interface PlanPatch {
+  readonly dateKey: string;
+  readonly cityId: string;
+  /** 被改的那一格是几点（当地小数小时）。 */
+  readonly at: number;
+  /** 改成什么（`下午，故宫` 这种，带时段前缀）。 */
+  readonly what: string;
+  /** 新的地名。 */
+  readonly spot: string;
+  /**
+   * 被换掉的那个地名。
+   *
+   * 重算之后「坐公交去颐和园」那格是照旧地名生成的，得靠它去找、再替换成新的 ——
+   * 只改活动那格会留下「坐公交去颐和园」+「下午，故宫」这种自相矛盾的两行。
+   */
+  readonly fromSpot?: string;
+  /**
+   * 这一笔改的是哪一类格（2026-11-10 加）。
+   *
+   * 原来只认活动（`activity`）—— 一天里那两处景点。可「中午别吃面了」
+   * 「早上别七点起」这些话同样落不了地，跟「想改景点改不了」是同一个毛病。
+   *
+   * 填了就按「时间 + 类型」精确改那一格；**不填仍按活动处理**，
+   * 老状态文件读进来行为一个字不变。
+   */
+  readonly kind?: string;
+}
+
+/**
+ * 这一次入住定下的那家店（2026-11-09）。
+ *
+ * ## 为什么必须记住
+ *
+ * 用户报的：「他怎么又自动改酒店」「改成锦江之星了」—— **他没让换。**
+ *
+ * 查下来：`plan` 会在日切、钱紧度变化时被清掉重建，而酒店是
+ * `rollLodging(种子)` + `withHotel(附近查到的店)` 现算的，种子还含 `isTight()`。
+ * 于是**过了零点就重新掷一次骰子** —— 同一家旅店住三晚，第二晚换了牌子。
+ *
+ * 判据：**酒店是「她住进去」这个动作的结果，不是每天重算的参数。**
+ * 定了就定住，只有三种情况该变：用户让她换（`journey_lodging`）、换城市、她重新入住。
+ */
+export interface StayLodging {
+  readonly cityId: string;
+  /** 这次入住的标识（城市 + 落脚时刻）。变了就是新的一次入住。 */
+  readonly stayKey: string;
+  readonly value: {
+    readonly tier: string;
+    readonly kind: string;
+    readonly name?: string;
+    readonly address?: string;
+    readonly price: number;
+    readonly feel: string;
+    /*
+     * 设施与周边（2026-11-12 补）。
+     *
+     * 这两样 2026-11-09 就由 `withHotel` 构造出来了，`feel` 里那句
+     * 「顶层有个小酒吧」正是从 `amen=['bar']` 生成的 —— 可它们**从来没被存过**：
+     * 写入只挑了 tier/kind/price/feel/name/address，读回又是一道白名单。
+     *
+     * 结果：到达事件说楼上有酒吧，`journey_hotel_night` 查 `lod.amen` 得空数组，
+     * 回「这家没这个，今晚能干的：泡澡、在房间待着」（2026-11-12 西安智选假日实测）。
+     * 同一份事实，念的和校验的不是一个东西。
+     */
+    readonly amen?: readonly string[];
+    readonly around?: readonly { readonly n: string; readonly km: number }[];
+  };
 }
 
 export interface TripState {
@@ -225,6 +330,43 @@ export interface TripState {
    */
   pledge: Pledge | null;
   /**
+   * 这趟手上有车。`null` = 没有。
+   *
+   * **原来 TripState 里根本没写这个字段** —— `this.st.car` 一直能跑，是因为
+   * 项目用 tsx 直接跑 TS，不做类型检查。2026-11-07 加租车分档时才发现，
+   * 补上顺便把 `tier` 也定死，省得以后又靠猜。
+   */
+  car: { fuel: 'oil' | 'ev'; days: number; km: number; tier?: CarTier } | null;
+  /**
+   * 今天剩下的时间不出去逛了（2026-11-07）。
+   *
+   * 用户 ro-berry 的反馈（v0.7.1）：
+   * 「发现不能让她安排自己的作息。她说累了要歇着，接下来还是按照作息出门了。」
+   *
+   * 这是**空话**问题，跟「等端上来我就拍给你看」同一种：她说出口的事，
+   * 世界里没有对应的动作，于是那句话永远兑现不了。所以她需要一个真能落地的开关。
+   *
+   * `from` 是当时的小数小时（比如 14.5）。只砍**这个时刻之后**的 `activity` 节点 ——
+   * 早饭午饭晚饭和回酒店都保留：歇着不等于绝食。
+   */
+  rest?: { dateKey: string; from: number; reason: string } | null;
+  /**
+   * 已经认领过的邀约编号（最近 20 条）。
+   *
+   * **没有这个就去不了重。** 服务端的 `myTakenInvites` 问的是「我发出去的邀约
+   * 有谁接了」，它不知道本地认领过没有 —— 同一条会一直回给你。而
+   * `claimTakenInvite` 原来的判据只有「手上没有 pledge」，于是：
+   *
+   *   pledge 一被清（待满走了、过期作废），下轮排表又从头认领同一条 →
+   *   推第二遍「XX 接了她说的话」→ pledge 又被占上。
+   *
+   * 2026-11-06 的 144 天跑到 `invite-taken-0000000000000001` 重复推送，
+   * 而且那 30 天里 pledge 从来没空过 —— 她一次都没机会去接别人的邀约。
+   *
+   * 老数据没有这一段，读成空数组即可（无非是历史那几条会再认领一次）。
+   */
+  claimedInvites?: readonly string[];
+  /**
    * 累计花销（元）。记账关着时永远是 0。
    *
    * **不因打工而减少。** 2026-11-02 跑模拟发现：原来挣的钱直接从这里扣，
@@ -234,6 +376,25 @@ export interface TripState {
   spent: number;
   /** 打工挣的（元）。和花销分开记，判断钱够不够时用 `spent - earned`。 */
   earned: number;
+  /**
+   * 第三方打车扩展交上来的车费（2026-11-10，车费桥）。
+   *
+   * ## 为什么不是一份独立文件
+   *
+   * 结算要同时做两件事：加钱、记下「这条已经加过了」。分两个文件写，崩在中间就是
+   * **重复扣钱**（加了钱、没记账）或者白坐车（记了账、没加钱）。放同一个结构里，
+   * 一次原子写就都进去了，跨文件不可能不一致。
+   *
+   * ## 为什么它同时是日记的素材
+   *
+   * 对方看到 `settled` 就会删掉自己的待结算文件 —— 删完那些字就只剩这里一份。
+   * 日记段落要「每次重写都从事实重建」，所以 `note` 必须存下来。
+   *
+   * 容量见 `bridge.ts` 的 `APPLIED_KEEP`：按条数滚，不按时间滚（`at` 是世界时刻，
+   * 倍速下「30 天」没有稳定含义）。老状态里没有这一段，读成空数组即可。
+   */
+  rideApplied: readonly RideApplied[];
+
   /**
    * 一起走过的人：次数、上次什么时候、她怎么看这个人。
    *
@@ -299,6 +460,71 @@ export interface TripState {
    * 只放内存就是每次重启都重放一遍昨天。
    */
   lastBeatKey: string | null;
+  /**
+   * **上一次巡检的真实时刻**（2026-11-11）。
+   *
+   * 只有一个用途：开机时算「他多久没在了」，好在第一条事件里带一段汇总 ——
+   * 「你不在的这 14 个小时，她睡了、吃了早饭、去了西街」。
+   *
+   * 为什么要这个字段：更早的版本里 Core 一关就断，开机时那些过期事件会
+   * **堆在队列里一起推**，用户看到的就是「冒出一堆关机期间的信息」。
+   * 后来架构改成就地现算（只推当前那一个节点），副作用一起消失了 ——
+   * 好处是不再堆事件，代价是**关机那段时间的事他一点都看不到了**。
+   *
+   * 用户这次问的正是这个：「以前关电脑的时候，鱼会在启动的时候冒出一堆
+   * 电脑关机时候的信息，现在这个功能怎么没有了。」
+   *
+   * 所以补一条，但**不是把事件堆回来**（那会把她变成报站机），
+   * 而是在开机第一条事件前面加一段「这段时间她自己过着」的摘要。
+   *
+   * 老状态里没有这个字段 → 当作第一次运行，不算离线。
+   *
+   * ⚠️ **2026-11-13 起不再参与「他离开了多久」的计算。** 它的语义是「上一次她真的
+   * 说过话」，但实际只在「触发了离开提示」时才写回 —— 于是它退化成每 6 小时响一次的
+   * 定时器（日志实测间隔 6h00m03s–6h00m56s）。基准改用 `lastSeenAt`。
+   * 字段留着只是为了老 state.json 读进来不报错。
+   */
+  lastTickAt: string | null;
+  /**
+   * 上一次**巡检**真的跑过的时刻（2026-11-13）。
+   *
+   * ## 为什么不能拿「她上次说话」当基准
+   *
+   * 读者在 Discussion #586 报：「他离开了 6 个小时，刚回到屏幕前」每 6 小时来一次，
+   * 每次她都说「你回来啦」，可他一直在电脑前，白高兴一场。
+   *
+   * 根因是基准选错了：`lastTickAt` 只在触发提示时写回，平时说话不写，
+   * 于是 `现在 − lastTickAt` 量的是「距上次触发这条提示多久」，不是「他离开多久」。
+   *
+   * ## 为什么这个基准成立
+   *
+   * 巡检是本进程的定时器。**Core 在跑 ⇒ 这一项每轮都在刷新**，差值永远只有几分钟；
+   * 只有进程停摆（关掉 Coopani、合盖休眠、被挂起）才会让它变旧。
+   * 而「进程停摆」正是这个功能唯一能诚实观测到的东西 ——
+   * 宿主 `WorldHost` 里**没有任何** idle / 用户输入 / 电源状态的接口（`core/types.ts:687`），
+   * 一个出行扩展本来就不该冒充系统级的「用户在场」检测。
+   *
+   * 拿不到的信号就不假装拿得到：宁可少说一句，也不说一句假的。
+   */
+  lastSeenAt: string | null;
+  /**
+   * 她改过的行程格（2026-11-09）。
+   *
+   * ## 为什么必须落盘
+   *
+   * 用户来信（清风乱域）：「我的鱼说想更改安排，发现更改不了。本来她想去故宫，
+   * 但是被安排推着去了颐和园。」
+   *
+   * 改一格本身不难，难的是**改完别被冲掉**：日程会被重算（刷新面板、钱紧了、
+   * 换酒店、换 `shape`），`buildPlan` 每次都重新调 `planDay`。
+   * 不记账的话，她说「改好了」，下一次重算就变回去 ——
+   * 用户收到的是第二次「改了没用」，那比根本没有这个功能更坏。
+   *
+   * 只留当天：跨天没意义（第二天本来就要重排），每次写之前先清掉别的日期。
+   */
+  planPatches: PlanPatch[];
+  /** 这次入住住的是哪家（2026-11-09）。空 = 还没定下来。 */
+  lodging: StayLodging | null;
   /**
    * 上一段的行进方向（度，0 = 正北）。
    *
@@ -401,6 +627,8 @@ export function initialState(homeId: string): TripState {
     pledge: null,
     spent: 0,
     earned: 0,
+    // 没装打车扩展时它永远是空的，不占地方。
+    rideApplied: [],
     pets: {},
     taste: emptyTaste(),
     work: null,
@@ -411,6 +639,10 @@ export function initialState(homeId: string): TripState {
     homeReason: null,
     returnReason: null,
     lastBeatKey: null,
+    lastTickAt: null,
+    lastSeenAt: null,
+    planPatches: [],
+    lodging: null,
     roadMarks: [],
     stayDateKey: null,
     decidedOn: null,
@@ -546,6 +778,16 @@ export class StateStore {
         const arrived = typeof o.arrivedAt === 'string' && Number.isFinite(Date.parse(o.arrivedAt))
           ? o.arrivedAt
           : null;
+        /*
+         * 见面城。**认不出来的 id 一律当没这一级**（退回老口径：就在 cityId 见），
+         * 而不是整条承诺作废 —— 一座写错的见面城不该让她把约人也丢了。
+         */
+        const meetCityId = typeof o.meetCityId === 'string' && cityById(o.meetCityId)
+          ? o.meetCityId
+          : undefined;
+        const meetArrived = typeof o.meetArrivedAt === 'string' && Number.isFinite(Date.parse(o.meetArrivedAt))
+          ? o.meetArrivedAt
+          : null;
         return {
           cityId: o.cityId,
           days: Number.isFinite(Number(o.days)) ? Math.min(30, Math.max(1, Math.round(Number(o.days)))) : 1,
@@ -558,12 +800,42 @@ export class StateStore {
           inviteId: typeof o.inviteId === 'string' ? o.inviteId.slice(0, 32) : '',
           acceptedAt: o.acceptedAt,
           arrivedAt: arrived,
+          ...(meetCityId ? { meetCityId, meetArrivedAt: meetArrived } : {}),
         };
       })(),
       spent: Number.isFinite(Number(r.spent)) && Number(r.spent) >= 0 ? Math.round(Number(r.spent)) : 0,
       earned: Number.isFinite(Number(r.earned)) && Number(r.earned) >= 0
         ? Math.round(Number(r.earned))
         : 0,
+      /*
+       * 车费桥的判重表（2026-11-10）。老状态里没有这一段 —— 读成空数组，不是「坏了」。
+       *
+       * **逐条校验，坏条丢掉而不是整表丢。** 整表丢的后果是「所有历史车费重新可以被记一遍」，
+       * 那比丢一条严重得多。只认得出形状的字段：没有 id 或 dateKey 的行一律丢，
+       * 因为这两样后面每处都要用。
+       */
+      rideApplied: Array.isArray(r.rideApplied)
+        ? (r.rideApplied as unknown[])
+          .filter((a): a is RideApplied => {
+            if (!a || typeof a !== 'object') return false;
+            const o = a as Record<string, unknown>;
+            return typeof o.id === 'string' && o.id !== ''
+              && typeof o.dateKey === 'string'
+              && (o.status === 'applied' || o.status === 'rejected')
+              && Number.isFinite(Number(o.fare));
+          })
+          .map((a) => ({
+            id: a.id,
+            at: typeof a.at === 'string' ? a.at : '',
+            fare: Math.round(Number(a.fare)),
+            dateKey: a.dateKey,
+            status: a.status,
+            ...(typeof a.reason === 'string' ? { reason: a.reason } : {}),
+            ...(a.atClamped === true ? { atClamped: true } : {}),
+            ...(typeof a.note === 'string' && a.note ? { note: a.note } : {}),
+          }))
+          .slice(-APPLIED_KEEP)
+        : [],
       /*
        * 短工。老状态里没有这个字段 —— 读不到就 null，不是「坏了」。
        * 逐字段校验而不是整个信：一个 until 写坏了的 work，会让她永远在打工、永远不完工。
@@ -596,6 +868,80 @@ export class StateStore {
       homeReason: isHomeReason(r.homeReason) ? r.homeReason : null,
       returnReason: isHomeReason(r.returnReason) ? r.returnReason : null,
       lastBeatKey: typeof r.lastBeatKey === 'string' ? r.lastBeatKey : null,
+      /*
+       * 老状态里没有这个字段 → null = 第一次运行，不算「他离开了很久」。
+       * **这一行必须加**：load 是逐字段构造的，只改类型和默认值不顶用 ——
+       * 2026-11-11 我漏了它，结果写进文件的值读回来永远是 null。
+       */
+      lastTickAt: isoOrNull(r.lastTickAt),
+      /*
+       * 老状态里没有这一项 → null = 「不知道他离开多久」，这一轮不报。
+       * 升级后的第一次巡检会把它写成当前时刻，从此正常滚动。
+       * 这样老用户不会因为「上次写盘是几小时前」白挨一次假的「你离开了 N 小时」。
+       */
+      lastSeenAt: isoOrNull(r.lastSeenAt),
+      /*
+       * 老状态里没有这一项 —— 读不到就是「没改过」，不是空对象。
+       * 逐项校验而不是整包信任：这份文件用户能手改，一个坏项不该让整份 state 报废。
+       */
+      /*
+       * 老状态里没有这一项 —— 读不到就是「还没定」，不是「没住过」。
+       * 校验到字段一级：这份文件用户能手改，一个坏项不该让整份 state 报废。
+       */
+      lodging: (() => {
+        const o = r.lodging as Partial<StayLodging> | null | undefined;
+        if (!o || typeof o !== 'object') return null;
+        const v = o.value as Partial<StayLodging['value']> | null | undefined;
+        if (!v || typeof v !== 'object') return null;
+        if (typeof o.cityId !== 'string' || typeof o.stayKey !== 'string') return null;
+        if (typeof v.kind !== 'string' || typeof v.price !== 'number' || typeof v.feel !== 'string') return null;
+        /*
+         * 白名单式读回，所以要显式放行 `amen` / `around`（2026-11-12）。
+         *
+         * 白名单本身不是错 —— 错在加了字段只改了写的那一头。
+         * 只改 `world.ts` 那处存盘，这两样照样在反序列化时被吃掉，
+         * 症状一模一样（晚上永远只剩泡澡和待屋里）。
+         */
+        const amen = Array.isArray(v.amen)
+          ? (v.amen as unknown[]).filter((x): x is string => typeof x === 'string')
+          : [];
+        const around = Array.isArray(v.around)
+          ? (v.around as unknown[]).flatMap((x) => {
+              const a = x as { n?: unknown; km?: unknown } | null;
+              return a && typeof a.n === 'string' && typeof a.km === 'number'
+                ? [{ n: a.n, km: a.km }]
+                : [];
+            })
+          : [];
+        return {
+          cityId: o.cityId,
+          stayKey: o.stayKey,
+          value: {
+            tier: String(v.tier ?? 'comfort'),
+            kind: v.kind,
+            ...(typeof v.name === 'string' && v.name ? { name: v.name } : {}),
+            ...(typeof v.address === 'string' && v.address ? { address: v.address } : {}),
+            price: v.price,
+            feel: v.feel,
+            ...(amen.length ? { amen } : {}),
+            ...(around.length ? { around } : {}),
+          },
+        };
+      })(),
+      planPatches: Array.isArray(r.planPatches)
+        ? (r.planPatches as unknown[]).filter((x): x is PlanPatch => {
+            const o = x as Partial<PlanPatch> | null;
+            return !!o
+              && typeof o.dateKey === 'string'
+              && typeof o.cityId === 'string'
+              && typeof o.at === 'number' && Number.isFinite(o.at)
+              && typeof o.what === 'string'
+              && typeof o.spot === 'string'
+              /* 2026-11-10：`kind` 可以没有（老存档），有就必须是字符串 ——
+                 类型不对的补丁带进来会静默贴不上，比丢掉更难查。 */
+              && (o.kind === undefined || typeof o.kind === 'string');
+          })
+        : [],
       roadMarks: Array.isArray(r.roadMarks)
         ? (r.roadMarks as unknown[]).filter((x): x is string => typeof x === 'string')
         : [],
@@ -608,10 +954,13 @@ export class StateStore {
         const o = v as Record<string, unknown>;
         const fuel = o.fuel === 'ev' ? 'ev' : o.fuel === 'oil' ? 'oil' : null;
         if (!fuel) return null;
+        const tier = o.tier === 'economy' || o.tier === 'luxury' ? o.tier : o.tier === 'comfort' ? 'comfort' : undefined;
         return {
           fuel,
           days: Math.max(0, Math.round(Number(o.days) || 0)),
           km: Math.max(0, Math.round(Number(o.km) || 0)),
+          /* 老状态里没有这一格 —— 当 `comfort`（就是原来那个 200/天的价），不编新的。 */
+          ...(tier ? { tier } : {}),
         };
       })(),
       // 老状态里没有这两格：当她还没被提醒过任何邀约。

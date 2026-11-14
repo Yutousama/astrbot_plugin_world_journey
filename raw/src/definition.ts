@@ -11,6 +11,13 @@ export const JOURNEY: WorldDefinition<JourneyConfigSection> = {
     cfg: ctx.cfg,
     dataDir: ctx.dataDir,
     botName: ctx.botName,
+    // 密钥走宿主那两个口子（写 botDir/.env，0600），不留在 config.json 里。
+    keys: {
+      read: (name) => ctx.secret(name),
+      write: (name, value) => ctx.storeSecret(name, value),
+    },
+    // 搬完之后要把配置里那份清掉，否则重启一次 key 又回到 config.json。
+    persist: (patch) => ctx.persist(patch),
   }),
   describe: JOURNEY_DESCRIBE,
 };

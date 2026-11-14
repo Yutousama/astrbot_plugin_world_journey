@@ -34,6 +34,17 @@ export interface PhotoRecord {
   readonly spot: string;
   /** 真实时刻（ISO）。排序用 —— 世界时间在高倍速下会跑到未来，不能当排序键。 */
   readonly at: string;
+  /**
+   * 生成这张用的提示词（2026-11-11，用户 TwoTwo：「AI 生成的照片有些不满意，
+   * 能否加一个重新生成或者删除」）。
+   *
+   * 存下来只为一件件事：让他在相册页**看见它、改它、拿着改过的再去拍一张**。
+   * 所以它原样存，不做归一化 —— 用户改的是这一整段话。
+   *
+   * **老记录没有这一格。** 那时候还不存，读出来是 undefined。别把它当损坏：
+   * 前端见到空串就说明这张拍得早、没留下提示词。
+   */
+  readonly prompt?: string;
 }
 
 export class PhotoBook {
@@ -61,6 +72,25 @@ export class PhotoBook {
   add(rec: PhotoRecord): void {
     this.items = [rec, ...this.items];
     this.save();
+  }
+
+  /**
+   * 从相册里拿掉一张（2026-11-11，用户 TwoTwo 来信：AI 生成的照片不满意，想要重生成或删除）。
+   *
+   * **只摘记录，不删媒体文件。** 三条理由：
+   *
+   * 1. 媒体是内容寻址的（`log:cf799f4c…`），同一张图可能被别的记录或别的会话引用；
+   * 2. 已经生成的月报 HTML 里嵌的就是那张，删了字节那边就裂；
+   * 3. 「不满意」是主观的，她替用户判断该不该真删，等于替人扔掉照片。
+   *
+   * 想彻底删就去媒体目录自己删 —— 面板只负责让它别碍眼。
+   */
+  remove(handle: string): boolean {
+    const before = this.items.length;
+    this.items = this.items.filter((p) => p.handle !== handle);
+    if (this.items.length === before) return false;
+    this.save();
+    return true;
   }
 
   /**
@@ -94,6 +124,21 @@ export class PhotoBook {
     return removed;
   }
 
+  /**
+   * 用新记录替换旧的那一张（重新生成用，2026-11-11）。
+   *
+   * 和 `remove` + `add` 的唯一区别：**位置不动**。
+   * 重新生成拍的是同一张照片（同一个日期、同一座城），不该因为重拍一次就跳到相册最前面。
+   * 找不到旧 handle（已经被 × 摘掉了）返回 false，让调用方决定怎么办。
+   */
+  update(handle: string, rec: PhotoRecord): boolean {
+    const i = this.items.findIndex((p) => p.handle === handle);
+    if (i < 0) return false;
+    this.items[i] = rec;
+    this.save();
+    return true;
+  }
+
   private load(): void {
     if (!existsSync(this.file)) return;
     try {
@@ -115,6 +160,12 @@ export class PhotoBook {
           title: typeof r.title === 'string' ? r.title : '',
           spot: typeof r.spot === 'string' ? r.spot : '',
           at: r.at,
+          /*
+           * 提示词（2026-11-11）。这里是**白名单重建**，漏一个字段它就永远读不回来 ——
+           * 第一版就是漏了这一行，面板上看得到、重开一次全没了。
+           * 老记录没有这一格：留 undefined，不补空串（前端要能区分「没留下」和「被清空」）。
+           */
+          ...(typeof r.prompt === 'string' ? { prompt: r.prompt } : {}),
         }));
     } catch {
       // 坏了就当没有。照片簿丢一张索引，比让 World 起不来轻得多。

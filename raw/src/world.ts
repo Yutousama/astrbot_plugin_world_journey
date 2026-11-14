@@ -20,10 +20,11 @@ import type {
   Logger, ToolDef, World, WorldHost, WorldWebUiDecl, TriggerMode, BlobInput, EventEnvelope, WorldLamp,
 } from 'cortico/core/types.ts';
 import { JOURNEY_ID, journeyConfigGroups, type JourneyConfigSection } from './config.ts';
-import { cityByName, cityById, CITIES, type City } from './geo/cities.ts';
+import { cityByName, cityById, CITIES, terrainOf, type City } from './geo/cities.ts';
+import { spotKindLine } from './geo/spot-profile.ts';
 import { distanceKm } from './geo/distance.ts';
-import { modeById, type ModeId, type TravelMode, type SeatGrade } from './geo/modes.ts';
-import { localMoment, humanHours, localHour, shiftDateKey, tzOffsetLabel } from './clock.ts';
+import { modeById, hoursFor, type ModeId, type TravelMode, type SeatGrade } from './geo/modes.ts';
+import { localMoment, humanHours, localHour, shiftDateKey, tzOffsetLabel, utcFromLocal } from './clock.ts';
 import { AmapWeather, feelOf, type Forecast } from './geo/amap.ts';
 import { bodyFeeling, climateOfCity } from './geo/climate.ts';
 import { bearingDeg } from './geo/distance.ts';
@@ -31,40 +32,57 @@ import { readNowPlaying, songLine, cityMentioned, type NowPlaying } from './musi
 import { rollTrouble } from './easter.ts';
 import { makeSchedule, scheduleText } from './plan/timetable.ts';
 import { join, dirname, resolve } from 'node:path';
-import { planDay, fmtHour, pickFood, type DayPlan } from './plan/dayplan.ts';
+import { planDay, fmtHour, pickFood, CAR_TIERS, type DayPlan, type BeatKind } from './plan/dayplan.ts';
+import { banterWith, bondWith, partWith, stayWith, travelWith } from './mate-talk.ts';
 import type { Pilgrim } from './geo/pilgrim.ts';
-import { readPetVocab, actionsPrompt } from './pet-vocab.ts';
-import { ActionWishes } from './action-wishes.ts';
+import { actionsPrompt } from './pet-vocab.ts';
+import { VersionCheck } from './version-check.ts';
+import { AMAP_KEY_NAME, IMAGE_KEY_NAME, adoptKey, readKey, type KeyPorts } from './secrets.ts';
 import {
   rollLodging, rerollLodging, withHotel, lodgingLabel,
   type Lodging, type LodgingWant,
 } from './plan/lodging.ts';
 import { HotelDirectory } from './geo/hotels.ts';
+import { EateryDirectory } from './geo/eatery.ts';
 import {
   pickDestination, pickMode, canTravel, usableModesFor, buildJourney, progressOf, remainingRealHours, citiesOf,
   beatMarks, beatKey, sentProgress, beatGapText, BEAT_GAP_DEFAULT, pickGrade,
   type Journey,
 } from './plan/journey.ts';
 import {
-  slotOf, findNeighbors, neighborLine, reportPresence, fetchStatus,
+  slotOf, findNeighbors, neighborLine, knownNeighborLine, reportPresence,
+  reportFootprint, reportSignpost, fetchStatus, paceGap,
+  putCard, fetchCards, EMPTY_BOARD,
+  putProfile, fetchProfiles, EMPTY_PROFILE_BOARD, normalizeMeetUrl, explainNet,
   sendInvite, listInvites, myTakenInvites, acceptInvite, inviteLine,
   type MeetOptions,
 } from './meet.ts';
-import { StateStore, initialState, type TripState, type HomeReason, type Pledge, type Ask } from './state.ts';
+import { factsFor } from './geo/hotel-facts.ts';
+import { nightIn } from './geo/cities.ts';
+import { playLine } from './geo/city-play.ts';
+import { hotelNightOptions, spotRideOptions } from './plan/leisure.ts';
+import { StateStore, initialState, type TripState, type HomeReason, type Pledge, type Ask, type CarTier, type PlanPatch } from './state.ts';
+import {
+  PENDING_DIR, PENDING_WARN_FILES, PUBLIC_FILE, LIVE_FILE,
+  readPending, settle, publicSnapshot, rideParagraph, parseLive,
+  type LiveRide, type RideNotice,
+} from './bridge.ts';
 import { DiaryStore, type DiaryEntry } from './diary.ts';
 import {
   TravelMemoryStore, metPet, setPetImpression, setTaste, tasteSummary, emptyTaste,
-  TASTE_KINDS, type PetsMap, type TasteKind,
+  TASTE_KINDS, warmWord, type PetsMap, type TasteKind,
 } from './travel-memory.ts';
 import {
   monthlyReport, monthTitle, citiesOfMonth,
   pickPosters, posterPrompt, yearlyHtml, type MonthlyPoster, type MonthlyPhoto, type MonthlyEntry,
   type YearlyTaste,
 } from './monthly.ts';
-import { shootPhoto, photoPrompt, photoTitle, spotFromBeat, skyOf, type SkyView, type PhotoSubject } from './photo.ts';
-import { shootComfy } from './comfy.ts';
+import { shootPhoto, photoPrompt, photoTitle, spotFromBeat, skyOf, nightNegative, shotIsNight, imagePixelSize, type SkyView, type PhotoSubject } from './photo.ts';
+import { shootComfy, parseSize } from './comfy.ts';
+import { resolveImageBackend, presetDefaults } from './image-backend.ts';
 import { cropBottom, WATERMARK_CROP_RATIO } from './png-crop.ts';
-import { PhotoBook } from './photo-book.ts';
+import { PhotoBook, type PhotoRecord } from './photo-book.ts';
+import { PartyLog } from './party-log.ts';
 import { UiStore, hm, remainText, type UiSnapshot, type UiTimelineItem, type UiLeg } from './ui.ts';
 
 /** 加载后的待命宽限。见 `depart()` 开头。 */
@@ -120,6 +138,21 @@ const MISS_STOP_EXTRA_MAX = 72;
 const PLEDGE_TRAVEL_WINDOW_MS = 3 * 86_400_000;
 
 /**
+ * 到了见面城之后，最多等几天（2026-11-07）。
+ *
+ * Mr.Q 的原话：「继续等（有约定的情况下其他迟到的人应该尽快到碰面点）」。
+ * 所以等人这一侧不设「等一天就走」，只在**真的等不到**时收场。
+ *
+ * 那为什么还要有上限：没有上限就是死等。对方可能根本没动身（改主意了、
+ * 那台电脑没开、或者他的 pledge 已经被别的事挤掉），她就会在一座城里耗到出门上限。
+ * 三天是这个系统的常识尺度 —— 和 `PLEDGE_TRAVEL_WINDOW_MS` 一样，
+ * 一天路程 + 一天缓冲 + 一天作为「你俩显然不会碰上了」。
+ *
+ * **从到站那一刻起算，不是从接约那一刻。** 赶路的两天不该吃掉等人的三天。
+ */
+const MEET_WAIT_WINDOW_MS = 3 * 86_400_000;
+
+/**
  * 她问出口的那件事，等多久算没人答。
  *
  * 20 小时：比一个世界日短一点，这样「早上问、晚上还没回」就会自己作废，
@@ -156,6 +189,34 @@ const TICK_MAX_MS = 60_000;
 /** 一次巡检最多跨过多少世界时间。15 分钟足够踩到任何相邻的作息节点。 */
 const TICK_WORLD_BUDGET_MS = 15 * 60_000;
 const TICK_MIN_MS = 3_000;
+/**
+ * 位置心跳的间隔（2026-11-10）。
+ *
+ * 20 分钟是「在线」和「写入量」的折中：服务端把 30 分钟内有过上报算作在线，
+ * 留 10 分钟余量给一次失败的请求重来。上报是 upsert，心跳不涨行数，只涨写入次数
+ * —— 200 只鱼约 1.4 万次/天，D1 免费额度 10 万行/天，够。
+ */
+const HEARTBEAT_MS = 20 * 60_000;
+/**
+ * 「他离开了多久」的落盘节流（2026-11-13）。
+ *
+ * 基准 `lastSeenAt` 每轮巡检都要刷新，但**不必每轮都写盘** —— `persist()`
+ * 一次写 state 和旅行记忆两个文件，而巡检最快 3 秒一轮。
+ *
+ * 5 分钟是折中：最坏情况重启后少算 5 分钟，阈值是 6 小时，误差可以忽略。
+ */
+const SEEN_SAVE_MS = 5 * 60_000;
+/**
+ * 上报失败后的重试节奏（2026-11-10）。
+ *
+ * 为什么需要：心跳 20 分钟一次，**服务端一旦 19 小时不接，客户端就是 19 小时看不见**。
+ * 2026-11-09 那次线上故障里，`reportPresence` 每次失败只写一行 warn、不重试，
+ * 200 条鱼集体静默消失一整天 —— 而客户端手里其实没有任何补救动作。
+ *
+ * 三档退避，封顶 10 分钟（不超过心跳间隔的一半）：服务端恢复后最迟 10 分钟就补上，
+ * 又不会在长故障里把自己打成请求风暴。成功一次立刻清零。
+ */
+const REPORT_RETRY_MS = [60_000, 3 * 60_000, 10 * 60_000] as const;
 /** 一个地方待几天。骨架阶段 2-4 天，之后可以按城市大小调。 */
 const STAY_DAYS_MIN = 2;
 const STAY_DAYS_MAX = 4;
@@ -173,10 +234,56 @@ const GO_HOME_CHANCE = 0.2;
 const HOME_RADIUS_KM = 500;
 
 /**
+ * 事实清单末尾那一句（2026-11-08）。
+ *
+ * ## 为什么要有它
+ *
+ * 一位用户说：「环游世界的时候 ai 味还挺重的 / 提示词可能少了一句 /
+ * 请根据你的人设和上下文 / 有些懒癌模型会复述一遍」。
+ *
+ * 他说到点上了。`nowSummary` 是一份十几行的结构化事实清单，
+ * 而**清单会教模型照着清单说话** —— 给它十七行，它就说十七行，
+ * 只不过换成通顺的散文。这是 AI 味最直接的来源，跟文笔无关。
+ *
+ * ## 为什么放末尾，也为什么不改结构
+ *
+ * 放末尾是因为模型读完就动笔，最后一句对行文基调的影响最大。
+ *
+ * **不动那十七行**：每一条都是修某个具体缺口才加的（车、通勤、约定、日记欠账
+ * 都曾经「功能在、她看不见」），删哪条都会把旧 bug 请回来。
+ * 所以只能在**呈现方式**上补一句，不能在内容上砍。
+ *
+ * ## 为什么不能只写进 `ENV_PROMPT.md`
+ *
+ * 那份模板是给人抄的。**存量用户早就把人设写进角色卡了，模板改了不会回溯。**
+ * 只有这里（数据本身）和工具描述，是每次都会进上下文的。
+ */
+const NOW_TAIL = '（这些是事实，你自己心里有数就行 —— 要说的时候挑着说，不用一条条报。）';
+
+/**
  * 每公里大致多少钱。只用来让「这趟花了多少」有个量级，不是票价表。
  *
  * 校准过几组：火车 500km ≈ 250 元（二等座对得上）、自驾 1240km ≈ 990 元
  * （油费加过路费）、公交 300km ≈ 120 元。
+ *
+ * ## 2026-11-08 按真实票价重定（携程火车票实查）
+ *
+ * 原来火车一律 0.5 元/公里，短途对得上，**长途差得远** —— 因为一千公里上下
+ * 跑的不是同一种车：短途是白天高铁（贵），长途是夜车卧铺（便宜一半）。
+ *
+ * | 线路 | 里程 | 真实票价 | 单价 |
+ * |---|---|---|---|
+ * | 上海虹桥→杭州东（G） | 169 | 73 | 0.43 |
+ * | 成都东→西安北（G） | 658 | 263–285 | 0.40–0.43 |
+ * | 北京南→上海虹桥（G） | 1318 | 598–661 | 0.45–0.50 |
+ * | 北京西→兰州（Z 硬卧） | 1650 | 322–363 | **0.20–0.22** |
+ *
+ * 高铁稳定在 0.40–0.50，卧铺只有 0.20 上下。原来 0.5 一路乘下去，
+ * 北京到兰州的硬卧算出 825 元 —— **是实价的两倍半**。
+ * 单价改成 `trainUnit(km)` 分段算，见那个函数。
+ *
+ * 长途汽车一并下调：0.4 → 0.33。公路客运实价在 0.25–0.35 之间
+ * （兰州→天水 320 公里约 100 元），0.4 是城际快客的上限，不是常态。
  *
  * **飞机单算，不在这一行里。** 2026-11-03 Mr.Q 给的真实数字：兰州飞三亚淡季 800-900 元。
  * 原来这里写 1.5 元/公里，是拿「5000 公里 7500 元」校准的 —— 那是**全价票**，
@@ -185,13 +292,48 @@ const HOME_RADIUS_KM = 500;
  */
 const FARE_PER_KM: Record<ModeId, number> = {
   walk: 0, bike: 0, scooter: 0.1, motorcycle: 0.3,
-  car: 0.8, bus: 0.4, train: 0.5, ship: 0.7,
+  car: 0.8, bus: 0.33,
+  /** 火车走 `trainUnit(km)` 分段算，这一项只是兜底，不会实际用到。 */
+  train: 0.42,
+  ship: 0.7,
   /** 飞机正常走 `fareOf()` 的分段公式，这里只是兜底，不会实际用到。 */
   plane: 0.4,
 };
 
+/* 铁路单价的上下两端（元/公里），依据见 `FARE_PER_KM` 上面那张表。 */
+const TRAIN_FAST = 0.42;
+const TRAIN_SLOW = 0.21;
+
+/**
+ * 铁路的每公里单价 —— **随距离递减**，因为一千公里上下跑的不是同一种车。
+ *
+ * ## 为什么不是一个数
+ *
+ * 短途是白天的高铁二等座（0.42 元/公里），长途是夜车硬卧（0.21）。
+ * 一个数伺候不了两头：写 0.5，北京到兰州硬卧算 825（实价 322–363）；
+ * 写 0.21，成都到西安只剩 138（实价 263–285）。
+ *
+ * ## 为什么要过渡，而不是在某一公里处劈开
+ *
+ * 直接 `km < 1000 ? 0.42 : 0.21` 会在 999 公里处出现「多走两公里，票价腰斩」。
+ * 那在代码上没错（`journey.ts` 的座位档本来就在 1000 公里处分界），
+ * 但用户看到的是「昨天去的城市 420，今天这个 210，明明更远」。
+ *
+ * 所以 800–1200 之间线性过渡：这一段她本来就可能两样都坐，
+ * 单价取两端之间，和「有时高铁、有时卧铺」的期望值对得上。
+ */
+export function trainUnit(km: number): number {
+  if (km <= 800) return TRAIN_FAST;
+  if (km >= 1200) return TRAIN_SLOW;
+  return TRAIN_FAST + (TRAIN_SLOW - TRAIN_FAST) * ((km - 800) / 400);
+}
+
 /** 一天三顿的大致开销。 */
 const MEALS_PER_DAY = 95;
+/*
+ * 租车的日租金不在这里了 —— 2026-11-07 起分三档，表在 `plan/dayplan.ts` 的 `CAR_TIERS`。
+ * 价格和油耗必须共用一份：分开写两份，迟早出现「租金按经济型收、油耗按豪华型算」。
+ */
 /** 预算剩余低于这个数，就开始过紧日子。 */
 const TIGHT_THRESHOLD = 300;
 
@@ -251,7 +393,13 @@ const TOOL_DECLS = [
   {
     name: 'journey_now',
     description:
-      'Where she is right now: which city, which day of the trip, what she is doing at this hour, where she is staying tonight, and - if she is on the road - how far along she is. Use it when the person asks where she is, how the trip is going, or when you need her current situation before answering something about it.',
+      /*
+       * 2026-11-08 补最后一句。一位用户的原话：「环游世界的时候 ai 味还挺重的 /
+       * 有些懒癌模型会复述一遍」—— 这条回执回来是十几行结构化事实，
+       * 而描述里只说「用在哪里」，没说「不要照念」。模型最省力的做法就是照念。
+       */
+      'Where she is right now: which city, which day of the trip, what she is doing at this hour, where she is staying tonight, and - if she is on the road - how far along she is. Use it when the person asks where she is, how the trip is going, or when you need her current situation before answering something about it. '
+      + 'This is background for you, not text to hand back: answer what was actually asked, in her own words, rather than reading the fields out one by one. If only one thing was asked about, only one thing needs saying.',
     parameters: { type: 'object', additionalProperties: false, properties: {} },
     tags: ['read'] as const,
     summary: { zh: '她现在在哪、第几天、这个点该做什么。', en: 'Where she is right now and what this hour is for.' },
@@ -259,7 +407,19 @@ const TOOL_DECLS = [
   {
     name: 'journey_diary_write',
     description:
-      'Write the diary entry for a day of the trip, in her own voice. Call it once at the end of a local day, after the evening beats have happened. The entry is appended to the Markdown file for that month (one file per month, e.g. 2026-11.md), which follows the person across machines. Write what actually happened that day - the city, the road, what she ate, how the room was - not a summary of the extension.',
+      /*
+       * 2026-11-08 重写最后两句。
+       *
+       * 原来写的是「Write what actually happened that day - the city, the road,
+       * what she ate, how the room was」—— 本意是「别写成功能总结」，
+       * 实际效果是**给了一张写作清单**：模型照着这四项挨个写一遍，
+       * 一天的日记就成了「到了X、路上Y、吃了Z、房间W」。
+       *
+       * 用户的原话：「提示词可能少了一句 / 请根据你的人设和上下文 /
+       * 有些懒癌模型会复述一遍」。他说得对 —— 缺的不是禁令，是**正面写法**。
+       */
+      'Write the diary entry for a day of the trip, in her own voice. Call it once at the end of a local day, after the evening beats have happened. If somebody is travelling with her today, they belong in the entry too - what they did together, not just that they were there. The entry is appended to the Markdown file for that month (one file per month, e.g. 2026-11.md), which follows the person across machines. '
+      + 'Write it the way she would tell it to herself at night, not as a report of the day: pick the one or two things she is still thinking about - a sound, somebody she watched, how her legs felt - and give those room. The city, the road, the meal and the room are material to draw on, not a checklist to walk through in order. Ticking each of them off is exactly what makes an entry read like a machine. Not a summary of the extension either.',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -338,6 +498,7 @@ const TOOL_DECLS = [
     name: 'journey_photo',
     description:
       'Take a photo right now and show it in the chat: the view from where she is. Call it whenever the person asks for a photo, or asks what it looks like where she is - never tell them to press a button in the app instead, this is the button. In a city it is the spot she is at right now; on the road it is the view out of the window. Any hour is fine: being asked is reason enough. One photo per call - if they want another, call it again. '
+      + 'YOU write the frame: `describe` is your own line about what is in the picture (<=60 chars), `focus` is how you hold the camera. When the person says shoot *that* - a cat by the lamp, the sugar-painting stall, rain on the awning - turn it into one `describe` line and take the photo. Do not ask them to be more specific first. The place, the hour, the light and the season are already handled; the content is yours. '
       + 'Set view="sky" when they ask for the sky itself - stars, the moon, sunrise, sunset, clouds. It means she tilts the camera up, nothing more: what comes out is still the real sky over her at that hour. Stars only show at night and only when it is not overcast; ask at noon and you get daylight, ask on a cloudy night and you get cloud. Never claim a sky she did not actually see.',
     parameters: {
       type: 'object',
@@ -364,6 +525,53 @@ const TOOL_DECLS = [
             + 'detail = one close-up object (细节 / 特写 / 车票 / 钥匙 / 茶碗 / 菜单). '
             + 'sky = same as view=sky. Pick by what they actually asked for; if they just say "拍张照", use ground.',
         },
+        /*
+         * 她自己补一句怎么拍（2026-11-09）。
+         *
+         * **这一格管取景，不管内容。** 用户已经开始提具体要求了
+         * （「拍一下你在公交车上的风景」），而 `subject` 只能说清「车窗外的风景」，
+         * 说不出「我坐得挺靠后」。这一格就是补这个的。
+         *
+         * 但边界必须写死在描述里：她能加的是**怎么拍**，
+         * 不是**拍一个本来不在那儿的东西**。放开了，她就会写出
+         * 「九寨沟的樱花」这种季节对不上的画面，而且「只拍她真看到的」这条线就废了。
+         */
+        /*
+         * 她自己写画面内容（2026-11-10，Mr.Q：「能让桌宠自己写提示词嘛」）。
+         *
+         * 事实层（地点/时段/天气/光/季节/有无人物）仍由程序拼死，
+         * 她拿到的是**画面里那一段**。全交给她会写出「九寨沟的樱花」——
+         * 季节对不上，而且「只拍她真看到的」这条线一破，真实数据全白接。
+         */
+        describe: {
+          type: 'string',
+          description: 'Optional, one short line describing WHAT IS IN THE FRAME, at most 60 characters. '
+            + '**Write it in English** - this string goes straight into the image model, and local SDXL CLIP '
+            + 'cannot read Chinese (it comes back as gibberish with brush-script watermarks). '
+            + '"a calico cat crouching under a streetlight, looking up" / "empty platform, one bench, half a bottle of water". '
+            + 'This is the content of the shot, not the framing (that is `focus`). '
+            + 'Only describe what is really here right now: the place she is at, this season, this weather. '
+            /*
+             * 2026-11-14：她的画面要按「这是什么性质的地方」写，不能按城市名猜。
+             * 敦煌博物馆被画进沙丘，就是因为她手上只有地名、没有「这是个室内展馆」这条事实。
+             * 括号由 `spotKindLine` 给（`nowSummary` 的「此刻在X」那一行）。
+             */
+            + 'The spot in `journey_now` comes with a parenthetical - "(indoor museum, downtown)", "(cliff caves, out in the wild)" - '
+            + 'that is what KIND of place it is. Write the frame to match that kind: a hall with display cases for a museum, '
+            + 'a cliff face for caves, a street of shopfronts for a downtown block. '
+            + 'If the parenthetical is missing, the program could not tell - then describe only what she can actually see, '
+            + 'and do not infer the surroundings from the city name.'
+            + 'Never add flowers, snow, festivals or crowds that this place and season do not have. '
+            + 'If nothing is worth describing, leave it out - the program already describes the place and light.',
+        },
+        focus: {
+          type: 'string',
+          description: 'Optional, one short line in her own words on HOW to frame it, at most 40 characters - '
+            + '"靠后坐，前面好几个人挡着" / "蹲下来贴着水面拍" / "镜头往上偏一点，别拍到人群". '
+            + 'Framing, angle, where she is sitting, what is in the near foreground. '
+            + 'Do NOT use it to add anything that is not actually there: no flowers, snow, buildings or people '
+            + 'that the place and season do not have. If what they asked for is not in front of her, say so instead of writing it in.',
+        },
       },
     },
     tags: ['write'] as const,
@@ -384,8 +592,9 @@ const TOOL_DECLS = [
       type: 'object',
       additionalProperties: false,
       properties: {
-        to: { type: 'string', description: 'Which city she wants to go to, by name - 拉萨 / 成都 / 巴黎. Must be one of the built-in cities.' },
-        days: { type: 'integer', minimum: 1, maximum: 14, description: 'How many days she means to stay there. Default 2.' },
+        to: { type: 'string', description: 'Which city they end up in together, by name - 拉萨 / 成都 / 巴黎. Must be one of the built-in cities. This is also where the two of them part ways afterwards.' },
+        days: { type: 'integer', minimum: 1, maximum: 14, description: 'How many days they stay there together. Default 2.' },
+        meet: { type: 'string', description: 'Where they meet up first, before travelling on to that city together. By name. Leave it out and they meet at wherever she is right now and then set off together - that is the normal case, and the one that makes it a shared trip rather than two pets arriving separately. Only set it when they asked to meet somewhere specific, e.g. she is in 兰州 and they want to start from 成都.' },
         note: { type: 'string', description: 'One short line on what for - "想看雪山" / "找个搭子吃饭". At most 60 characters. Leave it out if there is nothing to say.' },
       },
       required: ['to'],
@@ -575,6 +784,322 @@ const TOOL_DECLS = [
     tags: ['write'] as const,
     summary: { zh: '今晚住哪儿；也能换一家。', en: "Tonight's room, and moving to another." },
   },
+  /*
+   * 2026-11-06 加：在当地租辆车。
+   *
+   * 群里的反馈（Mr.Q 转来）：「他说租车只是换城市用的，在城里玩还是只能靠腿」。
+   * 前半句对了一半 —— 城际交通选自驾确实会带出一辆车，`planDay` 也确实在城里
+   * 开车去景点；但**没有「在这座城里单独租一辆」的入口**，所以她只能这么答。
+   *
+   * 顺带把 `car.days` 用起来：那个字段从 0.7.22 起就写着，却从来没被读过，
+   * 租期三天永远不到期 —— 等于 600 块买了个无限期。现在它真的会走。
+   */
+  {
+    name: 'journey_rent_car',
+    description:
+      'Rent a car in the city she is staying in - for getting around here, not for the trip to the next city. '
+      + 'Use it when the person asks how she gets around on foot, says something like "在城里也租个车吧", '
+      + 'or when the places she wants to see today are far apart. '
+      + 'It costs 200 a day and comes out of her purse, so pick days to match how long she is staying here. '
+      + 'While she has it she drives to the spots in town instead of walking; when the days run out the car goes back by itself. '
+      + 'Refused if she already has a car (one is enough), while she is travelling, or when the money is gone - '
+      + 'do not force it, just tell them why. One short line about it, in her own words.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        days: {
+          type: 'number',
+          description: 'How many days to rent it for, 1 to 7. Leave it out and she takes 3.',
+        },
+        ev: {
+          type: 'boolean',
+          description: 'true = an electric car (cheaper per km, a bit more on the daily rate). '
+            + 'Leave it out and she takes whatever the lot gives her.',
+        },
+        tier: {
+          type: 'string',
+          enum: ['economy', 'comfort', 'luxury'],
+          description: 'Which car. economy = a small city car, 100 a day, thrifty on fuel; '
+            + 'comfort = a compact sedan, 200 a day (this is the default); '
+            + 'luxury = a larger SUV, 450 a day, roomier but thirstier and harder to park. '
+            + 'Pick by what they said, or by how long she is staying and how far the spots are. '
+            + 'Do not upsell: if they just want to get around, economy is the honest answer.',
+        },
+      },
+    },
+    tags: ['write'] as const,
+    summary: { zh: '在待着的这座城里租辆车。', en: 'Rent a car to get around this city.' },
+  },
+  /*
+   * 2026-11-07 加：她说累了，就真的歇下来。
+   *
+   * 用户 ro-berry 的反馈（v0.7.1）：
+   * 「发现不能让她安排自己的作息。她说累了要歇着，接下来还是按照作息出门了。」
+   *
+   * 查下来这不是排程算错了 —— 是**她说的那句话在世界里没有对应的动作**。
+   * 「累了」只存在于对话里，排好的表一个字没动，于是她照常出门，那句话就成了空话。
+   * 跟「等端上来我就拍给你看」是同一类：**她说出口的事必须能落地**。
+   */
+  {
+    name: 'journey_rest',
+    description:
+      'Call this the moment she decides to stop for the day - when she says she is tired, when it is raining too hard, '
+      + 'when the place turned out not worth it, or when the person suggests taking it easy. '
+      + 'It cancels the rest of today\'s sightseeing for real: the spots still on the plan will not happen, '
+      + 'and she will stay in or around where she is sleeping. Meals and going back to the hotel still happen - '
+      + 'resting is not fasting. Tomorrow runs as planned. '
+      + 'Say why in one short line of her own; "just felt like it" is not a reason, "走了两万步，脚起泡了" is. '
+      + 'Do not call it and then still describe going out - if she says she is resting, this is what makes it true.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        reason: {
+          type: 'string',
+          description: 'Why she stopped, one short sentence in her own voice.',
+        },
+      },
+    },
+    tags: ['write'] as const,
+    summary: { zh: '今天剩下的不逛了，真的歇下来。', en: 'Stop for the day - for real.' },
+  },
+  /*
+   * 改今天还没去的行程（2026-11-09）。
+   *
+   * 用户来信（清风乱域）：「我的鱼说想更改安排，发现更改不了。本来她想去故宫，
+   * 但是被安排推着去了颐和园。」
+   *
+   * 在这之前 `journey_go_to` 只管「去哪座城」，城里一天去哪两处是 `planDay`
+   * 按 `dayIndex` 排死的 —— **她说「我想改安排」时，没有任何工具能兑现**。
+   * 那句话说出口就是骗人的，比不答应更坏。
+   */
+  {
+    name: 'journey_plan_change',
+    description:
+      'Change what she does today: swap a stop that has not happened yet for another place in this city. '
+      + 'Use it when the person wants somewhere different - "别去颐和园了，去故宫" / "今天想去博物馆" - '
+      + 'or when she herself says she would rather go elsewhere. '
+      + 'Only the part of today still ahead can be changed; what already happened stays as it was, and it says so when asked to change it. '
+      + 'The new place must be one this city actually has - if it is not, the answer lists what is there instead of inventing one. '
+      + 'This is for today only: to leave the city use journey_go_to, to stop for the day use journey_rest.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        spot: {
+          type: 'string',
+          description: 'Where she should go instead, by name as this city has it - 故宫 / 颐和园 / 宽窄巷子. Short names work: 故宫 matches 故宫博物院.',
+        },
+        instead: {
+          type: 'string',
+          description: 'Which stop of today to replace, by name. Leave it out to change the next place she has not been to yet.',
+        },
+      },
+      required: ['spot'],
+    },
+    tags: ['write'] as const,
+    summary: { zh: '改今天还没去的行程：把某一处换成这座城里的另一处。', en: 'Swaps a stop still ahead today for another place here.' },
+  },
+  /*
+   * 晚上在住处干什么（2026-11-09）。
+   *
+   * 起因是 Mr.Q：「加上具体酒店信息了，晚上的语句是不是也可丰富的多了，
+   * 甚至可以让桌宠自己靠设备自己选择发生什么事件。」
+   *
+   * 以前这一步是排程时按**档位**自动决定的（五星档一律给泳池）。
+   * 现在订的店是**真的**，有泳池没泳池查得到 —— 所以改成「按这家店真有的设施给选项，
+   * 她自己挑」。挑不到就说清没有，再说这儿有哪几样 ——
+   * **回执是事实，不是可选清单**，别写成「今晚能干的：A、B」（2026-11-12）。
+   */
+  {
+    name: 'journey_hotel_night',
+    description:
+      'What she does tonight at the place she is staying. The options come from what THIS hotel actually has '
+      + '(verified facilities: pool, onsen, gym, spa, bar) plus a walk nearby if something is close. '
+      + 'Use it when the person asks what she is doing tonight, or tells her to go swim / use the gym / get a massage. '
+      + 'If they ask for something this hotel does not have, do not pretend: say it is not there and list what is. '
+      + 'Only works in the evening while she is at her lodging.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        what: {
+          type: 'string',
+          enum: ['pool', 'onsen', 'gym', 'spa', 'bar', 'around', 'bath', 'room'],
+          description: 'pool = swim, onsen = hot spring, gym = work out, spa = massage (costs money), '
+            + 'bar = a drink downstairs, around = step out for a short walk, bath = soak in the room, '
+            + 'room = just stay in. Only the ones this hotel really has will be accepted.',
+        },
+      },
+      required: ['what'],
+    },
+    tags: ['write'] as const,
+    summary: { zh: '今晚在住处干什么：按这家店真有的设施挑。', en: 'Picks tonight from what this hotel actually has.' },
+  },
+  /*
+   * 景区里怎么代步（2026-11-09）。
+   *
+   * Mr.Q：「爬山、景区交通得能用啊，要不一天靠走路可以嘛？」
+   *
+   * 这批项目以前只有文案、没有工具 —— 用户说「坐索道上山」，
+   * 她手里没有能执行的动作，只能说「我这儿没找着」。现在有入口了。
+   */
+  {
+    name: 'journey_spot_ride',
+    description:
+      'Getting up or around inside the scenic spot she is at right now: cable car, park shuttle, sedan chair, '
+      + 'toboggan down, rental bike, or a local guide. Use it when the person asks how she is getting up a mountain, '
+      + 'says walking the whole way is too much, or asks about tickets inside the park. '
+      + 'It tells the price and charges it; if the spot does not have that option it says what it does have. '
+      + 'Walking is always possible - use how=walk when she just walks it.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        how: {
+          type: 'string',
+          enum: ['cableway', 'shuttle', 'sedan', 'slide', 'bike', 'guide', 'walk', 'camel'],
+          description: 'cableway = cable car up, shuttle = park shuttle bus, sedan = sedan chair carried by two people '
+            + '(famous mountains only), slide = toboggan down or a sand sled, bike = rental bike, '
+            + 'guide = hire a guide, camel = ride a camel (deserts and dunes only), walk = walk it. '
+            + 'Only the ones this spot actually has will be accepted.',
+        },
+        spot: {
+          type: 'string',
+          description: 'Which spot, if not the one she is at right now. Leave it out in the normal case.',
+        },
+      },
+      required: ['how'],
+    },
+    tags: ['write'] as const,
+    summary: { zh: '景区里坐什么：索道、观光车、滑竿、滑道、自行车、讲解，或者自己走。', en: 'Cable car, shuttle, sedan, toboggan, bike, guide - or walk it.' },
+  },
+  /*
+   * 改任意一格（2026-11-10 加，源自用户「清风乱域」的补丁）。
+   *
+   * `journey_plan_change` 只管景点 —— 一天里那两处 `activity`。可「中午别吃面了
+   * 我想吃火锅」「早上别七点起」这些话同样落不了地，跟「想改景点改不了」
+   * 是同一个毛病：**说出口的事在世界里没有对应的动作**。
+   *
+   * 跟补丁原稿的两处不同：
+   *   ① `time` 除了钟点还收类型词。日程里早饭有 7:30 / 9:00 两档、晚饭有
+   *      18:30 / 19:30 两档，模型拿不到当天这张表 —— 只认钟点的话，用户说
+   *      「晚饭吃火锅」它猜 18:30，当天排的是 19:30 就撞一脸「没有这一格」。
+   *   ② 住处那格（`hotel`）**不从这里改**：它按这家店真有的设施给选项，
+   *      另有一条 `journey_hotel_night` 管着。开第二个自由文本入口，
+   *      就会出现「排程说能游、这里说也能」，跟她真住的那家店对不上。
+   */
+  {
+    name: 'journey_set_slot',
+    description:
+      'Rewrite one entry of today that is not a sightseeing stop: breakfast, lunch, dinner, waking up, going to bed, the night, '
+      + 'or whatever she does at some hour. Use it for "中午别吃面了，去吃火锅" or "别七点起了，八点再起". '
+      + 'Pass `time` as the clock hour when you know it ("12:30", "7"), or as the kind of entry when you do not '
+      + '("午饭", "早饭", "晚饭", "起床", "睡觉", "夜里") - the schedule differs by day, so the kind is often safer. '
+      + 'For swapping a sightseeing stop for another place in this city use journey_plan_change instead - that one checks the place really exists. '
+      + 'Tonight at the lodging is not changed here: what she can do there comes from what the hotel actually has, use journey_hotel_night. '
+      + 'Only entries still ahead today can change; what already happened stays as it was.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        time: {
+          type: 'string',
+          description: 'Clock time of the entry ("12:30", "7"), or the kind of entry when the exact hour is unknown '
+            + '("午饭" / "早饭" / "晚饭" / "起床" / "睡觉" / "夜里").',
+        },
+        what: {
+          type: 'string',
+          description: 'New wording for that entry, in her own voice, one short sentence. '
+            + 'Keep the slot word in front so the panel still reads as a schedule: "午饭，老火锅，鸳鸯锅".',
+        },
+      },
+      required: ['time', 'what'],
+    },
+    tags: ['write'] as const,
+    summary: { zh: '改今天某一点吃什么、做什么（景点用 journey_plan_change，住处晚上用 journey_hotel_night）。', en: 'Rewrite one non-sightseeing entry of today.' },
+  },
+  /*
+   * 特意去吃什么（2026-11-13，Discussion #586）。
+   *
+   * 用户 DonahueMa：「我喊鱼自己去吃了 3 天她也没去，连续吃了两天串串。」
+   *
+   * 查下来两件事：① 重庆那张菜表只有三样，招牌的火锅串串根本不在里面；
+   * ② 她答应了「去吃火锅」，但**世界里没有「去吃」这个动作** —— 那句话只停在对话里，
+   * 日程一个字没动。跟 `journey_rest` 当初是同一个病：**她说出口的事必须能落地**。
+   *
+   * 所以这个工具干两件事：把那一格改成她真要吃的那顿，**顺手把店名查实**
+   * （`geo/eatery.ts`，高德 `place/text`，按「城 + 想吃什么」缓存七天）。
+   * 查不到就说查不到，退回泛称 —— 绝不编一个店名。
+   *
+   * 为什么单开一条、不并进 `journey_set_slot`：那个是自由文本，不查网、不会失败；
+   * 这个要发请求、可能超时、可能没 key。混在一起，一次网络故障会连累「改起床时间」
+   * 这种纯本地动作。
+   */
+  {
+    name: 'journey_eat',
+    description:
+      'Call this when she actually goes to eat something specific - the person says "去吃火锅", or she has decided '
+      + 'she wants a particular dish and is going there now. It rewrites the meal entry of today for real AND looks up '
+      + 'a real restaurant for it, so the name she says afterwards exists. '
+      + 'Pick `dish` from what she would actually order ("火锅", "螺蛳粉", "牛肉面") - a dish or a kind of food, not a shop name. '
+      + 'If the look-up finds nothing the meal still gets written, and the reply says so: then say "找了一家本地人排队的" '
+      + 'instead of a name. Never invent a restaurant name yourself. '
+      + 'For merely changing what is written in the schedule without going anywhere, journey_set_slot is enough.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        dish: {
+          type: 'string',
+          description: 'What she is going to eat, as a dish or a kind of food ("火锅", "螺蛳粉"). Not a restaurant name.',
+        },
+        time: {
+          type: 'string',
+          description: 'Which meal ("早饭", "午饭", "晚饭"), or a clock hour ("12:30"). Omit to use the meal the local time falls in.',
+        },
+      },
+      required: ['dish'],
+    },
+    tags: ['write'] as const,
+    summary: { zh: '特意去吃某一样，顺手把真店名查出来。', en: 'Go eat something specific, with a real restaurant looked up.' },
+  },
+  /*
+   * 路标（2026-11-14，第 23 个工具 = index 22）。
+   *
+   * 借的是《死亡搁浅》：玩家 A 建的桥会出现在 B 的世界里，两人永不同时在线。
+   * 这里是一次**推荐** —— 她在这座城留一句话，之后来这城的人能看见。
+   *
+   * 参数里故意没有 `kind`、没有评分、没有踩 —— 只留正向痕迹。
+   * 一只鱼一城一天只能留一条（服务端覆盖旧的），所以反复留不会刷屏。
+   */
+  {
+    name: 'journey_signpost',
+    description:
+      'Leave one short line in the city she is in right now, telling whoever comes later what is worth it here - '
+      + 'the wall is windy but worth the climb, the noodle shop behind the station, the light at six. '
+      + 'It is a recommendation, not a chat: nobody replies, and she will not see it again. '
+      + 'One line per city per day; leaving another replaces the old one. '
+      + 'Use it when she has something specific worth passing on, not on every arrival.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        text: {
+          type: 'string',
+          description: 'One short line in her own voice, at most 40 characters. No links - they get rejected.',
+        },
+        city: {
+          type: 'string',
+          description: 'Which city, by name or id, if not the one she is in right now. Leave it out normally.',
+        },
+      },
+      required: ['text'],
+    },
+    tags: ['write'] as const,
+    summary: { zh: '在这座城留一句话，给以后来的人看。', en: 'Leave one line for whoever comes to this city later.' },
+  },
 ] as const;
 
 export interface JourneyWorldOptions {
@@ -588,7 +1113,115 @@ export interface JourneyWorldOptions {
   now?: () => Date;
   /** 当前播放。**只给测试用** —— 生产环境读音乐扩展写的快照文件。 */
   nowPlaying?: () => NowPlaying | null;
+  /**
+   * 宿主的密钥口子（`ctx.secret` / `ctx.storeSecret`）。见 `secrets.ts`。
+   *
+   * 可选：测试里没有宿主，不传时读取只认配置项、写入直接放弃 ——
+   * 也就是「搬家这件事不发生」，绝不因此让 World 起不来。
+   */
+  keys?: KeyPorts;
+  /** 把迁移结果写回配置（清掉已经搬进 .env 的那一份）。不传就只在内存里生效。 */
+  persist?: (patch: { amapKey?: string; imageKey?: string }) => void;
 }
+
+/** 一句话的稳定种子：同样的输入，同样的措辞。用在同伴互动的选句上。 */
+function seedOf(text: string): number {
+  let h = 7;
+  for (let i = 0; i < text.length; i++) h = (Math.imul(h, 31) + text.charCodeAt(i)) | 0;
+  return Math.abs(h);
+}
+
+/**
+ * `"12:30"` / `"7"` / `"7.5"` → 当地小数小时（2026-11-10）。
+ *
+ * 只认钟点写法，不认「下午三点」—— 那要语言理解，交给模型，它翻成 `15:00` 再传进来。
+ */
+function parseClock(raw: string): number | null {
+  const text = raw.trim();
+  if (!text) return null;
+  const colon = /^(\d{1,2})\s*[:：]\s*(\d{1,2})$/.exec(text);
+  if (colon) {
+    const hour = Number(colon[1]);
+    const minute = Number(colon[2]);
+    if (hour >= 24 || minute > 59) return null;
+    return hour + minute / 60;
+  }
+  const decimal = /^(\d{1,2})(?:\.(\d{1,2}))?$/.exec(text);
+  if (decimal) {
+    const hour = Number(decimal[1]);
+    if (hour >= 24) return null;
+    return hour + (decimal[2] ? Number(`0.${decimal[2]}`) : 0);
+  }
+  return null;
+}
+
+/**
+ * 「午饭」这类**类型词** → 格子的 `kind`（2026-11-10）。
+ *
+ * ## 为什么非要收类型词
+ *
+ * 日程按天排，同一格不同天落在不同钟点：早饭 7:30 或 9:00、晚饭 18:30 或 19:30。
+ * 模型手里没有这张表（`journey_now` 只回答「这个点该做什么」），
+ * 用户说「晚饭别吃面了」它只能猜一个钟点 —— 猜错就撞「没有这一格」，
+ * 而错的不是用户。**能让它说「晚饭」，就别让它猜「18:30」。**
+ *
+ * 顺序有讲究：`晚饭` 必须排在 `晚上` 前面，不然「晚饭」会先命中 `晚上`。
+ */
+const SLOT_WORDS: readonly (readonly [string, BeatKind])[] = [
+  ['早饭', 'breakfast'],
+  ['早餐', 'breakfast'],
+  ['午饭', 'lunch'],
+  ['中饭', 'lunch'],
+  ['晚饭', 'dinner'],
+  ['晚餐', 'dinner'],
+  ['起床', 'wake'],
+  ['睡觉', 'sleep'],
+  ['夜里', 'night'],
+  ['晚上', 'night'],
+];
+
+function parseSlotKind(raw: string): BeatKind | null {
+  const text = raw.trim();
+  if (!text) return null;
+  for (const [word, kind] of SLOT_WORDS) if (text.includes(word)) return kind;
+  return null;
+}
+
+/**
+ * 回执里的钟点：`21:30` 这种（2026-11-10）。
+ *
+ * **不能借用 `fmtHour`** —— 那个是给日记和文案的中文写法（「二十一点半」），
+ * 而 `journey_set_slot` 的回执读者是模型：它会把回执里的时刻照抄回来重试，
+ * 中文数字进了 `parseClock` 就当场失败。实测过：拦住「住处那格」那条提示
+ * 写着「二十一点半」，模型再传「二十一点半」还是同一个错。
+ * **回执给什么格式，就得能读回什么格式。**
+ */
+function slotClock(h: number): string {
+  const whole = Math.max(0, Math.min(23, Math.floor(h)));
+  const m = Math.round((h - whole) * 60);
+  return `${String(whole).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+/**
+ * 回执里的日程摘要（2026-11-10）：一格只留第一小句的开头。
+ *
+ * 住处那格的 `what` 是整段酒店描述（「回月牙酒店(成都春熙路…)。卫生间做了干湿分开，
+ * 排水有点慢；插座在书桌底下，要弯腰找。」）—— 全文塞进「今天剩下的」，
+ * 回执又长又没信息量，而模型只需要认出「这一格是什么」。
+ */
+function slotBrief(what: string): string {
+  const one = what.split(/[，。；、]/)[0] ?? what;
+  return one.length > 14 ? `${one.slice(0, 14)}…` : one;
+}
+
+/**
+ * 夜拍用的 cfg（2026-11-10）。
+ *
+ * Qwen-Image 默认 2.5，出图"好看"但对否定句服从很松。夜里必须让它听
+ * 「不许有星、地平线不发白」，实测 3.3 够用；3.5 会开始出现构图漂移
+ * （有一次把车窗外画成了车内后视镜视角）。
+ */
+const NIGHT_CFG = 3.3;
 
 export class JourneyWorld implements World {
   readonly id = JOURNEY_ID;
@@ -596,6 +1229,16 @@ export class JourneyWorld implements World {
   private log: Logger | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
   private st: TripState;
+  /**
+   * 车费桥（2026-11-10）：这一轮巡检扫到、还没结算完的车费。
+   *
+   * **只在内存里。** `persist()` 投影公开快照时要用它，而 `persist()` 每轮被调几十次 ——
+   * 如果那里去 `readdir`，等于把目录 IO 塞进写路径。所以扫描只在 `settleRides()` 里做一次，
+   * 结果存这儿。正常情况下它是 0（扫完当场就结），只在结算出错的路径上有值。
+   */
+  private unsettledRideFare = 0;
+  /** 首页卡的读取缓存。`ride-live.json` 一秒内问几次都只读一次盘（面板轮询很密）。 */
+  private liveCache: { at: number; value: LiveRide | null } = { at: 0, value: null };
   private readonly store: StateStore;
   private readonly diary: DiaryStore;
   /** 跨设备那三样：去过、想去、花了多少。位置和路线不在这里，见 travel-memory.ts。 */
@@ -604,11 +1247,36 @@ export class JourneyWorld implements World {
   private readonly opts: JourneyWorldOptions;
   /** 照片簿：她拍过哪些张。只存句柄，字节在宿主媒体库。 */
   private readonly photos: PhotoBook;
-  /** 她想做、这套立绘还没有的动作。从宿主日志里捡，见 action-wishes.ts。 */
-  private readonly wishes: ActionWishes;
-  private wishTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly partyLog: PartyLog;
+  /**
+   * 版本对账（2026-11-08）。
+   *
+   * 面板要显示「她是哪一版、最新是哪一版」—— 报障时第一句话总是「我这是不是最新版」，
+   * 两边都靠猜。查询放在 Core 这头，因为面板是个沙箱帧，发不了外面的请求。
+   */
+  private readonly versionCheck: VersionCheck;
+  /**
+   * 位置心跳（2026-11-10）。
+   *
+   * 上报原来只挂在三个时机上：启动、到站/重排日程、手动同步钟。于是**一条整天
+   * 待在一个城里不动的鱼，池子里会看不见她**。2026-11-10 Mr.Q 问「我的鱼有两只，
+   * 何来一只在线」—— 查下来他这台的记录停在昨晚，因为今早那次上报撞在服务端故障
+   * 窗口里丢了，之后日程没重建，就再没第二次机会。
+   *
+   * 上报是 upsert（同一 uid + 日期 + 时段覆盖），心跳**不会让行数涨**，
+   * 只多几次写入。这是「在线」这个词能不能成立的前提。
+   */
+  private heartTimer: ReturnType<typeof setInterval> | null = null;
+  /** 连续上报失败次数。成功一次立刻归零。 */
+  private reportFails = 0;
+  /** 失败后排的那一次重试。和心跳并存，谁先到谁报。 */
+  private reportRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 六小时对一次 npm 上的版本（2026-11-08）。 */
+  private versionTimer: ReturnType<typeof setInterval> | null = null;
   /** 真酒店名（高德地点库）。查不到就只说类别。 */
   private readonly hotels: HotelDirectory;
+  /** 真店名（高德地点库）。**只在她特意去吃时查** —— 平时报菜名就够了。 */
+  private readonly eateries: EateryDirectory;
   /** 面板自己的小状态（引导看过没有）。和行程状态分开，互不影响。 */
   private readonly uiStore: UiStore;
   /**
@@ -618,6 +1286,14 @@ export class JourneyWorld implements World {
    * 「今天还没拍」，就会同一张照片付两次钱。
    */
   private shooting = false;
+  /** 「尺寸被抬到合规值」这类说明只说一遍。 */
+  private imageSizeNoted = false;
+  /**
+   * 推过的 `senderKey`。**同一个 key 只许推一次**，见 `push()` 上的说明。
+   *
+   * 只放内存：重启后约定已经结清，不会重新走到「该散伙」那一步。
+   */
+  private pushedKeys = new Set<string>();
   /** 上一次生图的结果，给指示灯用。 */
   private photoOutcome: 'never' | 'ok' | 'fail' = 'never';
   /**
@@ -638,6 +1314,25 @@ export class JourneyWorld implements World {
   /** 巡检并发闸。见 `tick()` 里的说明 —— 少了它会重复推同一条事件。 */
   private ticking = false;
   /**
+   * 这一轮巡检开始时算出来的「他离开了多久」（真实毫秒）。
+   *
+   * 只在 `tick()` 里算一次，`advanceBeats` 消费。用实例字段而不是参数，
+   * 是因为 `advanceBeats` 从 `stayTick` 里调，那条链上的签名已经很深了。
+   */
+  private awayMs = 0;
+  /** 上一次把 `lastSeenAt` 落进磁盘的真实毫秒。只用于节流，本身不落盘。 */
+  private lastSeenSavedMs = 0;
+  /**
+   * 「碰面服务器」那一栏读不出来时，原因留在这儿（2026-11-13）。
+   *
+   * `meetOptions()` 返回 null 有两种情况：没填，和填了但读不成网址。
+   * 这两种对用户的修法完全不同 —— 前者去填，后者去改 —— 所以不能都报「没配」。
+   * 空串 = 没填或没问题。
+   */
+  private meetUrlError = '';
+  /** 归一化时动过什么（补了 https:// 之类）。原样可用时为空。 */
+  private meetUrlFixed = '';
+  /**
    * 这次加载是什么时候。
    *
    * 用来挡「刚被加载就出发」—— 用户装好扩展、改完配置重启、或者只是重启了应用，
@@ -652,15 +1347,36 @@ export class JourneyWorld implements World {
     this.diary = new DiaryStore(opts.dataDir);
     this.travelMemory = new TravelMemoryStore(opts.dataDir);
     this.photos = new PhotoBook(opts.dataDir);
-    this.wishes = new ActionWishes(opts.dataDir);
+    /*
+     * 同行记录（2026-11-11）：只回答「我参与过哪几趟」，好让面板找回服务端那张卡。
+     * 放在 dataDir 而不是 memoryDir —— uid 按机器分，卡也是按那个 uid 留的，
+     * 换台机器本来就没有「我」这一半，同步过去只会多一批取不到的 id。
+     */
+    this.partyLog = new PartyLog(opts.dataDir);
+    this.versionCheck = new VersionCheck({ dataDir: opts.dataDir, current: PKG_VERSION });
+    /*
+     * 密钥在构造时就要定一次：三个客户端都拿它当构造参数。
+     * 这里**只读不搬** —— 搬那步在 `start()` 里，因为那儿才有 log 能说清搬没搬。
+     * 读取本身已经是「.env 优先、配置兜底」，所以第一次跑的老用户照常能用。
+     */
+    const amapKey = readKey(opts.keys ?? {}, AMAP_KEY_NAME, opts.cfg.amapKey);
     this.hotels = new HotelDirectory(
-      opts.cfg.amapKey,
+      amapKey,
       join(opts.dataDir, 'poi-cache.json'),
+      (level, msg) => (level === 'warn' ? this.log?.warn(msg) : this.log?.info(msg)),
+    );
+    /*
+     * 店名和酒店各存一份缓存：一个是往哪儿睡，一个是往哪儿吃，
+     * 缓存键也不同（酒店按城，吃饭按「城 + 想吃什么」）—— 混在一张表里查不干净。
+     */
+    this.eateries = new EateryDirectory(
+      amapKey,
+      join(opts.dataDir, 'eatery-cache.json'),
       (level, msg) => (level === 'warn' ? this.log?.warn(msg) : this.log?.info(msg)),
     );
     this.uiStore = new UiStore(opts.dataDir);
     this.weather = new AmapWeather(
-      opts.cfg.amapKey,
+      amapKey,
       join(opts.dataDir, 'weather-cache.json'),
       (level, msg) => (level === 'warn' ? this.log?.warn(msg) : this.log?.info(msg)),
     );
@@ -668,6 +1384,60 @@ export class JourneyWorld implements World {
   }
 
   private get cfg(): JourneyConfigSection { return this.opts.cfg; }
+
+  /** 高德密钥：`.env` 优先，配置兜底。见 `secrets.ts`。 */
+  private amapKey(): string {
+    return readKey(this.opts.keys ?? {}, AMAP_KEY_NAME, this.cfg.amapKey);
+  }
+
+  /** 生图密钥。同上。 */
+  private imageKey(): string {
+    return readKey(this.opts.keys ?? {}, IMAGE_KEY_NAME, this.cfg.imageKey);
+  }
+
+  /**
+   * 把配置里的密钥搬进部署的 `.env`，然后清掉配置里那份（2026-11-13）。
+   *
+   * 为什么值得动：`config.json` 是给人看、给人备份、给人贴出来问的文件，
+   * key 躺在里面等于每次求助都附带一份。宿主的 `storeSecret` 写的是
+   * `botDir/.env`，0600、原子替换、不进任何配置接口。
+   *
+   * 放在 `start()` 而不是构造函数里，只为一件事：**这里才有 log**。
+   * 设置页里的 key 突然空了，人得能在运行日志里看到「它被搬到哪儿去了」。
+   */
+  private adoptKeys(): void {
+    const ports = this.opts.keys;
+    if (!ports) return;
+
+    const log = {
+      info: (msg: string) => { this.log?.info(msg); },
+      warn: (msg: string) => { this.log?.warn(msg); },
+    };
+    const nextAmap = adoptKey(ports, AMAP_KEY_NAME, this.cfg.amapKey, log);
+    const nextImage = adoptKey(ports, IMAGE_KEY_NAME, this.cfg.imageKey, log);
+    const patch: { amapKey?: string; imageKey?: string } = {};
+    if (nextAmap !== this.cfg.amapKey) patch.amapKey = nextAmap;
+    if (nextImage !== this.cfg.imageKey) patch.imageKey = nextImage;
+    /*
+     * 判「有没有要改的」必须用 `undefined`，不能用真假 ——
+     * 搬成功时返回的就是空串，而空串是假值。用 `if (patch.amapKey)`
+     * 就会把「清空这一动作」整个丢掉，key 留在 config.json 里，等于没搬。
+     */
+    if (patch.amapKey === undefined && patch.imageKey === undefined) return;
+
+    /*
+     * `cfg` 是活引用，改完设置页下一次读到的就是空；`persist` 才让它落进
+     * `config.json` —— 不落盘的话重启一次 key 又回到配置里，等于白搬。
+     */
+    if (patch.amapKey !== undefined) this.cfg.amapKey = patch.amapKey;
+    if (patch.imageKey !== undefined) this.cfg.imageKey = patch.imageKey;
+    this.opts.persist?.(patch);
+
+    // 三个客户端在构造时拿的是旧值，搬完要重新注入
+    this.hotels.setKey(this.amapKey());
+    this.eateries.setKey(this.amapKey());
+    this.weather.setKey(this.amapKey());
+  }
 
   /** 她现在听到的歌。测试可以注入，生产环境读快照文件。 */
   private currentSong(): NowPlaying | null {
@@ -858,6 +1628,8 @@ export class JourneyWorld implements World {
   async start(host: WorldHost): Promise<void> {
     this.host = host;
     this.log = host.log;
+    // 密钥搬家（#659 第二条）。要 log 就绪，所以放在这一句之后。
+    this.adoptKeys();
 
     const home = this.resolveHome();
     /*
@@ -961,28 +1733,50 @@ export class JourneyWorld implements World {
 
     this.retimer();
     /*
-     * 十分钟捡一次「被丢掉的动作」。
+     * 位置心跳：20 分钟一次。
      *
-     * 不用更密：这行只在她说了词表外的动作时才出现，十分钟的延迟无所谓；
-     * 而日志文件可能几十 MB，扫得太勤不划算。
+     * `reportHere()` 自己会判断 `phase !== 'staying'` 就返回 —— 在路上不报。
+     * 这是有意的：presence 的主键带 city，跨城途中她没有「所在的城」，
+     * 硬塞出发地或目的地会让邻居和邀约按错城市匹配。
      */
-    this.wishes.scan();
-    this.wishTimer = setInterval(() => this.wishes.scan(), 10 * 60_000);
-    this.wishTimer.unref?.();
+    this.heartTimer = setInterval(() => void this.reportHere(), HEARTBEAT_MS);
+    this.heartTimer.unref?.();
 
     this.bootTimer = setTimeout(() => void this.tick(), 6000);
     this.bootTimer.unref?.();
 
     host.log.info(`大肥鱼环游世界已启动 v${PKG_VERSION}：${this.st.phase}，在 ${this.cityName(this.st.hereId)}，日记 ${this.diary.current.dir}`);
+    /*
+     * 顺手问一句 npm 上最新是哪一版。**不 await** —— 启动不该等一个网络请求；
+     * 查不到就当不知道，面板只显示自己的版本。
+     */
+    /*
+     * 用 `startupRefresh` 而不是 `refresh` —— 后者按 TTL 跳过，
+     * 于是「下午查过、晚上发了新版」这种情况永远不提醒（2026-11-08 实测）。
+     */
+    void this.versionCheck.startupRefresh().then((v) => {
+      /* 用 `this.log?.` 而不是闭包里的 `host` —— 这次查询可能在 stop() 之后才回来。 */
+      if (v.outdated) this.log?.info(`有新版本：本机 ${v.current}，npm 上 ${v.latest}`);
+    });
+    /*
+     * 之后每三小时对一次账（TTL 同一个值）。挂 `unref` ——
+     * 这条定时器不该让进程活着，她哪天不跑了就该退出。
+     */
+    this.versionTimer = setInterval(() => { void this.versionCheck.refresh(); }, 3 * 3_600_000);
+    this.versionTimer.unref?.();
   }
 
   async stop(): Promise<void> {
     if (this.timer) clearInterval(this.timer);
     if (this.bootTimer) clearTimeout(this.bootTimer);
-    if (this.wishTimer) clearInterval(this.wishTimer);
+    if (this.heartTimer) clearInterval(this.heartTimer);
+    if (this.reportRetryTimer) clearTimeout(this.reportRetryTimer);
+    if (this.versionTimer) clearInterval(this.versionTimer);
     this.timer = null;
     this.bootTimer = null;
-    this.wishTimer = null;
+    this.heartTimer = null;
+    this.reportRetryTimer = null;
+    this.versionTimer = null;
     this.host = null;
     this.log = null;
   }
@@ -1021,9 +1815,24 @@ export class JourneyWorld implements World {
      * 「Cannot read properties of undefined」。而用户的 config.json 是可能缺项的
      * （老版本升级上来、手改过），缺一项不该等于扩展不能工作。
      */
-    const url = String(this.cfg.meetUrl ?? '').trim();
-    if (!url) return null;
-    return { url, uid: this.meetUid(), pet: this.opts.botName };
+    /*
+     * 2026-11-13：那一栏不再原样拿去拼 URL。
+     *
+     * 少一个 `https://` 时 `fetch` 抛 `Invalid URL`，原来被压成「没连上碰面服务器」，
+     * 用户和模型都只能推「地址没填对」—— 而线上服务实测是好的。
+     * 现在先归一化（补协议、清零宽、剪掉多余路径），修不了的把原因留给面板和工具回执。
+     */
+    const raw = String(this.cfg.meetUrl ?? '');
+    if (!raw.trim()) {
+      this.meetUrlError = '';
+      this.meetUrlFixed = '';
+      return null;
+    }
+    const fix = normalizeMeetUrl(raw);
+    this.meetUrlError = fix.error;
+    this.meetUrlFixed = fix.fixed;
+    if (fix.error) return null;
+    return { url: fix.base, uid: this.meetUid(), pet: this.opts.botName };
   }
 
   /**
@@ -1046,9 +1855,50 @@ export class JourneyWorld implements World {
     const m = localMoment(this.worldNow(), c.tz);
     const doing = this.plan?.beats.find((b) => b.kind === 'activity')?.what ?? '';
     const ok = await reportPresence(meet, c.id, m.dateKey, slotOf(m.hour), doing);
-    if (!ok) {
-      this.log?.warn('位置没报上去（碰面服务器没回 200）—— 面板上会一直是旧数据');
+    if (ok) {
+      /*
+       * 恢复要留一句 info。上一版失败只写 warn、成功什么都不写，
+       * 于是一段静默故障在日志里长得像「一直没动静」而不是「坏过又好了」。
+       */
+      if (this.reportFails) {
+        this.log?.info(`位置上报恢复（之前连续失败 ${this.reportFails} 次）`);
+      }
+      this.reportFails = 0;
+      if (this.reportRetryTimer) {
+        clearTimeout(this.reportRetryTimer);
+        this.reportRetryTimer = null;
+      }
+      return;
     }
+
+    this.reportFails += 1;
+    /*
+     * 不刷屏：第一次必报，之后每 10 次报一条。
+     * 服务端挂一整天的话，日志里应该是十行左右，不是两千行。
+     */
+    if (this.reportFails === 1 || this.reportFails % 10 === 0) {
+      this.log?.warn(
+        `位置没报上去（碰面服务器没回 200，已连续 ${this.reportFails} 次）`
+        + '—— 面板上会一直是旧数据，正在自动重试',
+      );
+    }
+    this.armReportRetry();
+  }
+
+  /**
+   * 排下一次重试。已有的排程不重复排（心跳那条线可能同时也在跑）。
+   *
+   * 注意 `phase !== 'staying'` 时 `reportHere` 会直接返回而**不算失败** ——
+   * 在路上本来就没有「所在的城」，不该被当成服务端的问题。
+   */
+  private armReportRetry(): void {
+    if (this.reportRetryTimer) return;
+    const wait = REPORT_RETRY_MS[Math.min(this.reportFails - 1, REPORT_RETRY_MS.length - 1)] ?? 10 * 60_000;
+    this.reportRetryTimer = setTimeout(() => {
+      this.reportRetryTimer = null;
+      void this.reportHere();
+    }, wait);
+    this.reportRetryTimer.unref?.();
   }
 
   /**
@@ -1111,6 +1961,33 @@ export class JourneyWorld implements World {
     return a.country !== b.country;
   }
 
+  /**
+   * 留一个路标（2026-11-14）。
+   *
+   * 借《死亡搁浅》的结构：前人留下的痕迹让后人受益，两个人永不同时在线。
+   * **这不是聊天** —— 她留完就看不到它了，也没有人会回。所以话说给「以后来这儿的人」，
+   * 不是说给某个具体的人。
+   *
+   * 服务端一支鱼一城一天只收一条（重留覆盖旧的），带链接的会被直接拒掉。
+   */
+  private async signpost(text: string, cityArg: string): Promise<string> {
+    const meet = this.meetOptions();
+    if (!meet || !meet.url) return '（没配碰面服务器，路标留不下来。）';
+    const body = text.trim().slice(0, 40);
+    if (!body) return '（要留的那句话是空的。）';
+
+    /* 给了城市就按名字或 id 找；没给就用她这会儿待的城。 */
+    const named = cityArg.trim()
+      ? CITIES.find((c) => c.name === cityArg.trim() || c.id === cityArg.trim())
+      : undefined;
+    const cityId = named?.id ?? this.st.hereId;
+    if (!cityId) return '（不知道她现在在哪座城，留不了。）';
+
+    const ok = await reportSignpost(meet, cityId, body);
+    if (!ok) return '（路标没留成，服务端没接。）';
+    return `在${named?.name ?? this.cityName(cityId)}的路边留了一句话，以后来这儿的人能看见。`;
+  }
+
   private cityName(id: string): string {
     return cityById(id)?.name ?? id;
   }
@@ -1146,6 +2023,71 @@ export class JourneyWorld implements World {
     });
   }
 
+  /**
+   * 「这几天是跟谁一起过的」那一句。没有这种日子就返回空串。
+   *
+   * 判据三条，少一条都不能说：约还在、**人已经到了**（`arrivedAt` 有值）、
+   * 此刻这座城就是约定的那座城。前两条缺一句话，就是替她提前见面 ——
+   * 她还在路上，同伴还没来，说「一起过」等于编。
+   *
+   * 2026-11-06 加。Mr.Q：「我一开始不就是要让她和一群肥鱼一起旅行嘛？日记肯定要体现啊」。
+   * 原来只有到达那一条通知提过一次，之后那 N 天的 `journey.day` 一个字不提，
+   * 她写日记时手上没有任何「今天和谁在一起」的事实 —— 只能写风景。
+   */
+  private mateLine(
+    p: {
+      cityId: string; days: number; withPet: string;
+      withPets?: readonly string[]; arrivedAt: string | null;
+      meetCityId?: string; meetArrivedAt?: string | null;
+    } | null,
+    hereId: string,
+    stayDays: number,
+  ): string {
+    if (!p) return '';
+    /*
+     * **在见面城等的那几天**（2026-11-07）。
+     *
+     * 不说这一句的话，她那几天手上的事实只有「我在成都」，没有任何一处告诉她
+     * 「你在等一个人」—— 被问「你在这儿干嘛」时只能现编一个理由。
+     * 这是这个系统里最常见的一类缺陷：状态在，但她看不见。
+     */
+    if (p.meetCityId && !p.arrivedAt && p.meetArrivedAt && p.meetCityId === hereId) {
+      const met = Math.max(0, stayDays);
+      return `在这儿不是玩：跟${this.whoOfPledge(p)}约在${this.cityName(p.meetCityId)}碰头，`
+        + `你${met > 0 ? `已经等了 ${met} 天，` : ''}人还没露面。`
+        + `等见了面再一起去${this.cityName(p.cityId)}，在那儿待 ${p.days} 天。`
+        + '等着的时候也可以在城里转转，但别走远 —— 人家随时会到。';
+    }
+    if (!p.arrivedAt || p.cityId !== hereId) return '';
+    /* `stayDays` 是「已经住满几天」，标题里用的是 +1，这里跟着对齐。 */
+    const n = Math.max(1, stayDays + 1);
+    const tail = n >= p.days ? '这是最后一天，明天就各走各的' : `还剩 ${p.days - n} 天`;
+    /*
+     * **加一句白天真发生的事。**（2026-11-07 Mr.Q）
+     *
+     * 原来只有「跟谁、几天、第几天」—— 全是**约定的元数据**，
+     * 那个人在这几天里没有做过任何事。用户要看的是「一起旅行」，
+     * 不是「一起旅行的合同条款」。
+     */
+    /*
+     * **这一句原来像会议纪要**（2026-11-08 晚改）：
+     *
+     * 「跟某某说好在这儿待 3 天，今天是第 2 天，还剩 1 天。」
+     *
+     * 事实全对，但「说好在这儿待」是**协议**的口吻，不是同行的人会说的话。
+     * 模型读到这种句子，写出来也是这种句子 —— 它照着念。
+     * 改成「也在」「一起待」：同样是交代天数，但主语是两个人一起。
+     */
+    return `这几天不是一个人：${this.whoOfPledge(p)}也在，说好一起待 ${p.days} 天，`
+      + `今天是第 ${n} 天，${tail}。`
+      + `\n${banterWith(this.whoOfPledge(p), seedOf(`${p.cityId}|${n}|banter`), this.warmthOf(p))}`
+      /*
+       * 再一句讲关系（2026-11-08）。打趣是「今天发生的事」，这一句是「走到哪一步了」——
+       * 两件事分开写，否则每次都只剩打趣，读起来像刚认识。
+       */
+      + `\n${bondWith(this.whoOfPledge(p), this.warmthOf(p), seedOf(`${p.cityId}|${n}|bond`))}`;
+  }
+
   /* ---------------- 跟着日记一起同步 ---------------- */
 
   /**
@@ -1172,6 +2114,41 @@ export class JourneyWorld implements World {
    * 文件名也得跟宿主那边一致（`log:` 前缀去掉就是媒体库文件名），否则同样对不上。
    */
   private archiveToJournal(sub: 'media' | 'reports', name: string, body: Uint8Array | string): void {
+    /*
+     * ## 额外副本先做，而且**不依赖 memoryDir**（2026-11-12，用户实报）
+     *
+     * 原来这段写在函数最底部，而函数第一行是：
+     *
+     * ```ts
+     * if (!String(this.cfg.memoryDir ?? '').trim()) return;
+     * ```
+     *
+     * **没设「日记目录」的人，一进门就被请走了** —— 下面那段永远跑不到。
+     * 于是「照片额外存一份到」对这类用户完全无效：
+     * 照片照进宿主媒体库（`<dataDir>/media/`，另一条路），他填的目录一个文件都不多。
+     *
+     * 来信那位用户排查得很干净：「主位置正常增加（340→389），填的那栏一个文件都不多；
+     * 不是没重启——重启过两次；不是中文路径——换成纯英文也一样；
+     * config.json 里 photoDir 确实是新值，重启后读出来也是新值，**是拷贝那一步没跑**」。
+     * 他指对了位置，只是没看到门口那道早退。
+     *
+     * `photoDir` 和 `memoryDir` 是两件独立的事：一个是"我想自己备份一份"，
+     * 一个是"日记同步到哪儿"。**前者不该被后者没配这件事拦住。**
+     */
+    const extra = String(this.cfg.photoDir ?? '').trim();
+    if (sub === 'media' && extra) {
+      try {
+        const dst = join(resolve(extra), name);
+        if (!existsSync(dst)) {
+          mkdirSync(dirname(dst), { recursive: true });
+          if (typeof body === 'string') writeFileSync(dst, body, 'utf8');
+          else writeFileSync(dst, body);
+        }
+      } catch (e) {
+        this.log?.warn(`没能把照片额外存到 ${extra}：${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+
     if (!String(this.cfg.memoryDir ?? '').trim()) return;
     try {
       const dir = join(this.diary.current.dir, sub);
@@ -1186,28 +2163,7 @@ export class JourneyWorld implements World {
       if (typeof body === 'string') writeFileSync(file, body, 'utf8');
       else writeFileSync(file, body);
 
-      /*
-       * 额外再存一份到用户指定的目录（2026-11-06）。
-       *
-       * 一位用户来信：「图片媒体库是否能自己指定目录。想与日记指定到同一位置，方便保存」。
-       * 其实**照片本来就归档到日记目录下的 `media/` 了**（见上面那段注释，0.7.12 做的），
-       * 他大概是没找到。所以这里不是「改存放位置」，而是**再加一个副本** ——
-       * 想单独放一个备份目录的人也能满足，而依赖 `../media/` 相对路径的月报不受影响。
-       *
-       * 已经存在就跳过：照片是内容寻址命名，同名就是同一张。
-       */
-      const extra = String(this.cfg.photoDir ?? '').trim();
-      if (sub === 'media' && extra) {
-        try {
-          const dst = join(resolve(extra), name);
-          if (!existsSync(dst)) {
-            mkdirSync(dirname(dst), { recursive: true });
-            writeFileSync(dst, body);
-          }
-        } catch (e) {
-          this.log?.warn(`没能把照片额外存到 ${extra}：${e instanceof Error ? e.message : String(e)}`);
-        }
-      }
+      /* 额外副本已在函数开头做过（2026-11-12 移到最前面，见那段注释）。 */
     } catch (e) {
       // 云盘目录可能暂时不可写（同步盘正在挪文件）。这不该影响她拍照本身。
       this.log?.warn(`没能把${sub === 'media' ? '照片' : '报告'}存到日记目录：${e instanceof Error ? e.message : String(e)}`);
@@ -1291,7 +2247,7 @@ export class JourneyWorld implements World {
   /* ---------------- 池子总数 ---------------- */
 
   /** 最近一次取到的「今天池子里多少只」。见 `probeStatus`。 */
-  private poolProbe: { at: number; value: number } | null = null;
+  private poolProbe: { at: number; value: number; taken: number } | null = null;
 
   /**
    * 单独去问一次池子多大（20 分钟一次）。
@@ -1316,8 +2272,32 @@ export class JourneyWorld implements World {
     try {
       // 一个请求拿两样：池子总数 + 谁在找伴。见 `meet.ts` 的 `fetchStatus`。
       const r = await fetchStatus(meet, here.id);
+      /*
+       * ## 失败也要记时间（2026-11-11 线上事故，最贵的一行）
+       *
+       * 原来这里是：
+       *
+       * ```ts
+       * if (!r.ok) return;
+       * this.poolProbe = { at: real, value: r.pool };
+       * ```
+       *
+       * 返回写在赋值**前面** —— 服务器一挂，`poolProbe.at` 不动，
+       * 下一轮 `tick`（60 秒）又打一次。**限流形同虚设。**
+       *
+       * 当晚的实际账：68 只鱼，正常 68 × 24 ≈ 1,600 次/天；
+       * 故障期间变成 68 × 1,440 ≈ 9.8 万次/天，**放大 60 倍** ——
+       * Cloudflare 免费层 10 万/天当场打满，而所有人都以为「是用户变多了」。
+       *
+       * 修法：不管成不成，先记下这次尝试。失败就沿用上一次的值，
+       * 面板上的池子数字最多旧一小时 —— 比把服务器打爆划算太多。
+       */
+      this.poolProbe = {
+        at: real,
+        value: r.ok ? r.pool : (this.poolProbe?.value ?? 0),
+        taken: r.ok ? r.mineTaken : (this.poolProbe?.taken ?? 0),
+      };
       if (!r.ok) return;
-      this.poolProbe = { at: real, value: r.pool };
       await this.handleInvites(r.invites, now);
     } catch {
       // 拿不到就算了。这不是她的事，也不该在日志里刷——下一轮再试。
@@ -1342,7 +2322,32 @@ export class JourneyWorld implements World {
     this.ticking = true;
     try {
       this.ensureClock();
+      /*
+       * **他离开了多久** —— 基准是**上一次巡检**（2026-11-13 改）。
+       *
+       * 原来拿 `lastTickAt`（「上一次她真的说过话」）当基准，而它只在触发这条提示时
+       * 才写回，平时说话不写 —— 于是 `现在 − lastTickAt` 量的是**距上次触发多久**，
+       * 不是他离开多久。表现就是每 6 小时准点报一次「你回来了」，人一直在电脑前。
+       * 读者在 Discussion #586 报的正是这个，日志里四次触发间隔 6h00m03s–6h00m56s。
+       *
+       * 现在用 `lastSeenAt`：**这一轮巡检跑过就记一笔**，所以 Core 在跑时差值永远是
+       * 几分钟；只有进程真的停摆（关掉应用、合盖休眠、被挂起）才会变大。
+       * 停摆是我们唯一能诚实观测到的东西 —— 见 `state.ts` 里那段说明。
+       *
+       * 顺序要紧：**先按旧值算差值，再把这一轮记进去**，反了就永远是 0。
+       */
+      const realNowMs = this.realNow().getTime();
+      const seenAt = this.st.lastSeenAt ? Date.parse(this.st.lastSeenAt) : Number.NaN;
+      this.awayMs = Number.isFinite(seenAt) ? Math.max(0, realNowMs - seenAt) : 0;
+      this.markSeen(realNowMs);
       const now = this.worldNow();
+      /*
+       * 车费结算放在**三个 phase 分支之前**。
+       *
+       * 三个分支各有 `return`，写进任何一支都会有另一支的人永远不结算 ——
+       * 而「在家打个车」恰恰是最常见的场景。
+       */
+      this.settleRides();
       this.prunePledge(now);
       // 日记目录可能被用户热改（换同步盘），每次巡检顺便对一次。
       const health = this.diary.configure(this.cfg.memoryDir);
@@ -1359,6 +2364,38 @@ export class JourneyWorld implements World {
       // **不推事件。** 音乐扩展自己就「换歌必说一句」，这边再推一条，
       // 桌宠会连着说两句同样的事。状态变了，她下次开口自然会用上。
       this.syncSongWish();
+      /*
+       * **「你不在的这段时间」**（2026-11-11）。
+       *
+       * 放在 phase 分支之前：她可能在城里待着，也可能正在路上 —— 两种都要说，
+       * 所以不能挂在 `advanceBeats`（只有 stay 会走到那儿）上。
+       *
+       * 推一条独立事件，不堆十条。旧版本那种「一起涌出来」是队列积压的副作用，
+       * 不是设计；`world.ts` 开头写着为什么后来改掉了。
+       *
+       * 推完清掉 `awayMs` —— 一段离开只说一次。
+       * `lastSeenAt` 不用在这儿动：上面 `markSeen()` 已经把它推到当前时刻了。
+       */
+      if (this.awayMs >= 6 * 3_600_000) {
+        const note = this.awayNote();
+        if (note) {
+          const hours = Math.round(this.awayMs / 3_600_000);
+          this.log?.info(`他离开了 ${hours} 小时，说一句这段时间的事。`);
+          await this.push('journey.beat', `away-${hours}-${now.toISOString().slice(0, 13)}`, note, 'flush');
+        }
+        /*
+         * 一段离开只说一次。`lastSeenAt` 在上面已经推到当前时刻了，
+         * 这里只清内存值 —— 否则同一轮里后面再读一次 `awayMs` 还会当成离线。
+         */
+        this.awayMs = 0;
+      }
+      /*
+       * 这里原来还有一段「`lastTickAt` 为空时补一个」——2026-11-13 删掉了。
+       * 它的注释写着「下面这两个分支之外的路径也要记『她刚说过话』」，
+       * 但代码只做了「从来没有时初始化」，从来没在她说真话时更新过 ——
+       * 说明与实现不一致，正是那个「每 6 小时准点报一次」的直接来源。
+       * 现在 `markSeen()` 每轮巡检都记，这一整块没有存在必要了。
+       */
 
       /*
        * 池子总数：每次巡检都问一句（内部有 20 分钟缓存，绝大多数时候立刻返回）。
@@ -1536,7 +2573,12 @@ export class JourneyWorld implements World {
      * 第二天早上却按自己的口味去了乌鲁木齐，而且没有任何一处报错。
      */
     const pledged = opts.to ? null : this.activePledge(now);
-    const pledgedCity = pledged ? cityById(pledged.cityId) : null;
+    /*
+     * 赴约的第一段是**见面城**，不是最终那座城（2026-11-07）。
+     * 原来直接取 `pledged.cityId` —— 加了见面城之后，那等于跳过会合点直奔目的地，
+     * 「一起走」就成了各走各的。
+     */
+    const pledgedCity = pledged ? cityById(this.pledgeStop(pledged)) : null;
     if (opts.to) {
       to = opts.to;
       km = Math.round(distanceKm(from, to));
@@ -1638,6 +2680,17 @@ export class JourneyWorld implements World {
       + `这一趟要走 ${humanHours(leg.durationWorldHours)}${viaText}。`
       + `\n${mode.feel}`
       + `\n（${to.name}那边这会儿是 ${this.localClock(now, to)}。到了自然就知道。）`
+      /*
+       * **一起去的那一趟，车上不止一个人。**（2026-11-07 Mr.Q）
+       *
+       * 判据：已经跟人在见面城碰上了（`meetArrivedAt` 有值）、还没到约定的目的地
+       * （`arrivedAt` 为空）、而且这一趟正是从见面城出发的。三条缺一条都不说 ——
+       * 人还没见着就说「挨着坐」，那是替她编。
+       */
+      + (this.st.pledge && !this.st.pledge.arrivedAt && this.st.pledge.meetCityId === from.id
+        && this.st.pledge.meetArrivedAt
+          ? `\n${travelWith(this.whoOfPledge(this.st.pledge), mode.name, seedOf(`${leg.id}|go`), this.warmthOf(this.st.pledge))}`
+          : '')
       + songLine(this.currentSong()),
       'flush',
     );
@@ -1687,7 +2740,21 @@ export class JourneyWorld implements World {
     const hour = localMoment(now, from.tz).decimal;
     if (hour < 7 || hour >= 21) return;
 
-    const picked = this.pickNextLeg(from);
+    /*
+     * **手上有约定，问的就是约定的那一站**（2026-11-12，Discussion #586）。
+     *
+     * 原来这里无条件 `pickNextLeg` —— 她约好了去 B，面板却推来一座系统自己挑的 C。
+     * 他一点「好」，`answerAsk` 把 C 当指定目的地传进 `depart`，
+     * 而 `depart` 第一行是 `opts.to ? null : activePledge()`：**约定被整个丢掉**。
+     *
+     * 用户看到的就是「约好了人，上了车却去了别处，到了只能自己慢慢找」。
+     * `depart` 自己那条路（不传 `to`）一直是认约定的，漏的只有「等点头」这一支。
+     */
+    const pledged = this.activePledge(now);
+    const pledgedCity = pledged ? cityById(this.pledgeStop(pledged)) : null;
+    const picked = pledgedCity
+      ? { city: pledgedCity, km: Math.round(distanceKm(from, pledgedCity)) }
+      : this.pickNextLeg(from);
     if (!picked) {
       this.log?.warn('没有可去的地方，这一轮连问都不用问。');
       return;
@@ -1705,10 +2772,14 @@ export class JourneyWorld implements World {
     this.st = { ...this.st, ask };
     this.persist();
 
+    /* 赴约和「想出门」不是一件事，措辞分开 —— 他要批的也不一样。 */
+    const why = pledged
+      ? `她要赴约（跟${this.whoOfPledge(pledged)}约在${this.cityName(this.pledgeStop(pledged))}）`
+      : '她想出门';
     await this.push(
       'journey.ask',
       `ask-${ask.askedAt}`,
-      `她想出门，在等他点头：从${from.name}去${picked.city.name}，直线约 ${picked.km} 公里。`
+      `${why}，在等他点头：从${from.name}去${picked.city.name}，直线约 ${picked.km} 公里。`
       + '\n（他开了「出门等点头」，所以她不会自己走。面板上那张卡片有两个按钮。）',
       'flush',
     );
@@ -1951,8 +3022,18 @@ export class JourneyWorld implements World {
      * 那是她半路改了主意，硬留着只会在 `journey_now` 里挂一句做不到的话。
      */
     const pledgeOf = this.st.pledge;
-    const pledged = pledgeOf && pledgeOf.cityId === to.id ? pledgeOf : null;
-    const stray = pledgeOf && !pledged ? pledgeOf : null;
+    /*
+     * **落地这座城可能是见面城，也可能是一起走的那座**（2026-11-07）。
+     *
+     * 原来只有一种判据（`cityId === to.id`），加了见面城之后它会把每一次
+     * 「到成都碰头」都判成「走岔了，约定作废」—— 而且是一条不报错的作废。
+     */
+    const atDest = pledgeOf && pledgeOf.cityId === to.id ? pledgeOf : null;
+    const atMeet = pledgeOf && pledgeOf.meetCityId === to.id && pledgeOf.cityId !== to.id
+      ? pledgeOf
+      : null;
+    const pledged = atDest ?? atMeet;
+    const stray = pledgeOf && !atDest && !atMeet ? pledgeOf : null;
     this.st = {
       ...this.st,
       phase: 'staying',
@@ -1966,8 +3047,27 @@ export class JourneyWorld implements World {
       heading: fromCity ? bearingDeg(fromCity, to) : this.st.heading,
       lastKm: leg.km,
       everVisited: beenBefore ? this.st.everVisited : [...this.st.everVisited, to.id],
-      pledge: pledged ? { ...pledged, arrivedAt: now.toISOString() } : null,
+      /*
+       * 到见面城只记 `meetArrivedAt`，**不动 `arrivedAt`** ——
+       * 「一起待 N 天」从到了一起走的那座城才开始算，
+       * 在成都等的那三天不该被算进「在稻城待的三天」。
+       */
+      pledge: atDest
+        ? { ...atDest, arrivedAt: atDest.arrivedAt ?? now.toISOString() }
+        : atMeet
+          ? { ...atMeet, meetArrivedAt: atMeet.meetArrivedAt ?? now.toISOString() }
+          : null,
     };
+    /*
+     * 到站这一笔（2026-11-08）：到见面城不算，**真的一起走到了才算**。
+     * 熟络度只在这一刻涨 —— 「约好了但没见成」不该算关系。
+     *
+     * 2026-11-11 改成**按人逐个记**。原来传的是 `whoOfPledge(...)`，
+     * 那是一个给人看的拼接串（「小满、小汐、阿澈」）：
+     * 单人时凑巧等于人名，看不出问题；三个人一起走到站，记忆里会多出一个
+     * 叫这串名字的假人，而真正的三个人一个都没记上。见 `namesIn`。
+     */
+    if (atDest) for (const who of namesIn(atDest)) this.rememberPet(who, 6);
     if (stray) this.log?.info(`到了${to.name}，手上那份去${this.cityName(stray.cityId)}的约定作废。`);
     await this.rebuildPlan(now, 'arrival', moment.decimal, to);
     // 交通费在到站时结算 —— 票是出发前买的，但"花了多少"到站才成事实。
@@ -1989,6 +3089,17 @@ export class JourneyWorld implements World {
     this.persist();
 
     /*
+     * 足迹：到站才记一笔（2026-11-14）。
+     *
+     * 本地那份是 `everVisited`（城市 id 数组），只在这台机器上；
+     * 这一笔是云端备份 —— 换电脑、清缓存之后，她还认得自己走过的地方。
+     *
+     * **不 await、不重试**：这是履历，不是行程的一部分。让它挡住行程推进，
+     * 一次网络抖动就会把她卡在站台上；而失败了下次到站还会再记。
+     */
+    void reportFootprint(this.meetOptions(), to.id);
+
+    /*
      * 到站那一刻就把「这一带还有谁」说出来，不等第二天早上那句 `journey.day`。
      *
      * 2026-11-05 Mr.Q：「新功能从哪看？我找不到啊」。原来同城信息只在排当天表的正文里带一句，
@@ -1997,6 +3108,15 @@ export class JourneyWorld implements World {
      */
     const social = [
       neighborLine(this.plan?.neighbors ?? []),
+      /*
+       * 熟面孔（2026-11-11）。邮件原话：「散了就是真的散了 —— 没有人知道下次
+       * 在哪个城市还能撞见谁」。原来这条链是这样的：记忆里明明存着
+       * 「跟小满走过 2 次 / 熟络度 18 / 印象『话不多，但半夜肯陪我找药店』」，
+       * 到站那一刻却说「小满也在这儿」，跟对陌生人一模一样。
+       *
+       * 只挂到站这一条，不挂每日事件 —— 理由见 `knownNeighborLine` 的注释。
+       */
+      knownNeighborLine(this.plan?.neighbors ?? [], this.st.pets ?? {}),
       inviteLine(this.plan?.invites ?? []),
     ].filter(Boolean).join('\n');
 
@@ -2006,9 +3126,34 @@ export class JourneyWorld implements World {
       `到了。${to.name}，当地 ${fmtHour(moment.decimal)}。`
       + `这一趟 ${leg.km} 公里走了 ${humanHours(leg.durationWorldHours)}。`
       + `${beenBefore ? '这地方她以前来过，' : ''}${bodyFeeling(to, this.resolveHome().city)}`
-      // 赴约到了：这一趟不是随便来的，得说出来是冲着谁来的。
-      + (pledged ? `\n这是跟${this.whoOfPledge(pledged)}说好一起来的地方，` + `在这儿待 ${pledged.days} 天。` : '')
+      /*
+       * 赴约到了：这一趟不是随便来的，得说出来是冲着谁来的。
+       *
+       * 两个阶段分开说（2026-11-07）：到了见面城是「等人」，到了目的地才是「一起过」。
+       * 用同一句话会让她在成都就说「我们要在这儿待三天」—— 而那是稻城的事。
+       */
+      + (atDest
+        ? `\n这是跟${this.whoOfPledge(atDest)}说好一起来的地方，` + `在这儿待 ${atDest.days} 天。`
+        : atMeet
+          // 上面几行的 `rebuildPlan` 已经把同城邻居拉过了，直接用手上这份，不再多问一次服务端。
+          ? (() => {
+              const mates = (atMeet.withPets ?? [atMeet.withPet]).map((x) => x.trim());
+              const who = (this.plan?.neighbors ?? [])
+                .filter((n) => mates.includes(n.pet.trim())).map((n) => this.nameOf(n.pet));
+              return `\n到${to.name}了 —— 跟${this.whoOfPledge(atMeet)}约在这儿碰头，`
+                + (who.length
+                  ? `人已经在城里了（${who.join('、')}），待会儿碰上了就一起往${this.cityName(atMeet.cityId)}走。`
+                  : `人还没露面。先在这儿等着，等到了一起去${this.cityName(atMeet.cityId)}。`);
+            })()
+          : '')
       + `\n今晚住：${this.plan ? lodgingLabel(this.plan.lodging) : '还没定'}。`
+      /*
+       * 一起住店：同一家店，但不是同一间房。
+       *
+       * 只写「房间关系」—— 酒店本身已经由 `lodgingLabel` 说了，
+       * 这里再描述一遍房型就是重复，而重复会让用户觉得是模板。
+       */
+      + (atDest ? stayWith(this.whoOfPledge(atDest), seedOf(`${leg.id}|stay`), this.warmthOf(atDest)) : '')
       + weatherLine(this.plan?.weather ?? null)
       + (social ? `\n${social}` : '')
       + `\n（倍速 ${speed}x，接下来按当地时间过日子。）`,
@@ -2072,6 +3217,27 @@ export class JourneyWorld implements World {
       // 只要 plan 还在就永远复用第一天的房型 —— 结果预算早超了还在住「这几天最贵的一间」。
       // 正常情况不换（一个地方住几天本来就该是同一家），只有紧了才重新掷。
       if (this.isTight()) this.plan = null;
+      /*
+       * 租的车走一天（2026-11-06）。
+       *
+       * `days` 这个字段从 0.7.22 就写在 state 里，**却从来没被读过** ——
+       * 「租三天」永远不到期，等于异地出发那 600 块买了个无限期。
+       * 现在它真的会走：自己的车 `days === 0`（不递减），租的车到期自动还。
+       *
+       * 还车要**说出来**。静默清掉的话，她第二天会发现城里几个点突然要走过去，
+       * 而手上没有任何解释 —— 到时候只能编一个。
+       */
+      let carBack = '';
+      if (this.st.car && this.st.car.days > 0) {
+        const left = this.st.car.days - 1;
+        if (left > 0) {
+          this.st = { ...this.st, car: { ...this.st.car, days: left } };
+        } else {
+          carBack = `租的车到期了，还回去。在${here.name}城里接下来靠公交和两条腿`
+            + '（想再开就说一声，再去租）。';
+          this.st = { ...this.st, car: null };
+        }
+      }
       this.st = {
         ...this.st,
         stayDateKey: moment.dateKey,
@@ -2080,10 +3246,44 @@ export class JourneyWorld implements World {
       };
       await this.rebuildPlan(now, 'full', 0, here);
       this.persist();
+      if (carBack) {
+        await this.push(
+          'journey.car',
+          `car-return-${moment.dateKey}-${here.id}`,
+          carBack,
+          'flush',
+        );
+      }
+      /*
+       * 这几天是不是跟人一起过（2026-11-06 加）。
+       *
+       * 原来只有到达那一条说「跟XX说好来的，待 N 天」，之后的 `journey.day`
+       * 一个字不提 —— 于是那 N 天里她真的会忘。Mr.Q 的原话：「日记肯定要体现啊」，
+       * 而她写日记时手上没有任何「今天和谁在一起」的事实，只能写风景。
+       *
+       * 只在 `arrivedAt` 有值（人已经到了）且城对得上时说。人还在路上说这句
+       * 就是替她提前见面。
+       */
+      const mate = this.mateLine(this.st.pledge, here.id, stayDays);
+
       await this.push(
         'journey.day',
         `day-${moment.dateKey}-${here.id}`,
-        `${here.name}的第 ${stayDays + 1} 天，当地 ${moment.dateKey}。`
+        /*
+         * **带上时刻**（2026-11-07）。
+         *
+         * 原来只写「当地 2026-11-07」，不说几点。而 `journey.day` 是在当地
+         * 刚过零点那一刻推的 —— 用户那边可能还是 23:5x，她看到日期突然变成
+         * 第二天，只能拿上下文里的旧时间去对，于是得出「日期跳了」的错觉，
+         * 甚至怀疑时区（Mr.Q 当天就问「时区出问题了？」）。
+         *
+         * 宿主**不给她当前时间**（`/api/prompts/prefix` 里没有任何时间戳），
+         * 所以这条事件是她唯一的机会。
+         */
+        `${here.name}的第 ${stayDays + 1} 天，当地 ${moment.dateKey}`
+        + `${moment.decimal < 0.2 ? '，刚过零点' : `，${fmtHour(moment.decimal)}`}。`
+        // 一起过的那几天：每天提一次，别指望她记得一周前那条到达通知。
+        + (mate ? `\n${mate}` : '')
         // 这一带还有谁。没有就是空串，不占地方。
         + (neighborLine(this.plan?.neighbors ?? []) ?? '')
         + (inviteLine(this.plan?.invites ?? []) ?? '')
@@ -2174,8 +3374,27 @@ export class JourneyWorld implements World {
        */
       const pledge = this.activePledge(now);
       if (pledge) {
-        if (here.id !== pledge.cityId) {
-          // `moveOn` 会把目的地定成约定的那座城，这里只负责「今天该动身了」。
+        /*
+         * **在见面城等人**（2026-11-07，Mr.Q：「继续等」）。
+         *
+         * 判据是「同城今天有没有他们」—— 这个系统里两个人之间没有消息通道，
+         * 只有「谁在哪座城」这张表。看见了就一起走，看不见就再等一天。
+         *
+         * 放在「动身」那一支**之前**：不然她到了成都当天就会往下走，
+         * 所谓「见面」就只是路过。
+         *
+         * 等不下去的那一头交给 `MEET_WAIT_WINDOW_MS` + `prunePledge`：
+         * 三天见不着人，算这趟没成，她自己接着走（并且说出为什么）。
+         */
+        if (pledge.meetCityId && !pledge.arrivedAt && pledge.meetArrivedAt) {
+          const mates = await this.matesHere(pledge, here, now);
+          if (!mates.length) return;   // 人还没露面，今天不动
+          this.log?.info(`在${here.name}见着${mates.join('、')}了，一起往${this.cityName(pledge.cityId)}走。`);
+          await this.moveOn(now, here);
+          return;
+        }
+        if (here.id !== this.pledgeStop(pledge)) {
+          // `moveOn` 会把目的地定成约定的下一站，这里只负责「今天该动身了」。
           await this.moveOn(now, here);
           return;
         }
@@ -2185,6 +3404,24 @@ export class JourneyWorld implements World {
            * 出发那句话才说得出「跟谁说好的几天到了」。
            * 买不起票走不成时它还在，明天接着试。
            */
+          /*
+           * **散伙要单独说一句**（2026-11-12）。
+           *
+           * 原来这件事只藏在 `journey.depart` 的一句从句里（「跟某某说好的 3 天到了，动身」）——
+           * 说完就上车了，听上去像「合同到期」，不像「跟人道别」。
+           * Mr.Q：「旅游完了再解散……怎么从来没见过」。
+           *
+           * 放在 `moveOn` **之前**：那一刻 `pledge` 还在，说得出跟谁；
+           * 进了 `moveOn` 它就结掉了，之后再想说话手里已经没人名。
+           */
+          await this.push(
+            'journey.part',
+            `part-${pledge.inviteId}-${pledge.arrivedAt}`,
+            `跟${this.whoOfPledge(pledge)}在${here.name}待满 ${pledge.days} 天，今天各走各的。`
+            + `\n${partWith(this.whoOfPledge(pledge), seedOf(`${pledge.inviteId}|part`), this.warmthOf(pledge))}`
+            + `\n（这一段到此为止 —— 接下来她自己往下走，对方走对方的。）`,
+            'flush',
+          );
           await this.moveOn(now, here, { afterPledge: pledge });
           return;
         }
@@ -2298,6 +3535,59 @@ export class JourneyWorld implements World {
    * 除了住宿，其余（景点、天气、邻居、邀约）全部按原样重排 ——
    * 作息表的 seed 只跟「哪座城 + 哪天入住」有关，所以换一家店不会把白天的行程搅乱。
    */
+  /**
+   * `lastBeatKey` 里那个时刻（当天的小数小时）。不在这一天就返回 null。
+   *
+   * key 的格式是 `${dateKey}|${kind}|${at}` —— 在 `advanceBeats` 里拼的。
+   * 解析失败一律当「没有推过」，宁可多排一次也不要漏排。
+   */
+  private lastPushedAt(dateKey: string): number | null {
+    const k = this.st.lastBeatKey;
+    if (!k) return null;
+    const [d, , at] = k.split('|');
+    if (d !== dateKey) return null;
+    const n = Number(at);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  /**
+   * 把住宿记录里缺的设施补回来（2026-11-12）。
+   *
+   * ## 为什么需要它
+   *
+   * `amen` / `around` 从 2026-11-09 就由 `withHotel` 产生，`feel` 里那句
+   * 「顶层有个小酒吧，晚上有人弹琴」正是 `amen=['bar']` 拼出来的。
+   * 但存盘只挑了几个字段、读回又是一道白名单 —— 两处都把它们丢了。
+   *
+   * 于是同一个晚上：到达事件说楼上有酒吧，`journey_hotel_night` 回
+   * 「这家没这个，今晚能干的：泡澡、在房间待着」（西安智选假日实测）。
+   * **`feel` 是字符串，活下来了；`amen`/`around` 是字段，死了。**
+   *
+   * ## 为什么不能靠重算自愈
+   *
+   * `pinned` 有 `name` → `pois` 置空 → `withHotel` 第一行直接 `return base`。
+   * 只要不换城、不重新入住，这个洞就一直是洞。
+   * 所以只能按名字回 `hotel-facts.json` 查一次 —— 数据本来是全的。
+   *
+   * 查不到（老城没采、店名改过）就原样返回，不猜。
+   */
+  private healLodgingFacts(lod: Lodging, cityId: string): { lod: Lodging; healed: boolean } {
+    if (!lod.name || lod.amen?.length) return { lod, healed: false };
+    const row = factsFor(cityId).find((h) => h.name === lod.name);
+    if (!row) return { lod, healed: false };
+    const amen = row.amen ?? [];
+    const around = row.around ?? [];
+    if (!amen.length && !around.length) return { lod, healed: false };
+    return {
+      lod: {
+        ...lod,
+        ...(amen.length ? { amen } : {}),
+        ...(around.length ? { around } : {}),
+      },
+      healed: true,
+    };
+  }
+
   private async rebuildPlan(
     now: Date,
     shape: 'arrival' | 'full' | 'last' = 'full',
@@ -2315,19 +3605,91 @@ export class JourneyWorld implements World {
      * 真名要联网，查不到就只说类别。所以没网、没 key、接口挂了，
      * 她今天住什么档次的房一点不受影响 —— 只是别指望她说出店名。
      */
-    this.hotels.setKey(this.cfg.amapKey);
+    this.hotels.setKey(this.amapKey());
+    this.eateries.setKey(this.amapKey());
     /*
      * 种子按「哪座城 + 这次入住从哪天开始 + 钱紧不紧」算，不用 `Math.random` ——
      * 作息表只在内存里，重启一次就重建一次，随机源一变她就搬家。
      */
     const seed = `${c.id}|${this.st.stayStartedAt ?? 'x'}|${this.isTight() ? 'tight' : 'ok'}`;
-    const base = override
+    /*
+     * **这次入住定的那家，定下来就不许改。**（2026-11-09 Mr.Q：「他怎么又自动改酒店」）
+     *
+     * 原来只有 `override ?? this.plan?.lodging ?? rollLodging(...)` 三级，
+     * `plan` 一被清掉（日切、钱紧度变化都会清）就落回 `rollLodging` ——
+     * **过零点重新掷一次骰子**，同一家旅店住三晚第二晚换了牌子，用户没让换。
+     *
+     * 判据：**酒店是「她住进去」这个动作的结果，不是每天重算的参数。**
+     * 所以存在 state 里，按「城市 + 这次落脚的时刻」认；只有三种情况该变 ——
+     * 用户让她换（`override`）、换城市、重新落脚。
+     */
+    const stayKey = `${c.id}|${this.st.stayStartedAt ?? 'x'}`;
+    const pinned = this.st.lodging
+      && this.st.lodging.cityId === c.id
+      && this.st.lodging.stayKey === stayKey
+      ? (this.st.lodging.value as unknown as Lodging)
+      : null;
+    let base = override
+      ?? pinned
       ?? this.plan?.lodging
-      ?? rollLodging(seededRandom(seed), this.isTight(), c.priceIdx, this.purseRich());
+      // 最后一个参数：出了国就换那一套房型词（「县城宾馆」不该出现在柏林）。
+      // 最后两个参数：出了国就换那一套房型词；地形决定「山景/海景/湖景」能不能开。
+      ?? rollLodging(seededRandom(seed), this.isTight(), c.priceIdx, this.purseRich(),
+        c.country !== 'CN', terrainOf(c));
+    /* 旧存档缺设施就补一次（见 healLodgingFacts）。补上就地用，也写回盘。 */
+    const heal = this.healLodgingFacts(base, c.id);
+    if (heal.healed) base = heal.lod;
+    /*
+     * **先看本地真数据，再退回联网查。**（2026-11-09）
+     *
+     * `data/hotel-facts.json` 是 TourMind 拉下来的真店：星级、真价、设施、周边。
+     * 有它就不用再问高德 —— 而且高德那条路对海外城市基本是空的。
+     *
+     * 两条路的差别不只是「有没有名字」：
+     * 高德给的是名字 + 猜出来的档次；本地数据给的是**挂牌星级**和**真设施**。
+     * 用户已经被「名字猜档次」坑过两次（「汝阳轩源大酒店」二钻 92 块），
+     * 所以有真数据时必须用真数据。
+     */
+    const facts = factsFor(c.id);
     // 已经挂过真名的房型不必再查一次（同一个地方住几天就是同一家）。
-    const pois = base.name ? null : await this.hotels.hotels(c);
-    const lodging = withHotel(base, pois, seededRandom(`${seed}|hotel`), c.priceIdx);
-    this.weather.setKey(this.cfg.amapKey);
+    const pois = base.name ? null : (facts.length ? facts : await this.hotels.hotels(c));
+    const lodging = withHotel(base, pois, seededRandom(`${seed}|hotel`), c.priceIdx, c.country !== 'CN');
+    /*
+     * 定下来就记住。`override` 是用户明确要求换（`journey_lodging`），要覆盖旧的。
+     * 只有这两种情况写盘 —— 普通重算不写，免得每次重建都落一次文件。
+     */
+    if (override || !pinned || heal.healed) {
+      this.st = {
+        ...this.st,
+        lodging: {
+          cityId: c.id,
+          stayKey,
+          value: {
+            tier: lodging.tier,
+            kind: lodging.kind,
+            price: lodging.price,
+            feel: lodging.feel,
+            ...(lodging.name ? { name: lodging.name } : {}),
+            ...(lodging.address ? { address: lodging.address } : {}),
+            /*
+             * 设施与周边（2026-11-12）。
+             *
+             * **这两行以前不在。** 于是 `feel` 里写着「顶层有个小酒吧」，
+             * 晚上问她能不能去喝一杯，她说这家没有 —— 因为校验读的是 `amen`，
+             * 而 `amen` 从来没被存过（`state.ts` 的反序列化白名单同样要放行）。
+             *
+             * 加字段时记住：写口、读口、类型声明，**三处都是白名单**。
+             */
+            ...(lodging.amen?.length ? { amen: [...lodging.amen] } : {}),
+            ...(lodging.around?.length
+              ? { around: lodging.around.map((x) => ({ n: x.n, km: x.km })) }
+              : {}),
+          },
+        },
+      };
+      this.persist();
+    }
+    this.weather.setKey(this.amapKey());
     // 查不到就是 null —— 作息表照排，只是不排日出、不排夜间出门。
     const w = await this.weather.forecast(c, moment.dateKey).catch(() => null);
     /*
@@ -2349,7 +3711,7 @@ export class JourneyWorld implements World {
      */
     const [board, inviteRes] = await Promise.all([
       meet
-        ? findNeighbors(meet, c.id, moment.dateKey, slot)
+        ? findNeighbors(meet, c.id, slot)
         : Promise.resolve({ list: [] as { pet: string; doing: string }[], pool: 0 }),
       meet ? listInvites(meet, c.id) : Promise.resolve({ ok: true as const, list: [] }),
     ]);
@@ -2381,7 +3743,23 @@ export class JourneyWorld implements World {
         note: x.note,
       }))
       .filter((x) => x.to !== c.id && x.to !== homeId);
-    this.plan = planDay({
+    /*
+     * **同一座城、同一天，重建两次必须得出一模一样的表。**
+     *
+     * 2026-11-07 Mr.Q 的截图：「怎么前脚骑单车后脚变成电瓶车了」——
+     * 同一条「去锦里」的节点推了两遍，一次骑共享单车，一次扫电瓶车。
+     *
+     * 根因：`planDay` 的随机源是 `Math.random`（`inCityMode` 用它挑交通方式，
+     * 而单车和电瓶车的耗时不同、`at` 也跟着不同）。plan 只活在内存里，
+     * **重启一次就重建一次**，每次重建都重新掷骰子 —— 于是同一件事既换了车、
+     * 又因为 `at` 变了骗过了 `lastBeatKey` 那道去重，被推了第二遍。
+     *
+     * 传种子随机之后，重建是幂等的：同城同日同 shape，结果一模一样。
+     * 这不只是修重复推送 —— 已经发生过的事不该因为一次重启被改写。
+     */
+    const planSeed = `${seed}|plan|${moment.dateKey}|${shape}|${startHour}`;
+    const prevPlan = this.plan;
+    const fresh = planDay({
       // 同城同时段的邻居，只进叙事，不参与任何计算。
       neighbors,
       // 这个池子今天一共多少只（不分城市）。只给面板看，不进叙事。
@@ -2400,10 +3778,68 @@ export class JourneyWorld implements World {
        */
       dayIndex: this.stayDayIndex(now),
       // 手上有车就开车去景点（2026-11-06）。买车/租车发生在出发那一步。
-      car: this.st.car ? { fuel: this.st.car.fuel } : null,
+      /* 档位要一起传下去 —— 只传油种的话，排程永远按 comfort 算油钱。 */
+      car: this.st.car ? { fuel: this.st.car.fuel, tier: this.st.car.tier } : null,
+      /*
+       * 车里只有一套。第三方打车扩展在场时，排程不再自己叫出租（2026-11-10）——
+       * 两边都排，同一天日记两段「打车」、账上两笔钱，怎么解释都像补丁。
+       */
+      noTaxi: this.taxiYields(),
       // 手头宽才在景点买讲解/观光车（2026-11-06）。和酒店、座位同一个判据。
       comfortable: this.purseRich(),
+      /*
+       * 一起待着的人（2026-11-08）：交给排程，让「一起」出现在日程和饭菜里，
+       * 不只出现在「跟谁约了几天」那一句里。
+       */
+      mate: this.st.pledge && this.st.pledge.arrivedAt && this.st.pledge.cityId === c.id
+        ? this.whoOfPledge(this.st.pledge)
+        : undefined,
+      /*
+       * 熟络度跟着一起下去（2026-11-08）—— 日程要知道「今天能不能说那些话」、
+       * 「今天有几处会写到他」。不传就等于两个刚约上的人。
+       */
+      warmth: this.st.pledge && this.st.pledge.arrivedAt && this.st.pledge.cityId === c.id
+        ? this.warmthOf(this.st.pledge)
+        : undefined,
+      /* 她的口味（2026-11-08）：不想再吃的不会再被排到。 */
+      taste: this.tasteForPlan(),
+      rnd: seededRandom(planSeed),
+      /* 包车还在服务时间内就全程用它（2026-11-11）。判据见 `charterNow()`。 */
+      charter: this.charterNow() !== null,
+      /*
+       * 景区内代步和「手头宽」分开判（2026-11-10）。
+       *
+       * 那个问的是「住得起哪档店」，这个问的是「腿要不要歇」——
+       * 合在一起的后果是**记账一关，景区里永远只能走路**（见 `spotSpendOk`）。
+       */
+      spotRideOk: this.spotSpendOk(),
     });
+
+    /*
+     * 第二道保险：**已经推出去的那一段，一个字都不改。**
+     *
+     * 种子随机让「同参数重建」幂等，但参数本身会变 —— 钱紧了（`isTight` 进种子）、
+     * 换了酒店、`shape` 变了，都会让整天的表重排。那些变化只该影响**还没发生的事**。
+     *
+     * 判据用 `lastBeatKey` 里那个时刻：它之前的是已经说过的话，之后的是还没到的。
+     */
+    /*
+     * **先给刚排出来的表打上她改过的补丁，再跟已推出的段合并。**
+     *
+     * 顺序不能反：合并在前、打补丁在后，那些「已经说出去的」格子会被补丁改口 ——
+     * 而她上午真去了哪儿是既成事实。补丁只该作用于还没发生的那一段。
+     */
+    const patched = this.applyPlanPatches(fresh, c.id, moment.dateKey);
+    const pushedAt = this.lastPushedAt(moment.dateKey);
+    this.plan = prevPlan && prevPlan.dateKey === fresh.dateKey && pushedAt !== null
+      ? {
+          ...patched,
+          beats: [
+            ...prevPlan.beats.filter((b) => b.at <= pushedAt),
+            ...patched.beats.filter((b) => b.at > pushedAt),
+          ],
+        }
+      : patched;
 
     /* 上报「我在这儿」。不 await —— 报不上去也不该拖慢她这一天。 */
     if (meet) {
@@ -2413,16 +3849,85 @@ export class JourneyWorld implements World {
   }
 
   /**
+   * 记下「这一轮巡检真的跑过了」（2026-11-13）。
+   *
+   * 这是 `awayMs` 的新基准：Core 在跑就每轮刷新，停摆了才会变旧。
+   * 落盘节流见 `SEEN_SAVE_MS` 的说明。
+   *
+   * **必须放在算完 `awayMs` 之后调用。** 顺序反了差值恒为 0，
+   * 「他离开了 14 小时」就永远说不出来 —— 测试里有一条专门钉这个顺序。
+   */
+  private markSeen(realNowMs: number): void {
+    if (realNowMs - this.lastSeenSavedMs < SEEN_SAVE_MS) return;
+    this.lastSeenSavedMs = realNowMs;
+    this.st = { ...this.st, lastSeenAt: new Date(realNowMs).toISOString() };
+    this.persist();
+  }
+
+  /**
    * 把该说的那一个节点说出来。
    *
    * 关键在「漏掉几轮怎么办」：Core 关了一夜，醒来时可能已经有三个节点过期。
    * **只推最后一个**，并在正文里说明中间跳过了什么。一次推三条会把她变成报站机，
    * 而她本来该像人一样「哦，一觉睡到中午了」。
    */
+  /**
+   * 「你不在的这段时间」那一小段（2026-11-11）。
+   *
+   * 用户的原话：「以前关电脑的时候，鱼不是会在电脑启动的时候冒出一堆
+   * 电脑关机时候的信息嘛，现在这个功能怎么没有了。」
+   *
+   * ## 为什么不照旧做法把事件堆回来
+   *
+   * 旧版本会堆，是因为**事件按时间排队推**，Core 一关就断，开机时队列里
+   * 全是过期的，于是一起涌出来 —— 那不是设计，是副作用。`world.ts` 开头写着
+   * 为什么后来改了：「醒来时会堆一堆过期事件一起推，她一口气说十条昨天的事。」
+   *
+   * 所以这里不做「十条」，做**一条摘要**：多久没见 + 这期间她自己做过的事，
+   * 最多三件，夹在第一条事件前面。
+   *
+   * ## 阈值
+   *
+   * 6 小时。短于这个的多半是「他上班去了」或「睡了一觉」，硬报一句反而啰嗦 ——
+   * 那些时候 `skippedNote`（中间跨过了 N 个点）已经够了。
+   */
+  private awayNote(): string {
+    const AWAY_MIN_MS = 6 * 3_600_000;
+    if (this.awayMs < AWAY_MIN_MS) return '';
+    const hours = Math.round(this.awayMs / 3_600_000);
+    const span = hours >= 36
+      ? `${Math.floor(hours / 24)} 天（约 ${hours} 小时）`
+      : `${hours} 个小时`;
+    /*
+     * 「这期间她做了什么」从今天的作息表里取 —— **不挑睡觉和赶路**，
+     * 那两样说了等于没说。最多三件：离开很久的时候全列出来，就又成了报站机。
+     *
+     * 跨天的话 plan 会被重排，所以这里只有今天的；跨天那段用「多久没见」概括，
+     * 不再编细节 —— 编出来的日程不如不说。
+     */
+    const beats = this.plan?.beats ?? [];
+    const did = beats
+      .filter((b) => b.kind === 'activity' || b.kind === 'breakfast' || b.kind === 'lunch' || b.kind === 'dinner')
+      .slice(-3)
+      .map((b) => b.what);
+    const body = did.length ? `今天的日程里她已经过了：${did.join('；')}。` : '';
+    const where = this.st.phase === 'traveling' ? '还在路上' : `在${this.cityName(this.st.hereId)}`;
+    return `（他离开了 ${span}，刚回到屏幕前。这段时间她自己过着 —— 现在${where}。${body}这些只是背景，不用一条条补，也别把这段时间讲成一份报告。）`;
+  }
+
   private async advanceBeats(now: Date, city: City, localNow: number, dateKey: string): Promise<void> {
     const plan = this.plan;
     if (!plan) return;
-    const due = plan.beats.filter((b) => b.at <= localNow);
+    /*
+     * 今天歇着的时候，`activity` 一律不算「该说的」。
+     *
+     * ro-berry 的反馈：她说累了要歇着，接下来还是按作息出门了 ——
+     * 因为「累了」只存在于她说的话里，排好的表一个字没改。这里把表真的改掉。
+     * 饭点和回酒店保留：歇着不是绝食。
+     */
+    const r = this.st.rest;
+    const resting = r && r.dateKey === dateKey;
+    const due = plan.beats.filter((b) => b.at <= localNow && !(resting && b.kind === 'activity' && b.at >= r.from));
     if (!due.length) return;
     const last = due[due.length - 1];
     const key = `${dateKey}|${last.kind}|${last.at}`;
@@ -2492,14 +3997,25 @@ export class JourneyWorld implements World {
    * 漏一处就是「界面说配好了，拍照说没配」。
    */
   private photoConfigProblem(): string | null {
-    if (!(this.cfg.imageApi ?? '').trim()) return '还没配生图接口';
+    /*
+     * 2026-11-14 改成看**解析后**的后端，不再直接看 `imageApi`。
+     *
+     * 之前第一句是「`imageApi` 为空 = 还没配」。加了服务商预设之后这条会误报：
+     * 用户选「豆包」、只贴一把密钥时，地址来自预设、`imageApi` 仍是空的，
+     * 而面板会亮红灯说「还没配生图接口」—— 明明能拍。
+     */
+    const backend = resolveImageBackend(this.cfg);
+    if (!backend.api) return '还没配生图接口（云端要挑一个服务商，或手填地址）';
     /*
      * `?? ''`：这三个字段是 2026-11-04 才加的。老配置文件里没有它们，
      * 万一框架没做默认值合并，`.trim()` 会在 undefined 上直接抛 ——
      * 而抛在拍照路径里的表现是「点了没反应」。
      */
-    if (photoProtocolOf(this.cfg.imageProtocol) === 'comfyui' && !(this.cfg.imageWorkflow ?? '').trim()) {
+    if (backend.protocol === 'comfyui' && !(this.cfg.imageWorkflow ?? '').trim()) {
       return '生图接口选的是 ComfyUI，但还没粘 workflow —— 在 ComfyUI 里用「Save (API Format)」导出，整份贴进设置';
+    }
+    if (backend.protocol === 'openai' && !backend.model) {
+      return '云端生图还差模型名 —— 上面挑一个服务商，或手填模型 ID';
     }
     return null;
   }
@@ -2550,8 +4066,21 @@ export class JourneyWorld implements World {
     const city = this.cityOrNull(this.st.hereId);
     if (!city) return { ok: false, reason: '现在不知道她在哪' };
     const onRoad = this.st.phase === 'traveling' && !!this.st.leg;
-    // 路上拍目的地一带：`hereId` 这时候还是出发城市，拿它拍会拍出一张「原地没动」的照片。
-    const target = onRoad ? (this.cityOrNull(this.st.leg!.toId) ?? city) : city;
+    /*
+     * **路上拍哪儿，按走了多少算（2026-11-11，Mr.Q：「才从成都出发没几个小时就到沙漠地区了」）。**
+     *
+     * 原来这里一律用目的地：`hereId` 还是出发城市，拿它拍会拍出一张「原地没动」的照片 ——
+     * 这个顾虑是对的，但修法过了头。成都 → 敦煌 1362 公里，刚出城二十分钟，
+     * 照片标题就叫「敦煌一带的路上」，画面按敦煌的锚点出戈壁滩。
+     * 用户看到的是：人在四川盆地，窗外已经是大漠。
+     *
+     * 现在按真实进度分：**过半才算到了对面那一带**，前半程还是出发地。
+     * 中间那段（若尔盖、河西走廊）没有数据，两头都不完全对 —— 但比「全程都是对面」诚实。
+     */
+    const progress = onRoad ? progressOf(this.st.leg!, this.worldNow()) : 0;
+    const target = onRoad && progress >= 0.5
+      ? (this.cityOrNull(this.st.leg!.toId) ?? city)
+      : city;
     // 时区跟着拍摄地走 —— 跨时区的时候，出发地和目的地的「下午」不是一个下午。
     const moment = localMoment(this.worldNow(), target.tz);
     const hour = Math.round(moment.decimal);
@@ -2607,6 +4136,24 @@ export class JourneyWorld implements World {
      * 现在题材分六档，各走各的模板；`ground` 是老行为，一个字不变。
      */
     subject: PhotoSubject = 'ground',
+    /**
+     * 她自己补的一句「怎么拍」（2026-11-09）。
+     *
+     * 接在 `subject` 后面而不是塞进前面那几个布尔位 —— 那几格已经十来个了，
+     * 再插一个位置参数，下一个加功能的人必然传错一个（这坑 2026-11-06 踩过：
+     * `subject` 加了签名却漏传一处，出来还是旧画面）。所以放最后，默认空。
+     */
+    focus = '',
+    /** 她自己写的画面内容（2026-11-10）。放最后，理由同 `focus`。 */
+    describe = '',
+    /**
+     * 面板「重新生成」用的覆盖项（2026-11-11，用户 TwoTwo：AI 生成的照片不满意）。
+     *
+     * **只做两件事**：换成他在相册页改过的那段提示词、原位替换掉指定的那条记录。
+     * 不参与任何判断 —— 判重、时间窗、题材都是「拍新的一张」才要问的，
+     * 重拍一张已有的照片，他已经替它决定过了（所以调用方传 replace=true）。
+     */
+    override?: { prompt: string; replaceHandle: string; title?: string },
   ): Promise<{ ok: boolean; reason?: string; title?: string; sky?: SkyView }> {
     /*
      * 跳过时给一句人话。**手动（replace）记 info，自动只记 debug** ——
@@ -2653,10 +4200,29 @@ export class JourneyWorld implements World {
     // 节日/季节题材要月日。dateKey 是当地的日期，直接拆，别再算一次时区。
     const month = Number(dateKey.slice(5, 7)) || 1;
     const day = Number(dateKey.slice(8, 10)) || 1;
-    const title = onRoad ? `${city.name}一带的路上` : photoTitle(city.name, spot, hour, view);
+    /*
+     * 标题要按题材走（2026-11-06 补）。
+     *
+     * 原来只有 `onRoad` 这一个分支：「路上」那张一律叫「XX 一带的路上」。
+     * 但路上也能吃东西、也能拍街 —— 那时候她还说「路上」，等于把一碗面
+     * 说成一条公路。`subject` 不是 `ground` 时交给 `photoTitle` 自己命名。
+     */
+    /*
+     * 重拍一张已有的照片时，标题沿用原来那条 —— 那是这张照片的名字，
+     * 不该因为换了提示词就改名。路上那张尤其：它当初叫「大理一带的路上」，
+     * 过两天人在西安重拍，按现在的位置算会变成「西安一带的路上」，那是另一张照片。
+     */
+    const title = override?.title
+      ?? (onRoad && subject === 'ground'
+        ? `${city.name}一带的路上`
+        : photoTitle(city.name, spot, hour, view, subject));
     this.shooting = true;
     try {
-      const prompt = photoPrompt({
+      /*
+       * 重新生成时用他改过的那一段，一个字都不重排 —— 他要的就是"按我改的拍"。
+       * 老照片没留提示词的话，前端那边按钮是禁用的，走不到这里。
+       */
+      const prompt = override?.prompt.trim() || photoPrompt({
         city: city.name,
         // 视觉锚点按 id 查（名字会重，id 唯一）
         cityId: city.id,
@@ -2669,16 +4235,39 @@ export class JourneyWorld implements World {
         feel: bodyFeeling(city, this.resolveHome().city),
         // 风格交给用户：接本地模型的人要能盖掉「胶片质感」这种写实指令。
         style: this.cfg.imageStyle,
+        /*
+         * 极简提示词（2026-11-11）。用户沃兔实测「只写地名和景点反而对」，
+         * 这一格把这套开关接到那条路上。默认关，见 `imageMinimal` 的定义。
+         */
+        minimal: this.cfg.imageMinimal,
         // 留空 = 画面里没有人。填了才画人。
         cast: this.cfg.imageCast,
         // 抬头还是看脚下。天空照仍受当地时刻和天气约束。
         view,
+        /* 她自己写的那一句（2026-11-10）。空 = 不出现，老行为不变。 */
+        describe,
         /*
          * 拍什么（2026-11-06）。用户说「拍晚饭」时，这里就不再是风景。
          * 美食的具体菜名由 `pickFood` 按城市和时段挑 —— 是当地此刻会吃的东西。
          */
         subject,
-        dish: subject === 'food' ? pickFood(city, hour < 10 ? 0 : hour < 15 ? 1 : 2) : undefined,
+        /* 她自己补的取景（2026-11-09）。空 = 这一句根本不出现，老行为不变。 */
+        focus,
+        /*
+         * 菜名按「城市 + 日期 + 餐次」抽签，和作息表里写的**同一套**算出来 ——
+         * 不然照片上是担担面、正文写的是钟水饺，两个人对不上。
+         */
+        dish: subject === 'food'
+          ? pickFood(city, hour < 10 ? 0 : hour < 15 ? 1 : 2,
+              localMoment(this.worldNow(), city.tz).dateKey, this.tasteForPlan())
+          : undefined,
+        /*
+         * 她这一刻在做什么（2026-11-08 Mr.Q：「把鱼看到的说到的直接写入图片提示词」）。
+         *
+         * 取日程里**已经过掉的那一格**，不是她现编的一句 ——
+         * 照片对不对得上，靠的就是「文字说的」和「画面画的」是同一件事。
+         */
+        doing: this.photoDoingNow(city, hour),
         cityIdx: city.priceIdx,
         month,
         day,
@@ -2691,10 +4280,75 @@ export class JourneyWorld implements World {
        * 排队超时 / 节点报红），混在一个函数里会让错误文案互相污染。
        * 分成两个函数、在这里按协议选，每条路的失败原因都能说得准。
        */
-      const shot = photoProtocolOf(this.cfg.imageProtocol) === 'comfyui'
+      /*
+       * 夜拍要多给两样东西（2026-11-10）。
+       *
+       * Mr.Q 连问两轮：「晚上拍的跟白天一样」「天空为啥还有鱼肚白啊，
+       * 一般来说乡村灯光没有这么亮吧」。查下来**光靠正向压不住**：
+       * cfg 2.5 时模型对「天上没有星」「地平线不发白」只是"知道了"，
+       * 照样画三颗星、照样给田铺一层暖光。
+       *
+       * 实测：加负向能压掉地平线那道白，星星还要 cfg 提到 3.3 才干净。
+       * 所以夜里两样一起上；白天一个字不动 —— 那套参数是调过的。
+       *
+       * 判据和提示词用**同一个** `daylitAt`，不另算一份。
+       * 两处各写一份，迟早出现「提示词说深夜、负向却按白天给」。
+       */
+      /*
+       * **重拍（override）不判夜。**
+       *
+       * `hour` 来自 `worldNow()`，也就是「此刻几点」。这对「现在出去拍一张」是对的，
+       * 对重拍一张几天前的照片是错的：
+       *
+       * - `dateKey` 用的是旧记录（照片那天的日期）✓
+       * - `hour` 用的却是现在 ✗ —— 白天拍的那张，深夜点重拍会被判成夜拍
+       *
+       * 判成夜拍的后果不是多一句话：`nightNegative()` 会往负向里塞「天上没有星／地平线
+       * 不要发白」，`cfg` 从 2.5 提到 3.3。用户明明在提示词里写着「雨后的湖边小路」，
+       * 系统却按他现在几点在改写这张照片的光线，两下互斥。
+       *
+       * 而且重拍是他自己写的完整提示词（`override.prompt`），场景自带光线；
+       * 这一层再按钟点加补丁，等于不信他写的东西。
+       *
+       * 2026-11-11 加：上面那条注释「判据和提示词用同一个 daylitAt」在 override 路径下
+       * 已经不成立了 —— 提示词被整个换掉，只剩负向还在按 hour 走，正是那种两处不同步。
+       */
+      const nightShot = shotIsNight({
+        repaint: !!override,
+        lat: city.lat ?? 0,
+        month: Number(dateKey.slice(5, 7)) || 1,
+        hour,
+        /*
+         * **经度和时区要一起传（2026-11-12 实图之后）。**
+         *
+         * 只给纬度的话，`shotIsNight` 退回「钟点 = 太阳时」。喀什的钟点比太阳时快近三小时，
+         * 于是北京时间十九点（太阳还有八度、提示词写着低角度光）被判成夜拍 ——
+         * 负向塞进「stars / bright horizon」、cfg 提到 3.3，一路在跟提示词对打。
+         *
+         * 提示词用什么判的光，负向就得用同一个判据。这是那次「两处各写一份」的同一个病。
+         */
+        ...(city.lon !== undefined ? { lon: city.lon } : {}),
+        ...(city.tz ? { tz: city.tz } : {}),
+      });
+
+      /*
+       * 后端在这里解析一次（2026-11-14）。
+       *
+       * 规则：`imageProtocol` 决定云端还是本地；云端再按 `imagePreset` 补地址/模型/尺寸，
+       * **手填的值优先**。尺寸还会按模型的最低像素抬一次 —— 豆包那条门槛
+       * （2560×1440 起）比我们的默认尺寸高一倍多，不抬就是必失败。
+       *
+       * `sizeNote` 只在第一次说一遍：它每次都成立，刷屏没有信息量。
+       */
+      const backend = resolveImageBackend(this.cfg);
+      if (backend.sizeNote && !this.imageSizeNoted) {
+        this.imageSizeNoted = true;
+        this.log?.info(backend.sizeNote);
+      }
+      const shot = backend.protocol === 'comfyui'
         ? await shootComfy({
-            api: this.cfg.imageApi,
-            key: this.cfg.imageKey,
+            api: backend.api,
+            key: this.imageKey(),
             workflow: this.cfg.imageWorkflow ?? '',
             promptNode: this.cfg.imagePromptNode ?? '',
             prompt,
@@ -2710,16 +4364,44 @@ export class JourneyWorld implements World {
             negativeNode: this.cfg.comfyNegativeNode ?? '',
             ...(this.cfg.imageTimeoutSec > 0 ? { timeoutMs: this.cfg.imageTimeoutSec * 1000 } : {}),
             // 留空 = 用 workflow 里原来的尺寸
-            size: this.cfg.imageSize ?? '',
+            size: backend.size,
+            /* 只在夜里补：负向追加 + 提高 cfg。白天这两个都不传，等于老行为。 */
+            /*
+             * 负向按**天气**决定要不要禁星，不是按钟点：
+             * 阴雨夜确实不该有星，晴夜该有 —— 她抬头看天的时候更是主角。
+             */
+            /*
+             * 负向：夜里那套 + **「画面里不许有人」**（2026-11-12 实图之后）。
+             *
+             * 正向写「画面里没有人物」在这个底模上压不住：成都锦里那张街景、
+             * 喀什老城那张，两版都照样画了行人。而 ENV_PROMPT 明明白白告诉她
+             * 「这个工具画不出人」「来张合影就照实说镜头里没有人」——
+             * 正向不管用，那句话就成了假话。
+             *
+             * 只在没设人物（`imageCast` 空）时追加：设了角色的人要的就是人，
+             * 那时提示词里那句「画面里有一个人」是主角。
+             */
+            /*
+             * **`people` 那条负向撤了（2026-11-12 晚，Mr.Q：「得有人，景区有人气最好」）。**
+             *
+             * 加它是为了压掉正向压不住的行人，代价是把景区也变成了空场：
+             * 一条街、一座古城、一片海滩，一个人都没有。**那是置景，不是有人住的地方。**
+             * 现在改成正向写「远处零星几个虚化的人影，看不清脸」——
+             * 量、距离、清晰度三样都写死，人就不会抢主体。
+             */
+            ...(nightShot
+              ? { negativeAppend: nightNegative(String(weather?.dayWeather ?? '')) }
+              : {}),
+            ...(nightShot ? { cfg: NIGHT_CFG } : {}),
           })
         : await shootPhoto({
-            api: this.cfg.imageApi,
-            key: this.cfg.imageKey,
-            model: this.cfg.imageModel,
+            api: backend.api,
+            key: this.imageKey(),
+            model: backend.model,
             prompt,
             ...(this.cfg.imageTimeoutSec > 0 ? { timeoutMs: this.cfg.imageTimeoutSec * 1000 } : {}),
             // 留空 = photo.ts 里的 PHOTO_SIZE（1024x1024）
-            size: this.cfg.imageSize ?? '',
+            size: backend.size,
           });
       /*
        * 水印：只可能在云端那条路上出现。
@@ -2728,8 +4410,31 @@ export class JourneyWorld implements World {
        * 一层，底下本来就没有东西，裁掉不需要推测任何内容。
        * 裁失败（图不是 PNG、结构不认识）会原样返回，照样发出去。
        */
-      const bytes = shouldCropWatermark(this.cfg.imageWatermark, this.cfg.imageProtocol)
-        && shot.mime === 'image/png'
+      /*
+       * ## 两条用户反馈都落在这里（2026-11-12 晚）
+       *
+       * ① 「选项选的 crop，图片都没裁过」—— `cropBottom` 只认 PNG。
+       *    服务商回 JPEG 时这行静默跳过，用户以为开关坏了。现在会记一句原因。
+       * ② 「填 1664x1244，静默变成 1024x1024，白等一轮」—— 服务商不认这个尺寸时
+       *    不报错，按自己的默认值出图。请求对、图也对，**只是不是他要的那张**。
+       *    量一下，不一致就写日志。
+       */
+      const wantCrop = shouldCropWatermark(this.cfg.imageWatermark, this.cfg.imageProtocol);
+      if (wantCrop && shot.mime !== 'image/png') {
+        this.log?.info(
+          `水印没裁：这张回来是 ${shot.mime}，裁剪只支持 PNG。`
+          + '想裁干净，把服务商的输出格式改成 png；本地 ComfyUI 出的图本来就没有水印。',
+        );
+      }
+      const wantSize = parseSize(this.cfg.imageSize);
+      const gotSize = imagePixelSize(shot.bytes);
+      if (wantSize && gotSize && (gotSize[0] !== wantSize[0] || gotSize[1] !== wantSize[1])) {
+        this.log?.info(
+          `尺寸被服务商改了：填的是 ${wantSize[0]}x${wantSize[1]}，`
+          + `回来的是 ${gotSize[0]}x${gotSize[1]}。这家大概率只认自己那几档尺寸。`,
+        );
+      }
+      const bytes = wantCrop && shot.mime === 'image/png'
         ? cropBottom(shot.bytes, WATERMARK_CROP_RATIO)
         : shot.bytes;
       // 字节交给宿主：它算哈希、落 data/media/、回一个 log: 句柄。
@@ -2752,8 +4457,14 @@ export class JourneyWorld implements World {
       // 云盘用户：再存一份到日记目录下，另一台电脑才看得到这张图。
       // **文件名必须和宿主那边一致** —— 报告里的 `<img src="../media/…">` 是按它拼的。
       this.archiveToJournal('media', handle.replace(/^log:/, ''), bytes);
-      if (replace) this.photos.replaceDay(dateKey, sceneId, handle);
-      this.photos.add({
+      /*
+       * 提示词跟着记录一起存（2026-11-11）。
+       *
+       * 原来它只在内存里活一次，拍完就没了 —— 用户看到一张不满意的图，
+       * 没法知道"当时是按什么生成的"，也就没法改。存下来之后，相册页才能
+       * 把它摊开给他改。老记录没有这一格，前端按空串处理。
+       */
+      const rec: PhotoRecord = {
         handle,
         cityId: sceneId,
         cityName: onRoad ? '路上' : city.name,
@@ -2762,7 +4473,15 @@ export class JourneyWorld implements World {
         spot,
         // 真实时刻排序：世界时间在高倍速下会跑到未来，按它排相册会乱。
         at: this.realNow().toISOString(),
-      });
+        prompt,
+      };
+      // 重拍已有的那张：原位替换，别让它跳到相册最前面（见 PhotoBook.update）。
+      // 原位换失败（那张已经被 × 摘掉了）就退回去当新照片落库。
+      if (!(override && this.photos.update(override.replaceHandle, rec))) {
+        // override 是「重拍某一具体的一张」，它不该顺手清掉同城同日的其他记录。
+        if (replace && !override) this.photos.replaceDay(dateKey, sceneId, handle);
+        this.photos.add(rec);
+      }
       return {
         ok: true,
         title,
@@ -3004,8 +4723,9 @@ export class JourneyWorld implements World {
     const pledge = fulfilled || target ? null : this.activePledge(now);
     let to: City | null = opts.to ?? null;
     let km = to ? Math.round(distanceKm(from, to)) : 0;
-    if (!to && pledge && pledge.cityId !== from.id) {
-      const dest = cityById(pledge.cityId);
+    const pledgeStopId = pledge ? this.pledgeStop(pledge) : '';
+    if (!to && pledge && pledgeStopId !== from.id) {
+      const dest = cityById(pledgeStopId);
       if (dest && canTravel(from, dest)) {
         to = dest;
         km = Math.round(distanceKm(from, dest));
@@ -3014,7 +4734,7 @@ export class JourneyWorld implements World {
          * 答应了却到不了 —— 这是最该被说出来的一种失败。
          * 静默清掉，她下一步就会自己挑一个地方走，而用户记得她「说好了要去拉萨」。
          */
-        this.dropPledge(now, `${dest?.name ?? pledge.cityId}从这儿去不了，跟${this.whoOfPledge(pledge)}说好的那趟只能算了。`);
+        this.dropPledge(now, `${dest?.name ?? pledgeStopId}从这儿去不了，跟${this.whoOfPledge(pledge)}说好的那趟只能算了。`);
       }
     }
     if (!to) {
@@ -3112,13 +4832,34 @@ export class JourneyWorld implements World {
           + `下一站${to.name}，${mode.name}，${leg.km} 公里，${humanHours(leg.durationWorldHours)}。`
           + `\n离家还有 ${Math.round(distanceKm(to, home))} 公里。`
         : fulfilled
-          ? `${from.name}当地 ${fmtHour(localMoment(now, from.tz).decimal)}，跟${this.whoOfPledge(fulfilled)}说好的 `
-            + `${fulfilled.days} 天到了，动身。去${to.name}，${mode.name}，${leg.km} 公里，`
+          /*
+           * 散伙那句已经由 `journey.part` 单独说过了（2026-11-12），
+           * 这里只交代「上车」。原来两边都写「跟某某说好的 3 天到了」，
+           * 同一件事在一个下午说两遍，听起来像系统在提醒她。
+           */
+          ? `${from.name}当地 ${fmtHour(localMoment(now, from.tz).decimal)}，散了之后动身。`
+            + `去${to.name}，${mode.name}，${leg.km} 公里，`
             + `${humanHours(leg.durationWorldHours)}。`
-          : pledge && to.id === pledge.cityId
-            ? `${from.name}当地 ${fmtHour(localMoment(now, from.tz).decimal)}，动身去${to.name} —— `
-              + `跟${this.whoOfPledge(pledge)}说好的那趟。${mode.name}，${leg.km} 公里，${humanHours(leg.durationWorldHours)}。`
-              + `\n到了在那儿待 ${pledge.days} 天。`
+          : pledge && to.id === pledgeStopId
+            /*
+             * 赴约有两种走法，说法不一样（2026-11-07）：
+             * 往见面城是「去碰头」，从见面城出发是「一起走」。混成一句，
+             * 她到了成都还在说「我正往稻城去」，用户看着就是一句话对不上。
+             */
+            ? (pledge.meetCityId && !pledge.meetArrivedAt
+              ? `${from.name}当地 ${fmtHour(localMoment(now, from.tz).decimal)}，动身去${to.name} —— `
+                + `跟${this.whoOfPledge(pledge)}约在那儿碰头。${mode.name}，${leg.km} 公里，`
+                + `${humanHours(leg.durationWorldHours)}。`
+                + `\n碰上了再一起去${this.cityName(pledge.cityId)}。`
+              : pledge.meetCityId
+                ? `${from.name}当地 ${fmtHour(localMoment(now, from.tz).decimal)}，`
+                  + `跟${this.whoOfPledge(pledge)}一起出发去${to.name}。${mode.name}，${leg.km} 公里，`
+                  + `${humanHours(leg.durationWorldHours)}。`
+                  + `\n到了在那儿待 ${pledge.days} 天。`
+                : `${from.name}当地 ${fmtHour(localMoment(now, from.tz).decimal)}，动身去${to.name} —— `
+                  + `跟${this.whoOfPledge(pledge)}说好的那趟。${mode.name}，${leg.km} 公里，`
+                  + `${humanHours(leg.durationWorldHours)}。`
+                  + `\n到了在那儿待 ${pledge.days} 天。`)
             : `${from.name}当地 ${fmtHour(localMoment(now, from.tz).decimal)}，在这儿待够了，动身。`
               + `去${to.name}，${mode.name}，${leg.km} 公里，${humanHours(leg.durationWorldHours)}。`,
       'flush',
@@ -3130,6 +4871,24 @@ export class JourneyWorld implements World {
   /**
    * 推一条事件。`blobs` 是随事件走的附件（照片），字节由宿主落进 `data/media/`，
    * 事件里只留 `log:` 句柄 —— 返回的信封里能拿到句柄。
+   *
+   * ## 同一个 senderKey 只推一次（2026-11-14）
+   *
+   * 起因是 144 天 money 长跑挂了一条不变量：
+   * `part-0000000000000007-2027-01-21T06:55:00.000Z` 推了两次。
+   *
+   * 根因在「约定到期该散伙」那条路：天数满了 → 推一句「各走各的」→ 进 `moveOn`，
+   * 而 `moveOn` 买不起票会**原地返回、不清约定**（设计如此，明天接着试）。
+   * 于是下一个 tick 又落进同一分支，同一句话再推一遍。
+   *
+   * **重放的代价比少说一句大得多**：她会把这个源判定成「会重放旧事件的东西」，
+   * 然后开始忽略它 —— 一次重复，等于后面所有事件的可信度打折。
+   *
+   * 为什么放在 `push` 这一层而不是那条分支里：key 的语义本来就是「这件事的身份」，
+   * 同一个 key 推两次在任何分支上都是 bug，不是那一处的特殊情况。
+   *
+   * 内存集合够用：重启后 `pledge` 已经落盘结清，不会重新走到那里。
+   * 真需要跨重启去重时再落盘 —— 现在加上只会让 state 多一份要维护的东西。
    */
   private async push(
     type: string,
@@ -3140,6 +4899,11 @@ export class JourneyWorld implements World {
   ): Promise<EventEnvelope | null> {
     const host = this.host;
     if (!host) return null;
+    if (this.pushedKeys.has(senderKey)) {
+      this.log?.info(`跳过重复事件：${type} ${senderKey}`);
+      return null;
+    }
+    this.pushedKeys.add(senderKey);
     return await host.pushEvent({
       type,
       source: this.id,
@@ -3386,6 +5150,133 @@ export class JourneyWorld implements World {
   }
 
   /**
+   * 在当地租一辆车（2026-11-06）。
+   *
+   * 三个前置：**人在城里**（路上租不了，落地才是「当地」）、**手上没车**（一辆够用）、
+   * **钱够**（记账开着才判）。三条都在扣钱之前，跟 `takeInvite` 同一条规矩：
+   * 先看清，再答应。
+   *
+   * 租到之后 `this.plan = null`，下一次巡检会重建当天的作息 —— 城里那几个点
+   * 就从「走过去」变成「开车去」。**不手动 rebuild**：`rebuildPlan` 从 0 点重排，
+   * 晚上八点调它会多推一串已经过去的时间点，而 `lastBeatKey` 只挡得住重复的、
+   * 挡不住顺序乱。
+   */
+  /**
+   * 今天剩下的不逛了，真的歇下来（2026-11-07）。
+   *
+   * **不清 `this.plan`。** 清了会让下一轮巡检从 0 点重排当天，把上午已经推过的
+   * 作息整段重推一遍（144 天长跑在租车那版抓过这个，见 `rentCar` 的注释）。
+   * 这里只落一个 `rest` 标记，`advanceBeats` 自己会跳过被它盖住的 `activity`。
+   */
+  private async restNow(reason: string): Promise<{ text: string; isError?: boolean }> {
+    if (this.st.phase !== 'staying') {
+      return { text: '她这会儿不在城里待着 —— 这个动作只在停留时有用。路上照样会累，但那是另一回事。', isError: true };
+    }
+    const here = this.cityOrNull(this.st.hereId);
+    if (!here) return { text: '连自己在哪都不知道，歇不了。', isError: true };
+    if (!this.plan) return { text: '今天还没排表，等一下再说。', isError: true };
+
+    const now = this.worldNow();
+    const moment = localMoment(now, here.tz);
+    const cur = this.st.rest;
+    if (cur && cur.dateKey === moment.dateKey) {
+      return { text: '今天已经歇着了 —— 剩下的点不会再出门，明天照原计划。' };
+    }
+    const why = reason.trim() || '累了';
+
+    this.st = {
+      ...this.st,
+      rest: { dateKey: moment.dateKey, from: moment.decimal, reason: why },
+    };
+    this.persist();
+
+    /*
+     * 数一下还剩几个点被砍掉 —— 回执里给个具体数，她才知道自己说了算不算。
+     * 一个都没有（比如已经晚上了）也要照实说，否则她会以为自己白折腾一趟。
+     */
+    const left = this.plan.beats.filter((b) => b.kind === 'activity' && b.at >= moment.decimal).length;
+    return {
+      text: left > 0
+        ? `好，今天剩下那 ${left} 个点不去了（${why}）。在${here.name}待着，`
+          + '饭点照常吃、晚上照常回酒店，明天照原计划。'
+        : `今天本来也没什么点剩下了（${why}）—— 那就早点歇，明天照原计划。`,
+    };
+  }
+
+  private async rentCar(
+    days: number,
+    ev?: boolean,
+    /** 车的档。不传按 `comfort` —— 就是原来那个 200/天的价。 */
+    tier?: CarTier,
+  ): Promise<{ text: string; isError?: boolean }> {
+    if (this.st.phase === 'traveling') {
+      return { text: '她在路上，租不了车 —— 到了地方再说，那时候才叫「当地」。', isError: true };
+    }
+    if (this.st.car) {
+      const cur = CAR_TIERS[this.st.car.tier ?? 'comfort'];
+      const left = this.st.car.days > 0 ? `还剩 ${this.st.car.days} 天` : '一直能用';
+      return { text: `已经有车了（${cur.name}，${left}）—— 一辆够用，不用再租。`, isError: true };
+    }
+    const here = this.cityOrNull(this.st.hereId);
+    if (!here) return { text: '连自己在哪都不知道，租不了车。', isError: true };
+
+    /*
+     * 天数要夹住。`days === 0` 不能走 `|| 3`（它 falsy）：0 在 `car` 里的语义是
+     * 「自己的车、不递减」，拿它当「没填」就会静默租三天 —— 用户说「就今天一天」，
+     * 账单上却是六百。
+     */
+    const n = days === undefined || days === null || !Number.isFinite(Number(days))
+      ? 3
+      : Math.min(7, Math.max(1, Math.round(Number(days))));
+    /* 没填或不认识的档按 comfort（原来的默认价），不因为一个坏参数就给她降级或涨价。 */
+    const t: CarTier = tier === 'economy' || tier === 'luxury' ? tier : 'comfort';
+    const spec = CAR_TIERS[t];
+    const fee = spec.price * n;
+    const left = this.cfg.moneyEnabled && this.cfg.budget > 0
+      ? this.cfg.budget - (this.st.spent - this.st.earned)
+      : null;
+    if (left !== null && left < fee) {
+      return {
+        text: `租金 ${fee} 块（${spec.name}一天 ${spec.price}），她手上只剩 ${Math.max(0, Math.round(left))} 块，`
+          + '租不起。跟他说实话：坐公交、或者等她打完工攒够了再说 —— 别答应下来。',
+        isError: true,
+      };
+    }
+
+    /* 不指定就按车行的库存掷（四成电车），和城际自驾那条用同一个比例。 */
+    const fuel: 'oil' | 'ev' = ev === undefined ? (Math.random() < 0.4 ? 'ev' : 'oil') : ev ? 'ev' : 'oil';
+    if (this.cfg.moneyEnabled) this.addSpent(fee);
+    this.st = { ...this.st, car: { fuel, days: n, km: 0, tier: t } };
+    /*
+     * **不动 `this.plan`。**
+     *
+     * 试过清空让下一轮重建，结果 144 天的 goto 档抓到重复事件
+     * `beat-2027-01-10-commute-14.25`：`rebuildPlan` 从 0 点重排，
+     * 下午租车会把当天上午的作息整段重推一遍，而 `lastBeatKey` 只记最后一条，
+     * 挡不住顺序被打乱。手动 `rebuildPlan(now, 'full', 当前时刻)` 也有同一类风险
+     * （会丢掉「此刻正在做什么」）。
+     *
+     * 所以当天剩下的点还是按原计划走，**明天跨天重建时自然开车**。
+     * 回执里照实说：「明天起」。
+     */
+    this.persist();
+
+    const what = `${spec.name}${fuel === 'ev' ? '，电车' : ''}`;
+    await this.push(
+      'journey.car',
+      `car-rent-${this.st.hereId}-${this.worldNow().getTime().toString(36)}`,
+      `在${here.name}租了辆车（${what}），${n} 天，${fee} 块。`
+      + '明天起城里那几个点开车去，油钱按公里算。',
+      'flush',
+    );
+    return {
+      text: `租好了：${here.name}一辆${what}，${n} 天，${fee} 块（一天 ${spec.price}）。`
+        + `车的感觉：${spec.feel}。`
+        + '今天剩下的安排不动，**明天起**城里也开车。到期自动还，不用特意记。',
+    };
+  }
+
+  /**
    * 换一家。
    *
    * 2026-11-05 Mr.Q：「换酒店直接两种模式都打开吧，用户让肥鱼换，肥鱼可以换」。
@@ -3414,7 +5305,8 @@ export class JourneyWorld implements World {
     const cur = this.plan.lodging;
     const w: LodgingWant = want === 'cheaper' || want === 'nicer' ? want : 'any';
 
-    const base = rerollLodging(cur, Math.random, this.isTight(), here.priceIdx, w, this.purseRich());
+    const base = rerollLodging(cur, Math.random, this.isTight(), here.priceIdx, w,
+      this.purseRich(), here.country !== 'CN', terrainOf(here));
     /*
      * 「换便宜点」但已经到底了：`rerollLodging` 会原样返回。
      * 这时候**不要假装换了**，也不要为了「换」而涨价 —— 直说一句就够。
@@ -3425,8 +5317,16 @@ export class JourneyWorld implements World {
           + '再往下就只有车站边那种地方，不值得。',
       };
     }
-    this.hotels.setKey(this.cfg.amapKey);
-    const pois = base.name ? null : await this.hotels.hotels(here).catch(() => null);
+    this.hotels.setKey(this.amapKey());
+    this.eateries.setKey(this.amapKey());
+    /*
+     * **换房时要排掉现在这家。**
+     *
+     * 2026-11-09 修：同档真店常常只有两三家（县城更少），随机抽很容易抽回原处 ——
+     * 用户看到的是「说换了，房没变」。排掉当前店名再抽，抽不到就是抽不到（那说明这一带就这几家）。
+     */
+    const facts = factsFor(here.id).filter((f) => f.name !== cur.name);
+    const pois = base.name ? null : (facts.length ? facts : await this.hotels.hotels(here).catch(() => null));
     const next = withHotel(base, pois, Math.random, here.priceIdx);
 
     const diff = next.price - cur.price;
@@ -3667,25 +5567,31 @@ export class JourneyWorld implements World {
             dateKey: pick.dateKey,
             monthKey: month,
           });
-          const shot = photoProtocolOf(this.cfg.imageProtocol) === 'comfyui'
+          /*
+           * 海报这一张同样走后端解析（2026-11-14），但尺寸用海报自己的 1024x1536 ——
+           * 它不该被「出图尺寸」那一栏改掉。豆包那条路会把它按比例抬到合规像素，
+           * 否则海报就成了唯一一张必失败的图。
+           */
+          const posterBackend = resolveImageBackend(this.cfg, POSTER_SIZE);
+          const shot = posterBackend.protocol === 'comfyui'
             ? await shootComfy({
-                api: this.cfg.imageApi,
-                key: this.cfg.imageKey,
+                api: posterBackend.api,
+                key: this.imageKey(),
                 workflow: this.cfg.imageWorkflow ?? '',
                 promptNode: this.cfg.imagePromptNode ?? '',
                 prompt,
                 negative: this.cfg.comfyNegative ?? '',
                 negativeNode: this.cfg.comfyNegativeNode ?? '',
                 ...(this.cfg.imageTimeoutSec > 0 ? { timeoutMs: this.cfg.imageTimeoutSec * 1000 } : {}),
-                size: POSTER_SIZE,
+                size: posterBackend.size,
               })
             : await shootPhoto({
-                api: this.cfg.imageApi,
-                key: this.cfg.imageKey,
-                model: this.cfg.imageModel,
+                api: posterBackend.api,
+                key: this.imageKey(),
+                model: posterBackend.model,
                 prompt,
                 ...(this.cfg.imageTimeoutSec > 0 ? { timeoutMs: this.cfg.imageTimeoutSec * 1000 } : {}),
-                size: POSTER_SIZE,
+                size: posterBackend.size,
               });
           const bytes = shouldCropWatermark(this.cfg.imageWatermark, this.cfg.imageProtocol)
             && shot.mime === 'image/png'
@@ -3719,7 +5625,11 @@ export class JourneyWorld implements World {
    * （要真的相处过才写得出来）—— 两件事混在一起，自动生成的那句必然变成套话。
    * 印象由她自己用 `journey_pet` 写。
    */
-  private rememberPet(name: string): void {
+  /**
+   * 记住一个一起走过的人。`warm` 是这一笔涨多少熟络度（2026-11-08）——
+   * 接一次约 +6，真的一起到了 +6，同城撞见 +1。
+   */
+  private rememberPet(name: string, warm = 1): void {
     const pet = String(name || '').trim();
     if (!pet) return;
     const here = this.cityOrNull(this.st.hereId) ?? this.cityOrNull(this.st.tripHomeId);
@@ -3727,7 +5637,49 @@ export class JourneyWorld implements World {
     const dateKey = here
       ? localMoment(this.worldNow(), here.tz).dateKey
       : new Date().toISOString().slice(0, 10);
-    this.st = { ...this.st, pets: metPet(this.st.pets ?? {}, pet, dateKey) };
+    this.st = { ...this.st, pets: metPet(this.st.pets ?? {}, pet, dateKey, warm) };
+  }
+
+  /**
+   * 拍照时她「正在做的那件事」。
+   *
+   * 取当天日程里最后一条已经开始的节点 —— 上午十点半在亚龙湾，
+   * 那就是「在亚龙湾坐了香蕉艇…」那一条（如果沙滩上买了项目）。
+   * **只认当天的表**；跨天、以及表还没建好时返回空串，让照片退回风景照。
+   */
+  private photoDoingNow(city: { id: string; tz: string }, hour: number): string {
+    const plan = this.plan;
+    if (!plan || plan.cityId !== city.id) return '';
+    if (plan.dateKey !== localMoment(this.worldNow(), city.tz).dateKey) return '';
+    const done = plan.beats.filter((b) => b.at <= hour
+      && (b.kind === 'activity' || b.kind === 'beat' || b.kind === 'night' || b.kind === 'hotel'));
+    const last = done[done.length - 1];
+    return last ? last.what : '';
+  }
+
+  /** 排程要的口味形状：只要名字，分喜欢/不想再吃两栏。 */
+  private tasteForPlan(): { like: string[]; dislike: string[] } {
+    const food = this.st.taste?.food ?? [];
+    return {
+      like: food.filter((x) => x.like).map((x) => x.name),
+      dislike: food.filter((x) => !x.like).map((x) => x.name),
+    };
+  }
+
+  /**
+   * 这份约定里，她最熟的那个人的熟络度。
+   *
+   * 一群人一起走的时候取最大值 —— 问「这趟跟谁最熟」比问平均值有意义。
+   */
+  private warmthOf(p: { withPet: string; withPets?: readonly string[] }): number {
+    const names = p.withPets?.length ? p.withPets : [p.withPet];
+    let best = 0;
+    for (const raw of names) {
+      const name = String(raw || '').trim();
+      const w = name ? (this.st.pets?.[name]?.warmth ?? 0) : 0;
+      if (w > best) best = w;
+    }
+    return best;
   }
 
   private async claimTakenInvite(meet: MeetOptions, now: Date): Promise<void> {
@@ -3740,21 +5692,55 @@ export class JourneyWorld implements World {
      * 现实里她已经在回家的车上了，不会应一声又掉头。
      */
     if (this.st.returning) return;
+    /*
+     * **正在路上不认领**（2026-11-06 的 144 天长跑抓到的）。
+     *
+     * 那趟跑完，面板上同时是「在飞布宜诺斯艾利斯」和「跟人说好去稻城亚丁」——
+     * 而 `depart` 里那条「手上有约就往约的城走」只在**出发那一刻**读 pledge，
+     * 飞机已经在天上，改不了航向。于是这份约定从建立起就注定兑现不了，
+     * 三天后由 `prunePledge` 作废，期间面板一直挂着一条假的承诺。
+     *
+     * 落地那一刻 `rebuildPlan` 会再调一次这里，而且那会儿 `phase` 已经是
+     * `staying`，认领完下一次决策就能安排改道 —— 所以「等落地」不丢东西。
+     */
+    if (this.st.phase === 'traveling') return;
     const r = await myTakenInvites(meet);
     if (!r.ok || !r.list.length) return;
     /*
-     * 一条邀约现在可以被好几只鱼接，服务端把它们**一个人一行**返回。
-     * 所以要按 id 归组：同一份约定只建一次，把接的人全收进 withPets。
+     * 认领过的跳过。
      *
-     * 第一版只取 list[0]，三只鱼接了同一条邀约时，发起者只会记住第一个 ——
-     * 另外两只在他的叙事里根本不存在。
+     * 服务端不知道本地认领过 —— 它回的是「我发的邀约被谁接了」，只要那条还在，
+     * 每次问都会再回一遍。而这里原来的判据只有「手上没有 pledge」，
+     * 于是 pledge 一被清（待满走了、过期作废）就会从头认领同一条：重复推事件，
+     * 而且把 pledge 一直占着。2026-11-06 的 144 天跑抓到了这个循环。
      */
-    const one = r.list[0];
+    const seen = new Set(this.st.claimedInvites ?? []);
+    const fresh = r.list.filter((x) => !seen.has(x.id));
+    if (!fresh.length) return;
+    const one = fresh[0];
     const same = r.list.filter((x) => x.id === one.id);
-    const names = same.map((x) => x.pet).slice(0, 3);
+    /*
+     * 接单人的**全量**名单，和给句子用的名单分开（2026-11-11）。
+     *
+     * `MAX_PARTY - 1` = 5 只鱼能接一条邀约，`.slice(0, 3)` 是**说**的时候用的
+     * —— 一口气报五个名字，那句话就没法读了。拿它去记账，第 4、第 5 个人
+     * 永远进不了记忆：跟她们走过十天，她只记得前三个人。
+     */
+    const allNames = [...new Set(
+      same.map((x) => String(x?.pet ?? '').trim()).filter((x) => !!x && x !== '一只鱼'),
+    )];
+    const names = allNames.slice(0, 3);
     const dest = cityById(one.to);
     if (!dest) return;
+    /* 见面城（2026-11-07）。发起者这一侧也要走同一条两段路，不然「一起走」只算半边。 */
+    const meetCity = one.meetCity ? cityById(one.meetCity) : null;
     const here = this.cityOrNull(this.st.hereId);
+    /*
+     * 她可能已经在这趟的目的地了（发完邀约自己先到了那里，对方才接）。
+     * 那种情况下「先去别处碰头再回来」是荒唐的 —— 忽略见面这一级，她在那儿等着就行。
+     * 判据和 `takeInvite` 同一条，理由见那边。
+     */
+    const useMeet = meetCity && here && here.id !== dest.id ? meetCity : null;
     this.st = {
       ...this.st,
       pledge: {
@@ -3765,20 +5751,52 @@ export class JourneyWorld implements World {
         inviteId: one.id,
         acceptedAt: now.toISOString(),
         arrivedAt: here && here.id === dest.id ? now.toISOString() : null,
+        ...(useMeet
+          ? {
+              meetCityId: useMeet.id,
+              meetArrivedAt: here && here.id === useMeet.id ? now.toISOString() : null,
+            }
+          : {}),
       },
+      /* 认领过就记下来，下次别再认一遍（键是整份 state，不能只改 pledge）。 */
+      claimedInvites: [...seen, one.id].slice(-20),
     };
-    // 他接了她的邀约 —— 这一趟就算一起走过一次。
-    this.rememberPet(one.pet);
+    /*
+     * 一个人都没接上就别记 —— `names[0]` 兜底到 `one.pet` 是给显示用的，
+     * 记账要的是「真的有谁接了」。空名单在这里是正常的（服务端刚删了那条）。
+     *
+     * `+6` 而不是默认的 `+1`：规则写在 `rememberPet` 上 ——「接一次约 +6，
+     * 真的一起到了 +6，同城撞见 +1」。她接别人的 +6（world.ts `takeInvite`），
+     * 别人接她的却只有 +1，同一个动作两个价，那一条是漏传了参数（2026-11-11 修）。
+     */
+    for (const who of allNames) this.rememberPet(who, 6);
+    /*
+     * 记下这一段同行（2026-11-11）。服务端那张卡是按邀约编号取的，
+     * 而 pledge 待满就会清掉，编号跟着一起没 —— 不在这儿抄一份，散伙之后
+     * 就再也问不到「她留了什么」。
+     */
+    this.partyLog.add({
+      id: one.id,
+      pets: allNames,
+      days: one.days,
+      at: now.toISOString(),
+      city: dest.name,
+    });
     this.persist();
     await this.push(
       'journey.invite',
       `invite-taken-${one.id}`,
-      `${names.join('、')}接了她说的话：一起去${dest.name}，在那儿待 ${one.days} 天。`
+      `${names.join('、')}接了她说的话：`
+      + (useMeet ? `先在${useMeet.name}碰头，再一起去${dest.name}，在那儿待 ${one.days} 天。` : `一起去${dest.name}，在那儿待 ${one.days} 天。`)
       + (one.note ? `对方留的话是「${one.note}」。` : '')
-      + (here && here.id === dest.id
-        ? `\n她本来就在${dest.name}，这几天就按这个过。`
-        : `\n她也得真的往${dest.name}走 —— 路上该多久是多久，不是明天就到。`)
-      + `\n（那边也是这么走的：各自出发、各自到，到了各待 ${one.days} 天，谁先到谁等。）`,
+      + (useMeet
+        ? (here && here.id === useMeet.id
+          ? `\n她本来就在${useMeet.name}，从这会儿起就在这儿等人 —— 人露面了再一起走。`
+          : `\n她也得先往${useMeet.name}去会合，见上了再一起往${dest.name}走。`)
+        : (here && here.id === dest.id
+          ? `\n她本来就在${dest.name}，这几天就按这个过。`
+          : `\n她也得真的往${dest.name}走 —— 路上该多久是多久，不是明天就到。`))
+      + `\n（那边也是这么走的：${useMeet ? `先在${useMeet.name}碰头，` : ''}到了各待 ${one.days} 天，谁先到谁等。）`,
       'flush',
     );
   }
@@ -3820,6 +5838,11 @@ export class JourneyWorld implements World {
       const base = crossBorder ? 2400 : 1200;
       return (km <= 3000 ? km * per : base + (km - 3000) * 0.9) * seatMult;
     }
+    /*
+     * 铁路分段算（2026-11-08）：短途高铁、长途卧铺，单价差一倍。
+     * 其余方式还是「单价 × 里程」，它们的单价不随距离变。
+     */
+    if (modeId === 'train') return km * trainUnit(km) * seatMult;
     return km * (FARE_PER_KM[modeId as ModeId] ?? 0) * seatMult;
   }
 
@@ -3844,6 +5867,25 @@ export class JourneyWorld implements World {
   private purseRich(): boolean {
     if (!this.cfg.moneyEnabled || this.cfg.budget <= 0) return false;
     return this.cfg.budget - (this.st.spent - this.st.earned) > 2500;
+  }
+
+  /**
+   * 景区里那一趟值不值得花钱（2026-11-10）。
+   *
+   * ## 为什么不复用 `purseRich()`
+   *
+   * `purseRich()` 问的是「手头宽不宽」，它决定住哪档店、坐什么座位 —— 那些是**可选的生活方式**。
+   * 景区里的索道、观光车、自行车不是同类东西：**腿会不会酸和钱包没关系**。
+   *
+   * 而 `purseRich()` 在「记账关着」时恒为 false，于是记账一关，景区里就永远只能走路。
+   * 用户截图里那句「腿酸就租个自行车呗」就是它的后果 —— 不是随机没抽到，是硬开关。
+   *
+   * 判据改成：**没有钱这个概念时（记账关着 / 预算不限），就不存在「省着花」**；
+   * 有钱的概念时，看余额够不够坐一趟（三百块以下就不坐索道了）。
+   */
+  private spotSpendOk(): boolean {
+    if (!this.cfg.moneyEnabled || this.cfg.budget <= 0) return true;
+    return this.cfg.budget - (this.st.spent - this.st.earned) > 300;
   }
 
   private pickSeatFor(modeId: string, km: number, crossBorder: boolean): SeatGrade | undefined {
@@ -3972,6 +6014,232 @@ export class JourneyWorld implements World {
     return `这一趟花了 ${spent} 块${tail}，预算 ${this.cfg.budget}，还剩 ${left} 块。`;
   }
 
+  /* ---------------- 车费桥（2026-11-10） ---------------- */
+
+  /**
+   * 城里的车让给第三方打车扩展没有。
+   *
+   * ## 为什么不是「开关一开就让位」
+   *
+   * 开关默认是开的，而绝大多数用户没装打车扩展 —— 拿 `cfg` 直接判，
+   * 那些人的鱼从此再也不打车，而他们什么都没改过。
+   *
+   * 所以让位条件多一条：**对方的目录真的存在**。`ride-pending/` 是它写待结算单的地方，
+   * 装过一次就会留下。它不装，这条永远走不到。
+   *
+   * 已知边界：对方卸载后目录还留着（卸载不清别人的数据），她就一直不自己叫车了。
+   * 这个方向是安全的 —— 少叫一次车只是少花点钱，反过来（两套车同时开）是双倍收费。
+   */
+  private taxiYields(): boolean {
+    if (!this.cfg.bridgeSpend) return false;
+    try {
+      return existsSync(join(this.opts.dataDir, PENDING_DIR));
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * 结算第三方交上来的车费。
+   *
+   * ## 为什么在 tick 的最开头，而不是三个分支里面
+   *
+   * `tick()` 有三个 `return`（在家 / 在路上 / 在目的地）。写进其中任何一支，
+   * 另一支的人就永远不结算 —— 而「在家打个车」恰恰是最常见的场景。
+   *
+   * ## 为什么扫完当场就结
+   *
+   * 留着「先记账、下次再结算」的中间态，就要处理「中间崩了」；一个 tick 内
+   * 扫完就写进 state，中间没有可崩的窗口。
+   */
+  private settleRides(): void {
+    if (!this.cfg.bridgeSpend && !this.cfg.bridgeDiary) return;
+
+    const read = readPending(this.opts.dataDir);
+    if (read.problem) {
+      this.log?.warn(read.problem);
+      return;
+    }
+    if (read.files.length > PENDING_WARN_FILES) {
+      this.log?.warn(`待结算目录里有 ${read.files.length} 个文件，对方可能一直没删。`);
+    }
+    if (!read.files.length) {
+      this.unsettledRideFare = 0;
+      return;
+    }
+
+    const c = this.cityOrNull(this.st.hereId) ?? this.resolveHome().city;
+    const r = settle({
+      pending: read.files,
+      applied: this.st.rideApplied ?? [],
+      spent: this.st.spent,
+      moneyEnabled: this.cfg.moneyEnabled,
+      budget: this.cfg.budget,
+      tripStartedAt: this.st.tripStartedAt,
+      worldNow: this.worldNow().getTime(),
+      // 真实时刻只用来判「这份文件躺了多久」，不用来判 `at` 的早晚。
+      realNow: this.realNow().getTime(),
+      cityExists: (id) => Boolean(cityById(id)),
+      tzOf: (id) => cityById(id)?.tz ?? c.tz,
+    });
+
+    this.unsettledRideFare = r.unsettled;
+
+    const changed = r.spent !== this.st.spent || r.applied.length !== (this.st.rideApplied?.length ?? 0);
+    if (!changed) return;
+
+    this.st = { ...this.st, spent: r.spent, rideApplied: r.applied };
+    this.persist();
+
+    /*
+     * 推事件是**一次模型调用**，所以不能「一条异常推一条」。
+     * 三条以内逐条说，多了并成一句 —— 用户要的是「出事了」，
+     * 不是一屏同名通知。
+     */
+    const notices = r.notices;
+    if (!notices.length) return;
+    if (notices.length <= 3) {
+      for (const n of notices) {
+        void this.push('journey.ride', `ride-${n.id}`, n.text, 'flush');
+      }
+      return;
+    }
+    const rejected = notices.filter((n) => n.kind === 'rejected').length;
+    const odd = notices.length - rejected;
+    const parts = [
+      rejected ? `${rejected} 条车费没记上` : '',
+      odd ? `${odd} 条金额不对劲（已记）` : '',
+    ].filter(Boolean);
+    void this.push(
+      'journey.ride',
+      `ride-batch-${this.realNow().getTime().toString(36)}`,
+      `打车那边交上来 ${notices.length} 条，${parts.join('、')}。细节在日志里。`,
+      'flush',
+    );
+  }
+
+  /**
+   * 写公开快照 `journey-public.json`。
+   *
+   * ## 为什么挂在 `persist()` 上
+   *
+   * 它是 state 的一个投影，不是第二份真相。三个写点（state / 记忆 / 快照）
+   * 分开放就会有一段「快照落后于状态」的窗口 —— 对方那段时间读到的是旧城市。
+   *
+   * ## 为什么自己吞异常
+   *
+   * 快照写不进去是「对方看不见」，state 写不进去是「她丢了位置」。
+   * 前者不能把后者带崩。
+   */
+  private writePublic(): void {
+    try {
+      const now = this.worldNow();
+      const c = this.cityOrNull(this.st.hereId) ?? this.resolveHome().city;
+      const d = this.diary.current;
+      const leg = this.st.phase === 'traveling' && this.st.leg ? citiesOf(this.st.leg) : null;
+      const snap = publicSnapshot({
+        worldNow: now.getTime(),
+        speed: this.speedNow(),
+        phase: this.st.phase,
+        city: { id: c.id, name: c.name, tz: c.tz },
+        leg: this.st.phase === 'traveling' && this.st.leg
+          ? {
+            fromId: this.st.leg.fromId,
+            toId: this.st.leg.toId,
+            fromName: leg?.from?.name ?? this.st.leg.fromId,
+            toName: leg?.to?.name ?? this.st.leg.toId,
+            modeId: this.st.leg.modeId,
+            departedAt: this.st.leg.departedAt,
+            arriveAt: this.st.leg.arriveAt,
+          }
+          : null,
+        money: {
+          enabled: this.cfg.moneyEnabled,
+          budget: this.cfg.budget,
+          spent: this.st.spent,
+          earned: this.st.earned,
+          unsettledRideFare: this.unsettledRideFare,
+        },
+        diary: { enabled: !d.problem, dir: d.dir },
+        applied: this.st.rideApplied ?? [],
+        /* 下一站，给鱼鱼出行的包车续站用。见 `nextStopForPublic`。 */
+        nextStop: this.nextStopForPublic(),
+      });
+      const file = join(this.opts.dataDir, PUBLIC_FILE);
+      const tmp = `${file}.tmp`;
+      writeFileSync(tmp, `${JSON.stringify(snap, null, 2)}\n`, 'utf8');
+      renameSync(tmp, file);
+    } catch (e) {
+      this.log?.warn(`公开快照没写成：${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  /**
+   * 首页那张「正在打车」的卡。
+   *
+   * **只在面板来问的时候读**，不在 tick 里读：tick 是 60 秒，
+   * 拿它驱动进度条会一格一格跳；而这东西的语义是「现在」。
+   *
+   * 一秒缓存：面板轮询很密，同一个文件一秒内问几次只读一次盘。
+   *
+   * 过期自己判 —— 不等对方写 `active:false`。它崩了，卡片不能永远挂在首页。
+   */
+  private readLive(): LiveRide | null {
+    const real = this.realNow().getTime();
+    if (real - this.liveCache.at < 1000) return this.liveCache.value;
+    let value: LiveRide | null = null;
+    try {
+      const file = join(this.opts.dataDir, LIVE_FILE);
+      value = existsSync(file) ? parseLive(JSON.parse(readFileSync(file, 'utf8')), real) : null;
+    } catch {
+      value = null; // 对方正写到一半 / 文件坏了：这一秒就没有卡，不是错误
+    }
+    this.liveCache = { at: real, value };
+    return value;
+  }
+
+  /**
+   * **包车还在服务时间内吗**（2026-11-11，鱼鱼出行作者提的接口申请）。
+   *
+   * 判断条件就是对方申请里写的那三条，一条不多：
+   * `service === 'charter'` + 没过 `expiresAt` + `to` 非空。
+   * 前两条 `parseLive` 已经做过了（过期返回 null），这里只补 `to` 那一层 ——
+   * 包车订单刚下单、目的地还没填的时候，不能因为她「有包车」就不给安排交通。
+   *
+   * 返回整条 `LiveRide` 而不是布尔：日记里可能要写去哪儿。
+   */
+  private charterNow(): LiveRide | null {
+    const live = this.readLive();
+    if (!live || live.service !== 'charter' || !live.to) return null;
+    return live;
+  }
+
+  /**
+   * 她接下来要去的那一站，给公开快照用。
+   *
+   * 只认**带地名的 activity**（饭点、回酒店、睡觉都不算「去一个地方」）。
+   * 跨城移动期间返回 null —— 那段时间的「下一站」是另一座城，
+   * 由 `leg` 那一段说，不在这里重复，否则对方会拿它去改包车目的地。
+   */
+  private nextStopForPublic(): { name: string; at: string } | null {
+    const here = this.cityOrNull(this.st.hereId);
+    const plan = this.plan;
+    if (!here || !plan) return null;
+    // 路上不报：跨城的下一站是城市，不是城里某个点。
+    if (this.st.phase === 'traveling') return null;
+    const moment = localMoment(this.worldNow(), here.tz);
+    /*
+     * 作息表可能已经是明天的（前一天晚上排的）。表属于哪天看 `plan.dateKey`，
+     * 不是看「现在几点」—— 拿 `moment.dateKey` 比会漏掉整张明天的表。
+     */
+    const isToday = plan.dateKey === moment.dateKey;
+    const next = plan.beats.find(
+      (b) => b.kind === 'activity' && b.spot && (!isToday || b.at > moment.decimal),
+    );
+    if (!next?.spot) return null;
+    return { name: next.spot, at: utcFromLocal(plan.dateKey, next.at, here.tz).toISOString() };
+  }
+
   private persist(): void {
     const err = this.store.save(this.st);
     if (err) this.log?.warn(err);
@@ -3991,6 +6259,8 @@ export class JourneyWorld implements World {
       taste: this.st.taste,
     });
     if (bad) this.log?.warn(bad);
+    // 公开快照跟着一起写。三个写点同一个出口，才不会出现「快照落后于状态」的窗口。
+    this.writePublic();
   }
 
   private localClock(at: Date, city: City): string {
@@ -4096,13 +6366,21 @@ export class JourneyWorld implements World {
         parameters: decl[6].parameters,
         tags: [...decl[6].tags],
         handler: async (args) => {
-          const a = (args ?? {}) as { view?: string; subject?: string };
+          const a = (args ?? {}) as { view?: string; subject?: string; focus?: string; describe?: string };
           /*
            * 题材优先看 `subject`；没给就退回老的 `view` 语义（2026-11-06）。
            * 用户说「拍晚饭」，模型会给 subject=food —— 这一格就是为了那句话。
            */
           const subject = (a.subject ?? (a.view === 'sky' ? 'sky' : 'ground')) as PhotoSubject;
-          return this.takePhotoForUser(a.view === 'sky' ? 'sky' : 'ground', subject);
+          /*
+           * `view` 和 `subject` 是两条独立的线，但 `sky` 同时属于两边。
+           *
+           * 2026-11-06 补：只传了 `a.view`，模型若写 `subject="sky"` 而不写 `view`
+           * （工具描述允许这样），`view` 就退回 `ground` —— 提示词在拍天，
+           * 回执里却没有星的判定，她只能瞎说。两边任一为 sky 都算抬头。
+           */
+          const view = (a.view === 'sky' || subject === 'sky' ? 'sky' : 'ground') as 'ground' | 'sky';
+          return this.takePhotoForUser(view, subject, a.focus ?? '', a.describe ?? '');
         },
       },
       {
@@ -4111,8 +6389,8 @@ export class JourneyWorld implements World {
         parameters: decl[7].parameters,
         tags: [...decl[7].tags],
         handler: async (args) => {
-          const a = (args ?? {}) as { to?: string; days?: number; note?: string };
-          return await this.inviteSomeone(a.to ?? '', a.days, a.note ?? '');
+          const a = (args ?? {}) as { to?: string; days?: number; note?: string; meet?: string };
+          return await this.inviteSomeone(a.to ?? '', a.days, a.note ?? '', a.meet);
         },
       },
       {
@@ -4187,6 +6465,97 @@ export class JourneyWorld implements World {
           return await this.changeLodging(a.want ?? 'any', a.reason ?? '');
         },
       },
+      {
+        name: decl[15].name,
+        description: decl[15].description,
+        parameters: decl[15].parameters,
+        tags: [...decl[15].tags],
+        handler: async (args) => {
+          const a = (args ?? {}) as { days?: number; ev?: boolean; tier?: string };
+          return await this.rentCar(a.days ?? 3, a.ev, a.tier as CarTier | undefined);
+        },
+      },
+      {
+        name: decl[16].name,
+        description: decl[16].description,
+        parameters: decl[16].parameters,
+        tags: [...decl[16].tags],
+        handler: async (args) => {
+          const a = (args ?? {}) as { reason?: string };
+          return await this.restNow(a.reason ?? '');
+        },
+      },
+      {
+        name: decl[17].name,
+        description: decl[17].description,
+        parameters: decl[17].parameters,
+        tags: [...decl[17].tags],
+        handler: async (args) => {
+          const a = (args ?? {}) as { spot?: string; instead?: string };
+          return await this.changePlan(a.spot ?? '', a.instead ?? '');
+        },
+      },
+      {
+        name: decl[18].name,
+        description: decl[18].description,
+        parameters: decl[18].parameters,
+        tags: [...decl[18].tags],
+        handler: async (args) => {
+          const a = (args ?? {}) as { what?: string };
+          return await this.hotelNight(a.what ?? '');
+        },
+      },
+      {
+        name: decl[19].name,
+        description: decl[19].description,
+        parameters: decl[19].parameters,
+        tags: [...decl[19].tags],
+        handler: async (args) => {
+          const a = (args ?? {}) as { how?: string; spot?: string };
+          return await this.spotRide(a.how ?? '', a.spot ?? '');
+        },
+      },
+      {
+        /*
+         * 索引必须跟 `TOOL_DECLS` 的实际顺序对上。1.0.9 加 `journey_hotel_night`
+         * 和 `journey_spot_ride` 时它们占的就是 18 / 19 —— 用户那份补丁写死 18，
+         * 照抄会把「今晚在住处干什么」的名字和参数表挂到这个工具上。
+         * **以后再加工具，这里的号跟着顺延。**
+         */
+        name: decl[20].name,
+        description: decl[20].description,
+        parameters: decl[20].parameters,
+        tags: [...decl[20].tags],
+        handler: async (args) => {
+          const a = (args ?? {}) as { time?: string; what?: string };
+          return this.setSlot(a.time ?? '', a.what ?? '');
+        },
+      },
+      {
+        /*
+         * 21：特意去吃什么。**加在最后一个**，前面 0–20 的号一个都没动 ——
+         * 那串号是写死的，插在中间会把后面每个工具的名字和参数表整体错位一格。
+         */
+        name: decl[21].name,
+        description: decl[21].description,
+        parameters: decl[21].parameters,
+        tags: [...decl[21].tags],
+        handler: async (args) => {
+          const a = (args ?? {}) as { dish?: string; time?: string };
+          return await this.eat(a.dish ?? '', a.time ?? '');
+        },
+      },
+      {
+        /* 22：留路标（2026-11-14 加）。前面 0–21 的号一个都没动。 */
+        name: decl[22].name,
+        description: decl[22].description,
+        parameters: decl[22].parameters,
+        tags: [...decl[22].tags],
+        handler: async (args) => {
+          const a = (args ?? {}) as { text?: string; city?: string };
+          return this.signpost(a.text ?? '', a.city ?? '');
+        },
+      },
     ];
   }
 
@@ -4213,6 +6582,634 @@ export class JourneyWorld implements World {
    * 3. **不许静默换方式**：要的方式不可用就说明原因，不偷偷改成另一种。
    *    这正是用户抱怨的那件事。
    */
+  /**
+   * 改今天还没去的那一格（2026-11-09）。
+   *
+   * ## 为什么要有它
+   *
+   * 用户来信（清风乱域）：「我的鱼说想更改安排，发现更改不了。本来她想去故宫，
+   * 但是被安排推着去了颐和园。」
+   *
+   * 查下来 `journey_go_to` 只管「去哪座城」；城里一天去哪两处由 `planDay`
+   * 按 `dayIndex` 排死，**没有任何入口能改**。她说「我想改安排」的时候，
+   * 是在承诺一件工具做不到的事 —— 比不答应更坏。
+   *
+   * ## 三条边界
+   *
+   * 1. **只改还没到的**（`at > 现在`）。已经说过的话不改口：她说上午去了颐和园，
+   *    下午就不可能「其实我上午在故宫」。
+   * 2. **只能改这座城真有的地方**（`city.slots`）。匹配不上就把这座城有的列出来 ——
+   *    编一个不存在的地名，出图、日记、景点讲解全都接不上。
+   * 3. **改完要留痕**（`planPatches`）。日程会重算，不记账就变回去。
+   */
+  /**
+   * 把今天改过的行程重新贴到新排出来的表上（2026-11-09）。
+   *
+   * 日程会被重算（刷新面板、钱紧了、换酒店），`planDay` 每次都给一份「原样」的表。
+   * 不贴补丁的话，她说「改好了」，用户下一次刷新看到的又变回颐和园 ——
+   * 那不是「改不了」，是「改了骗你」，更坏。
+   *
+   * 只按 `at` 对齐；`fromSpot` 用来把「坐公交去X」那格也换掉。
+   *
+   * 2026-11-10：匹配时带上 `kind`。原来这里写死 `b.kind === 'activity'`，
+   * 只能重贴景点那一格 —— 早饭、起床、夜里改了就贴不回去，等于「改了骗你」。
+   * `x.kind` 缺省当 `activity`（老状态文件、`changePlan` 写的补丁都没这个字段）。
+   */
+  private applyPlanPatches(plan: DayPlan, cityId: string, dateKey: string): DayPlan {
+    const mine = this.st.planPatches.filter((x) => x.dateKey === dateKey && x.cityId === cityId);
+    if (!mine.length) return plan;
+    const beats: DayPlan['beats'][number][] = plan.beats.map((b) => {
+      const act = mine.find((x) => x.at === b.at && (x.kind ?? 'activity') === b.kind);
+      if (act) return { ...b, what: act.what, spot: act.spot };
+      const ride = mine.find(
+        (x) => x.fromSpot && b.kind === 'commute' && b.at <= x.at && b.what.includes(x.fromSpot),
+      );
+      if (ride?.fromSpot) return { ...b, what: b.what.replace(ride.fromSpot, ride.spot) };
+      return b;
+    });
+    /*
+     * 补上「新增的格」（2026-11-13）。
+     *
+     * 上面那个 map 只能改已有的一格 —— 凌晨那几小时日程表里本来就没有，
+     * 补丁点名了一个表上没有的时刻，map 转一圈也碰不到它，于是
+     * `journey_set_slot` 回了「记上了」、面板上却什么都没有。
+     *
+     * **只认 `kind === 'beat'`**：景点那格必须由 `changePlan` 带通勤格一起换，
+     * 酒店那格要按这家店真有的设施给选项 —— 让它们凭空长出一格就是另一类错。
+     *
+     * 去重按「同一时刻已经有同类型的格」：`setSlot` 落盘后会立刻再调一次本函数，
+     * 而那时传进来的 `plan` 已经含上一次插入的格，不去重就会一小时里长出两格。
+     */
+    for (const x of mine) {
+      if (x.kind !== 'beat') continue;
+      if (beats.some((b) => b.at === x.at && b.kind === 'beat')) continue;
+      beats.push({ at: x.at, kind: 'beat', what: x.what });
+    }
+    beats.sort((a, b) => a.at - b.at);
+    return { ...plan, beats };
+  }
+
+  /** 往今天的时间轴上插一段（2026-11-09）。`changePlan` 和两个新工具都用它。 */
+  private pushBeat(at: number, what: string): void {
+    if (!this.plan) return;
+    const beats = [...this.plan.beats, { at, kind: 'beat' as const, what }];
+    beats.sort((a, b) => a.at - b.at);
+    this.plan = { ...this.plan, beats };
+  }
+
+  /**
+   * 今晚在住处干什么（2026-11-09）。
+   *
+   * Mr.Q：「加上具体酒店信息了，晚上的语句是不是也可丰富的多了，
+   * 甚至可以让桌宠自己靠设备自己选择发生什么事件。」
+   *
+   * 以前这一步只有 `planDay` 按档位自动决定，她插不上手。现在：
+   * 选项来自**这家店真有的设施**（`hotelNightOptions`），她挑一个，
+   * 挑得到就执行、挑不到就说清没有 —— 而不是硬演一段。
+   */
+  private async hotelNight(whatRaw: string): Promise<{ text: string; isError?: boolean }> {
+    const here = this.cityOrNull(this.st.hereId);
+    if (!here || this.st.phase !== 'staying' || !this.plan) {
+      return { text: '她这会儿不在住处 —— 在路上，或者还没落脚。等住下来再说。', isError: true };
+    }
+    const now = localMoment(this.worldNow(), here.tz).decimal;
+    /*
+     * 白天不问「今晚干什么」。17 点以后才算晚上 ——
+     * 用户下午三点问「晚上干嘛」，她答一段晚上的事，时间轴就对不上了。
+     */
+    if (now < 17) {
+      return { text: `这会儿才 ${fmtHour(now)}，还没到晚上。等天黑了再说。`, isError: true };
+    }
+
+    /*
+     * 住处缺设施就地补一次（2026-11-12）。
+     *
+     * 不能只靠 `rebuildPlan` 那条路——它可能到日切才再跑一次，
+     * 而用户此刻正在问「去酒吧喝一杯」，等不到那时候。
+     * 补完写回 `plan` 与 state，下一次就不用再查。
+     */
+    const heal = this.healLodgingFacts(this.plan.lodging, here.id);
+    if (heal.healed) {
+      this.plan = { ...this.plan, lodging: heal.lod };
+      if (this.st.lodging) {
+        const v = this.st.lodging.value;
+        this.st = {
+          ...this.st,
+          lodging: {
+            ...this.st.lodging,
+            value: {
+              ...v,
+              ...(heal.lod.amen?.length ? { amen: [...heal.lod.amen] } : {}),
+              ...(heal.lod.around?.length
+                ? { around: heal.lod.around.map((x) => ({ n: x.n, km: x.km })) }
+                : {}),
+            },
+          },
+        };
+      }
+      this.persist();
+    }
+    const lod = this.plan.lodging;
+    /*
+     * 夜间「出门转转」说哪儿：**优先用问道采到的具体地点**（162 城有），
+     * 其次 `nightIn` 那一句，都没有才说通用的话。
+     *
+     * `nightIn` 会按月份过滤 —— 漠河「等极光」只在 9–3 月成立，
+     * 夏天说这句就是编的。直接用 `here.night` 还会撞上 `{ text, months }`
+     * 变成「出门去了[object Object]」（2026-11-09 长跑抓到）。
+     */
+    const month = Number(localMoment(this.worldNow(), here.tz).dateKey.slice(5, 7));
+    const nightLine = playLine(here.id) || (nightIn(here, month) ?? '');
+    const opts = hotelNightOptions(lod.tier, lod.amen, lod.around, nightLine);
+    const want = whatRaw.trim();
+    const hit = opts.find((o) => o.what === want) ?? opts.find((o) => o.label.includes(want));
+    if (!hit) {
+      const list = opts.map((o) => (o.price > 0 ? `${o.label}（${o.price} 块）` : o.label)).join('、');
+      const where = lod.name ? `${lod.name}没这个` : '这儿没这个';
+      /*
+       * 这里是整个功能的**边界**：查过没有就是没有。
+       * 编一个「在泳池里游了二十分钟」，用户上携程一看没泳池 —— 第三次返工。
+       */
+      /*
+       * 措辞按「这家店有什么」说，不按「我能选什么」说（2026-11-12）。
+       *
+       * 原来写的是「今晚能干的：泡澡、在房间待着」—— 那是把内部枚举直接翻成人话，
+       * 她一转手就成了「系统只给我泡澡和待屋里两个选项」（西安实测原话）。
+       * 回执是事实、不是台词，那就别再带「能干 / 可选 / 选项」这类清单口气。
+       */
+      return { text: `${where}。有的就这些：${list}。`, isError: true };
+    }
+
+    if (hit.price > 0) {
+      const left = this.cfg.budget - (this.st.spent - this.st.earned);
+      if (this.cfg.moneyEnabled && this.cfg.budget > 0 && left < hit.price) {
+        return { text: `${hit.label}要 ${hit.price} 块，手头不够（还剩 ${Math.max(0, Math.round(left))} 块）。换一个不要钱的。`, isError: true };
+      }
+      this.addSpent(hit.price);
+    }
+    this.pushBeat(Math.min(now + 0.1, 23), hit.text);
+    this.persist();
+    return { text: hit.text + (hit.price > 0 ? `（花了 ${hit.price} 块）` : '') };
+  }
+
+  /**
+   * 景区里怎么代步（2026-11-09）。
+   *
+   * Mr.Q：「爬山、景区交通得能用啊，要不一天靠走路可以嘛？」
+   *
+   * 以前 `pickSpotExtra` 只是在排程时写一句「坐索道上去的」再记笔钱 ——
+   * **没有工具能执行**。用户说「坐索道上山」，她手里空的，只能说「我这儿没找着」。
+   *
+   * 现在：按所在景点给出真有的选项、报出票价、扣钱、写进时间轴。
+   * 「自己走」永远可选 —— 问「一天靠走路可以吗」，答案是「可以，但腿会酸」。
+   */
+  private async spotRide(howRaw: string, spotRaw: string): Promise<{ text: string; isError?: boolean }> {
+    const here = this.cityOrNull(this.st.hereId);
+    if (!here || this.st.phase !== 'staying' || !this.plan) {
+      return { text: '她这会儿不在景点里 —— 在路上，或者还没落脚。', isError: true };
+    }
+    const now = localMoment(this.worldNow(), here.tz).decimal;
+
+    /* 此刻所在的那一处：当天最后一条 activity，且开始不超过三小时。 */
+    const acts = this.plan.beats.filter((b) => b.kind === 'activity' && b.at <= now);
+    const cur = acts[acts.length - 1];
+    const spot = (spotRaw.trim() || cur?.spot || '').trim();
+    if (!spot) {
+      return { text: `她现在不在景点里（当地 ${fmtHour(now)}）。景区里的车票得人到了才买得上。`, isError: true };
+    }
+    /* 没指定地点时，必须是「此刻真的在那儿」—— 离开三小时以上就不算。 */
+    if (!spotRaw.trim() && (!cur || now - cur.at > 3)) {
+      return { text: `这会儿已经不在${spot}了（当地 ${fmtHour(now)}）。要坐哪儿的车，得说明是在哪个景点。`, isError: true };
+    }
+
+    const opts = spotRideOptions(spot);
+    const want = howRaw.trim();
+    const hit = opts.find((o) => o.how === want) ?? opts.find((o) => o.label.includes(want));
+    if (!hit) {
+      const list = opts.map((o) => (o.price > 0 ? `${o.label}（${o.price} 块）` : o.label)).join('、');
+      return { text: `${spot}没有这个。这儿能选的是：${list}。`, isError: true };
+    }
+
+    if (hit.price > 0) {
+      const left = this.cfg.budget - (this.st.spent - this.st.earned);
+      if (this.cfg.moneyEnabled && this.cfg.budget > 0 && left < hit.price) {
+        return { text: `${hit.label}要 ${hit.price} 块，手头不够（还剩 ${Math.max(0, Math.round(left))} 块）。要不走上去。`, isError: true };
+      }
+      this.addSpent(hit.price);
+    }
+    const line = hit.text.includes('%s') ? hit.text.replace('%s', spot) : hit.text;
+    this.pushBeat(Math.min(now + 0.15, 23.5), line);
+    this.persist();
+    return { text: line + (hit.price > 0 ? `（${hit.price} 块）` : '') };
+  }
+
+  private async changePlan(wantRaw: string, insteadRaw: string): Promise<{ text: string; isError?: boolean }> {
+    const now = this.worldNow();
+    if (this.st.phase === 'traveling') {
+      return { text: '她在路上，今天没有城里的行程可改。等到了再说。', isError: true };
+    }
+    const here = this.cityOrNull(this.st.hereId);
+    if (!here) return { text: '她现在不在城里，改不了今天的行程。', isError: true };
+    if (!this.plan) return { text: '今天的日程还没排出来。等一下再问。', isError: true };
+
+    const want = wantRaw.trim();
+    if (!want) return { text: '要改成哪儿？地名说清楚再动。', isError: true };
+
+    const spots = here.slots;
+    const hit = matchSpot(spots, want);
+    if (!hit) {
+      const few = spots.slice(0, 8).join('、');
+      return {
+        text: `${here.name}没有「${want}」。这座城能去的是：${few}。`
+          + '换一个，或者跟他说清想干什么（想看什么、想吃什么），别自己编一个地名。',
+        isError: true,
+      };
+    }
+
+    const nowHour = localMoment(now, here.tz).decimal;
+    const ahead = this.plan.beats.filter((b) => b.kind === 'activity' && b.at > nowHour);
+    if (!ahead.length) {
+      return {
+        text: `今天该逛的都逛完了（这会儿当地 ${fmtHour(nowHour)}）。要加地方就明天说，或者用 journey_go_to 换一座城。`,
+        isError: true,
+      };
+    }
+
+    let target = ahead[0]!;
+    const instead = insteadRaw.trim();
+    if (instead) {
+      const found = ahead.find((b) => (b.spot ?? '').includes(instead) || b.what.includes(instead));
+      if (!found) {
+        const names = ahead.map((b) => b.spot ?? b.what).join('、');
+        return { text: `今天还没去的有：${names}。要换其中哪一个？说个名字。`, isError: true };
+      }
+      target = found;
+    }
+
+    const fromSpot = target.spot ?? '';
+    if (fromSpot === hit) {
+      return { text: `今天本来就要去${hit}，不用改。`, isError: true };
+    }
+
+    /*
+     * 新的那句怎么拼。
+     *
+     * 沿用原来的时段前缀（`下午，` / `上午，`），**不重新决定上午下午** ——
+     * 换地方不该顺带把时间也改了，那是两件事。
+     * 原来没有前缀（就是地名本身，`青城山`）就还是地名。
+     */
+    const prefix = /^(上午|中午|下午|傍晚)，/.exec(target.what)?.[0] ?? '';
+    const what = `${prefix}${hit}`;
+    const at = target.at;
+
+    const beats = this.plan.beats.map((b) => {
+      if (b === target) return { ...b, what, spot: hit };
+      /*
+       * 「坐公交去颐和园」那格也得跟着改。
+       *
+       * 只改活动那格会留下自相矛盾的两行：上面写着去哪儿，下面却是另一个地方。
+       * 判据用 `b.at <= at` —— 那一趟一定排在这一格之前。
+       */
+      if (fromSpot && b.kind === 'commute' && b.at <= at && b.what.includes(fromSpot)) {
+        return { ...b, what: b.what.replace(fromSpot, hit) };
+      }
+      return b;
+    });
+    this.plan = { ...this.plan, beats };
+
+    /* 记账：只留今天。跨天的补丁没有意义（第二天本来就重排）。 */
+    const patch: PlanPatch = {
+      dateKey: this.plan.dateKey,
+      cityId: here.id,
+      at,
+      what,
+      spot: hit,
+      ...(fromSpot ? { fromSpot } : {}),
+    };
+    this.st = {
+      ...this.st,
+      planPatches: [
+        ...this.st.planPatches.filter((x) => x.dateKey === patch.dateKey && x.at !== at),
+        patch,
+      ],
+    };
+    this.persist();
+
+    const was = fromSpot || '原来那一处';
+    return {
+      text: `改好了：今天 ${fmtHour(at)} 那一格从${was}换成${hit}。`
+        + '已经去过的不动 —— 说出去的话不改口。',
+    };
+  }
+
+  /**
+   * 从今天的表里找出要改的那一格（2026-11-10）。
+   *
+   * 三条路，按优先级：
+   * ① **类型词**（「午饭」）→ 该 kind 里还没到的那一格；
+   * ② **钟点精确**（±1 分钟）；
+   * ③ **钟点就近**（±半小时）—— 用户说「六点吃饭」而表上排的是 18:30，
+   *    不该回「没有这一格」，那是把猜错的成本甩给用户。
+   *
+   * 三种都落空、而这个时刻还没到 → 回 `{ add }`，让调用方**新增一格**。
+   *
+   * ## 为什么要有第四种（2026-11-13，mrlin97 在 Discussion #586 报的）
+   *
+   * 日程从 07:00「起床」起排，23:00「睡」收尾 —— **凌晨那几小时根本没有格子**。
+   * 于是住在他说的那种情形里：当地 01:06 想安排一段夜里的事，
+   * `journey_set_slot` 只能回「01:30 附近没有可改的格子」，那条路是死的。
+   * 「改现有的格」和「这一天这一段还没排过」是两件事，得分开走。
+   */
+  private findSlotBeat(
+    raw: string,
+    nowDecimal: number,
+  ): { beat: DayPlan['beats'][number] } | { add: number } | { error: string } {
+    const plan = this.plan;
+    if (!plan) return { error: '今天的日程还没排出来，等一下再问。' };
+
+    /*
+     * **通勤格不参与「按钟点挑格」**（2026-11-10，长跑抓到的）。
+     *
+     * `commute`（「开车去X」「走着去X」）的 at 是 `活动时刻 - 路上分钟/60`，
+     * 而 `ride.min` 在「走着去」这类情况下可以是 0 —— 于是它和活动格**同一时刻**。
+     * `beats.find` 从数组头开始找，先撞上通勤格，结果：「用车去武侯祠」被改成
+     * 用户那句「在家躺着」，景点那格一动没动，两行还自相矛盾。
+     *
+     * 通勤格本来也不该由用户直接指：换地方走 `journey_plan_change`（连这一格一起换），
+     * 换交通方式走 `journey_spot_ride`。把它从候选里剔掉，钟点就只指向真正那件事。
+     */
+    const pickable = plan.beats.filter((b) => b.kind !== 'commute');
+
+    const kind = parseSlotKind(raw);
+    if (kind) {
+      const cand = plan.beats.filter((b) => b.kind === kind);
+      if (!cand.length) return { error: `今天没有「${raw}」这一格。` };
+      const open = cand.filter((b) => b.at > nowDecimal);
+      if (!open.length) {
+        return { error: `${raw}已经过去了（当地 ${slotClock(nowDecimal)}），改不了 —— 说出去的话不改口。` };
+      }
+      return { beat: open[0]! };
+    }
+
+    const at = parseClock(raw);
+    if (at === null) {
+      return {
+        error: `看不懂这个时刻：${raw || '（空）'}。要 "12:30" 或 "7" 这种写法，`
+          + '也可以只说「午饭」「晚饭」「起床」。',
+      };
+    }
+
+    const exacts = pickable.filter((b) => Math.abs(b.at - at) < 0.02);
+    if (exacts.length) {
+      const hit = exacts[0]!;
+      if (hit.at <= nowDecimal) {
+        return { error: `${slotClock(hit.at)} 这一格已经过去了，改不了 —— 说出去的话不改口。` };
+      }
+      // 万一还剩两格同点，优先挑能自由改的那格；全是保护格就交给 setSlot 去给正确入口。
+      const open = exacts.find((b) => b.kind !== 'activity' && b.kind !== 'hotel');
+      return { beat: open ?? hit };
+    }
+
+    const near = pickable
+      .filter((b) => b.at > nowDecimal && Math.abs(b.at - at) <= 0.5)
+      .sort((a, b) => Math.abs(a.at - at) - Math.abs(b.at - at))[0];
+    if (near) return { beat: near };
+
+    /*
+     * 表上没有这一格。
+     *
+     * 先挡住「改过去」：这一刻已经过了的话，新增一格等于给历史补一条 —
+     * 那和她「说出去的话不改口」是同一条边界的另一面。
+     * 报错照样把今天剩下的列出来 —— 只报错不给替代，她只能干瞪眼。
+     */
+    if (at <= nowDecimal) {
+      const table = pickable
+        .filter((b) => b.at > nowDecimal)
+        .map((b) => `${slotClock(b.at)} ${slotBrief(b.what)}`)
+        .join('、');
+      return {
+        error: `${slotClock(at)} 已经过去了（当地 ${slotClock(nowDecimal)}），改不了 —— 说出去的话不改口。`
+          + `今天剩下的：${table || '（没了）'}`,
+      };
+    }
+    return { add: at };
+  }
+
+  /**
+   * 改今天某一点吃什么、做什么（2026-11-10 加，源自用户「清风乱域」的补丁）。
+   *
+   * 和 `changePlan` 的分工：那个换景点（要校验城里真有），这个改作息与吃食 ——
+   * 早饭、午饭、晚饭、起床、睡觉、夜里干嘛，都是「人说了就该算数」的事。
+   * **两格一样挡回去**：`activity`（交给 `journey_plan_change`）和 `hotel`（交给
+   * `journey_hotel_night`）。理由分别在下面两处。
+   *
+   * 边界跟它一致：不在城里不改、没排表不改、已经过去的不改。
+   * 改动照样落 `planPatches`，重排之后贴回去，不会「改了骗你」。
+   *
+   * ## `hotel` 那格为什么拦下来
+   *
+   * 晚上在住处干什么，选项来自**这家店真有的设施**（`hotelNightOptions`），
+   * 另有一条 `journey_hotel_night` 专管。这里再开一个自由文本的口子，
+   * 就会出现「她说在泳池游了二十分钟，用户一查这家店没泳池」——
+   * 跟「挂真店名报假房钱」是同一类错。
+   *
+   * `night`（城里夜里那处）不拦：它没有对应的工具和候选表，拦了就是死路。
+   */
+  private setSlot(timeRaw: string, whatRaw: string): { text: string; isError?: boolean } {
+    if (this.st.phase !== 'staying') {
+      return { text: '她这会儿不在城里待着 —— 改作息只在停留时有用。', isError: true };
+    }
+    const here = this.cityOrNull(this.st.hereId);
+    if (!here) return { text: '连自己在哪都不知道，改不了。', isError: true };
+    if (!this.plan) return { text: '今天的日程还没排出来，等一下再问。', isError: true };
+
+    const what = whatRaw.trim().slice(0, 60);
+    if (!what) return { text: '要改成什么？说清楚再动。', isError: true };
+
+    const moment = localMoment(this.worldNow(), here.tz);
+    const found = this.findSlotBeat(timeRaw, moment.decimal);
+    if ('error' in found) return { text: found.error, isError: true };
+    /*
+     * 表上没有这一格 —— **新增一格**（2026-11-13）。
+     *
+     * 和「改已有的格」是两种语义：那边是 `map` 里换掉一句话，这边是往时间轴上插一段。
+     * 落盘仍走 `planPatches`，由 `applyPlanPatches` 在重排之后贴回来 ——
+     * 不然下次刷新面板这格就没了，又变成「改了骗你」。
+     *
+     * `kind` 固定 `beat`：它不是景点（不该带地名）、不是酒店夜里的活动（那个要按
+     * 这家店真有的设施给选项）、也不是三餐里的一格（那三格的时刻由日程表决定）。
+     */
+    if ('add' in found) {
+      const at = found.add;
+      const added: PlanPatch = {
+        dateKey: this.plan.dateKey,
+        cityId: here.id,
+        at,
+        what,
+        spot: '',
+        kind: 'beat',
+      };
+      this.st = {
+        ...this.st,
+        planPatches: [
+          ...this.st.planPatches.filter(
+            (x) => x.dateKey === added.dateKey
+              && !(x.cityId === added.cityId && x.at === added.at && x.kind === 'beat'),
+          ),
+          added,
+        ],
+      };
+      this.persist();
+      this.plan = this.applyPlanPatches(this.plan, here.id, moment.dateKey);
+      const left = this.plan.beats
+        .filter((b) => b.at > moment.decimal)
+        .map((b) => `${slotClock(b.at)} ${slotBrief(b.what)}`)
+        .join('、');
+      return {
+        text: `${slotClock(at)} 这一格今天原来空着，记上了：「${what}」。\n`
+          + `今天剩下的：${left || '（没了）'}`,
+      };
+    }
+    const beat = found.beat;
+
+    if (beat.kind === 'activity') {
+      /*
+       * 景点那格不从这里改（2026-11-10 自己看出来的）。
+       *
+       * 活动格前面跟着一格 `commute`（「坐公交去武侯祠」）。`changePlan` 专门用
+       * `fromSpot` 把那一格一起换掉，注释里写着「只改活动那格会留下『坐公交去颐和园』
+       * +『下午，故宫』这种自相矛盾的两行」—— 这里要是不管它，等于把那个坑重挖一遍。
+       *
+       * 「不去了」和「换个地方」是两件事。换地方归 `journey_plan_change`（它校验
+       * 这座城真有那处）；「不去了」还没有对应的语义，不拿自由文本糊过去。
+       */
+      return {
+        text: `${slotClock(beat.at)} 那一格是景点，不在这儿改 —— 换地方用 journey_plan_change`
+          + '（它会先确认这座城真有那一处）。',
+        isError: true,
+      };
+    }
+
+    if (beat.kind === 'hotel') {
+      return {
+        text: `${slotClock(beat.at)} 那一格是在住处干什么。它按这家店真有的设施给选项，`
+          + '要用 journey_hotel_night 挑 —— 别在这儿改，改了会说出这家店没有的东西。',
+        isError: true,
+      };
+    }
+
+    /*
+     * 非景点的格子没有地名。
+     *
+     * 原样保留（`beat.spot ?? ''`）—— 上面已经把活动格挡掉了，走到这里的都不带地名。
+     */
+    const spot = beat.spot ?? '';
+
+    const patch: PlanPatch = {
+      dateKey: this.plan.dateKey,
+      cityId: here.id,
+      at: beat.at,
+      what,
+      spot,
+      kind: beat.kind,
+    };
+    /*
+     * 记账：**只留今天**。
+     *
+     * `applyPlanPatches` 只按当天的 `dateKey` 取，昨天的补丁永远不会再被读到，
+     * 留着只是把存档越撑越大 —— 144 天长跑里改作息 372 次就攒了 372 条，
+     * 而且每次重排日程都要把整张表 filter 一遍，越跑越慢。
+     *
+     * 同一格改第二遍就覆盖掉第一遍（否则重贴时 `find` 会取到旧的那条）。
+     */
+    this.st = {
+      ...this.st,
+      planPatches: [
+        ...this.st.planPatches.filter(
+          (x) => x.dateKey === patch.dateKey
+            && !(x.cityId === patch.cityId && x.at === patch.at && (x.kind ?? 'activity') === beat.kind),
+        ),
+        patch,
+      ],
+    };
+    this.persist();
+    this.plan = this.applyPlanPatches(this.plan, here.id, moment.dateKey);
+
+    const after = this.plan.beats
+      .filter((b) => b.at > moment.decimal)
+      .map((b) => `${slotClock(b.at)} ${slotBrief(b.what)}`)
+      .join('、');
+    return { text: `好，${slotClock(beat.at)} 改成「${what}」。\n今天剩下的：${after || '（没了）'}` };
+  }
+
+  /**
+   * 特意去吃某一样（2026-11-13，Discussion #586）。
+   *
+   * ## 为什么不是 `journey_set_slot` 加个参数
+   *
+   * 那条是纯本地的：改一格文字，不发请求、不会失败。这条要查网。混在一起，
+   * 一次超时就会连累「八点再起」这种根本不联网的动作。
+   *
+   * ## 顺序：**先查店，再改日程**
+   *
+   * 反过来也能跑，但那样失败时日程已经改了 —— 回执说「没查到店」而那一格已经写成
+   * 「去吃火锅」，她会以为自己有个去处。先查后改，查不到就写个不带店名的版本，
+   * 两种结果是分得清的。
+   *
+   * ## 查不到时不许编
+   *
+   * 高德没返回、没 key、国外城市（高德那边一条都没有，酒店模块实测过）—— 一律
+   * 走泛称。「重庆有一家老火锅」不成立的地方，就说「找了一家本地人排队的」。
+   * 这是这个项目最不能犯的错：**编一个不存在的店名**。
+   */
+  private async eat(dishRaw: string, timeRaw: string): Promise<{ text: string; isError?: boolean }> {
+    const want = dishRaw.trim().slice(0, 20);
+    if (!want) return { text: '要吃什么？给个菜名或品类就行（「火锅」「螺蛳粉」）。', isError: true };
+    if (this.st.phase !== 'staying') {
+      return { text: '她这会儿不在城里待着 —— 找店只在停留时有用。', isError: true };
+    }
+    const here = this.cityOrNull(this.st.hereId);
+    if (!here) return { text: '连自己在哪都不知道，查不了。', isError: true };
+    if (!this.plan) return { text: '今天的日程还没排出来，等一下再问。', isError: true };
+
+    /*
+     * 没给餐次就按当地时间落在哪一顿 —— 和拍照那条链同一个口径
+     * （`journey_photo` 的 `subject=food` 也是这么分的），
+     * 不然照片写「午饭」、日程写「晚饭」，两个人对不上。
+     */
+    const hourNow = localMoment(this.worldNow(), here.tz).decimal;
+    const fallback = hourNow < 10.5 ? '早饭' : hourNow < 15 ? '午饭' : '晚饭';
+    const time = timeRaw.trim() || fallback;
+
+    const list = await this.eateries.find(here, want);
+    const top = list?.[0];
+    const what = top ? `${time}，在「${top.name}」吃的${want}` : `${time}，${want}`;
+
+    const r = this.setSlot(time, what);
+    if (r.isError) return r;
+
+    if (!top) {
+      /*
+       * 查不到 —— **不能说店名**。
+       *
+       * 这里把话说死，是因为「没查到」和「这城没有」是两件事：高德没有这条数据，
+       * 不代表街上没有火锅店。回执两边都交代清楚，她就不会把泛称说成事实。
+       */
+      return {
+        text: `${r.text}\n（这座城没查到具体的店 —— 说「找了一家本地人排队的」就行，别报店名。）`,
+      };
+    }
+
+    const where = top.address ? `，${top.address}` : '';
+    const rating = top.rating ? `，评分 ${top.rating}` : '';
+    const more = (list?.length ?? 0) > 1
+      ? `\n附近还有：${list!.slice(1).map((x) => x.name).join('、')}。`
+      : '';
+    return {
+      text: `${r.text}\n店是真查到的：「${top.name}」${where}${rating}。${more}`,
+    };
+  }
+
   private async goTo(cityName: string, modeWord: string): Promise<{ text: string; isError?: boolean }> {
     const now = this.worldNow();
     const name = cityName.trim();
@@ -4413,7 +7410,19 @@ export class JourneyWorld implements World {
    * **同一个地方、同一个时段**的巧合 —— 谁那会儿在，谁就看得见。
    * 想指名要先把人认出来，那就要有账号、权限、审核，是另一个量级的东西。
    */
-  private async inviteSomeone(toName: string, days: number | undefined, note: string): Promise<{ text: string; isError?: boolean }> {
+  private async inviteSomeone(
+    toName: string,
+    days: number | undefined,
+    note: string,
+    /**
+     * 见面城（2026-11-07）。不传 = 就在她现在待的这座城里见。
+     *
+     * 「我在这座城，想找个伴一起去那座城」是原来的全部语义；
+     * Mr.Q 要的是三段：「约好在 A 见面 → 一起去 B → 在 B 分开」。
+     * 于是缺的那一级就是 A，而 B 一直是 `to`。
+     */
+    meetName?: string,
+  ): Promise<{ text: string; isError?: boolean }> {
     const meet = this.meetOptions();
     if (!meet) {
       return {
@@ -4446,8 +7455,47 @@ export class JourneyWorld implements World {
     }
     if (c.id === here.id) return { text: `她现在就在${here.name}，不用邀人一起去${c.name}。`, isError: true };
 
+    /*
+     * 见面城。**不填就是她脚下这座城 —— 而且现在真的会发出去**（2026-11-12）。
+     *
+     * 原来这里默认 `null`：邀请里没有 `meet_city` → 接的人 `pledge.meetCityId` 为空 →
+     * `pledgeStop` 直接返回目的地 → 两个人**各走各的**到 B 才碰头。
+     * 「先在 A 会合、一起上车」这一级从此永远不会发生：能力在，路径不经过它。
+     * Mr.Q 问「一起出发去另一个地方，怎么从来没见过」，根子就在这一行。
+     *
+     * 填了别处才有意义：她还没到，但已经知道要在那座城会合。
+     * 那种情况要先确认**她自己去得成**，否则她答应了一场自己赶不上的见面。
+     */
+    let meetCity: City | null = here;
+    const wanted = String(meetName ?? '').trim();
+    if (wanted) {
+      const m = cityByName(wanted);
+      if (!m) {
+        return { text: `内置城市表里没有「${wanted}」这座城，见面的地方换一个。`, isError: true };
+      }
+      if (m.id !== here.id) {
+        if (!canTravel(here, m)) {
+          return {
+            text: `${m.name}从${here.name}这儿去不了（隔着海，或者那边没有机场）—— 约在那儿见面她赶不到。`,
+            isError: true,
+          };
+        }
+        meetCity = m;
+      }
+    }
+    /* 见面城和目的地相同时没有「见面」这一级，按老口径发。 */
+    if (meetCity && meetCity.id === c.id) meetCity = null;
+
     const d = Math.min(14, Math.max(1, Math.round(Number(days) || 2)));
-    const r = await sendInvite(meet, here.id, c.id, d, note);
+    const r = await sendInvite(meet, {
+      from: here.id,
+      to: c.id,
+      days: d,
+      note,
+      ...(meetCity ? { meetCity: meetCity.id } : {}),
+      // 自己的流速要带上 —— 对方接之前得知道两边对不对得上日子。
+      pace: this.speedNow(),
+    });
     if (!r.ok) {
       /*
        * 失败要说得像人话，而且**分清是谁的问题**：
@@ -4466,7 +7514,8 @@ export class JourneyWorld implements World {
      * 明天就会问「小满怎么还没来」。这不是她记错，是没人告诉过她这件事没有回音。
      */
     return {
-      text: `发出去了：${here.name} → ${c.name}，在那儿待 ${d} 天${note ? `，留了一句「${note}」` : ''}。`
+      text: `发出去了：${meetCity ? `先在${meetCity.name}见面，再` : ''}${here.name} → ${c.name}，`
+        + `在那儿一起待 ${d} 天${note ? `，留了一句「${note}」` : ''}。`
         + '谁能看见全看那会儿谁也在这一带 —— 没有人接是常事，那条 24 小时后自己过期，不会有回音。'
         + '别把它当成约好了，该怎么走还怎么走。',
     };
@@ -4498,7 +7547,15 @@ export class JourneyWorld implements World {
      * 「能接」的列表里 —— 两个地方各留一份过滤，迟早会漂。
      */
     const homeId = this.resolveHome().city.id;
-    const takeable = r.list.filter((x) => x.to !== here.id && x.to !== homeId);
+    /*
+     * 已经处理过的那条不再列出来（2026-11-06）。
+     *
+     * 让位之后（他点名要去别处，约定让位）同一条邀约还挂在池子里，她能再接一次 ——
+     * 而 `pledge-yield-<邀请编号>` 是固定的 senderKey，于是同一句「这趟只能算了」
+     * 会被推第二遍。goto 档 144 天跑出来的重复就在这儿。
+     */
+    const handled = new Set(this.st.claimedInvites ?? []);
+    const takeable = r.list.filter((x) => x.to !== here.id && x.to !== homeId && !handled.has(x.id));
     if (!takeable.length) {
       return {
         text: atHome
@@ -4630,6 +7687,31 @@ export class JourneyWorld implements World {
     const dest = cityById(one.to);
     if (!dest) return { text: `那条邀约说的「${one.to}」不在城市表里，接了也没法走。`, isError: true };
     /*
+     * 见面城（2026-11-07）。**认不出来就当没有这一级** —— 服务端给的 id
+     * 在本地城市表里不存在时（版本对不上），按老口径「直接在目的地见」处理，
+     * 而不是让整条邀约作废。
+     */
+    const meetCity = one.meetCity ? cityById(one.meetCity) : null;
+    /*
+     * **她已经在目的地了，就没有「先碰头」这回事。**
+     *
+     * 2026-11-07 长跑的不变量抓到的：她人在西安，邀约说「先去成都碰头，再一起回西安」——
+     * 状态里于是同时有 `arrivedAt`（已经在一起）和 `meetCityId`（还没碰头）。
+     * 两条都成立，等于让已经到终点的人先跑回起点。
+     *
+     * 正确处理是**忽略见面这一级**：她就在他们要去的地方，等着就行。
+     */
+    const useMeet = meetCity && here.id !== dest.id ? meetCity : null;
+    /*
+     * 两边时间流速差太多就别接。
+     *
+     * 这一条挡的不是错误，是**一种注定落空的期待**：他那边一天只要一小时，
+     * 等这边赶到会合点，他那边已经过了大半个月，早就按「等不到」走了。
+     * 现在拒绝，她还能去挑下一条；接了，就是答应一桩兑现不了的事。
+     */
+    const gap = paceGap(this.speedNow(), one.pace);
+    if (gap) return { text: gap, isError: true };
+    /*
      * **目的地是她家那座城，不接。**
      *
      * 不是矫情：`moveOn` 只知道「去某座城」，不知道「到了那座城就意味着一趟结束」。
@@ -4653,10 +7735,24 @@ export class JourneyWorld implements World {
      * 接到手里才发现走不到，是「答应了却没出现」—— 比不接难看十倍。
      * 这里先问一句 `canTravel`，跟选目的地用的是同一套判定。
      */
-    if (!canTravel(here, dest)) {
+    /*
+     * **两段都要走得通**（2026-11-07）。
+     *
+     * 有见面城的时候，第一段是去会合点，第二段才是从会合点去目的地。
+     * 只验最终目的地的话，「成都见，再一起去拉萨」里成都那段可能是断的 ——
+     * 她答应了，第二天才发现自己到不了会合的地方。
+     */
+    const firstStop = useMeet ?? dest;
+    if (!canTravel(here, firstStop)) {
       return {
-        text: `${dest.name}从${here.name}这儿去不了（隔着海，或者那边没有机场）。`
+        text: `${firstStop.name}从${here.name}这儿去不了（隔着海，或者那边没有机场）。`
           + '先别接 —— 答应了到不了，比不答应难看。',
+        isError: true,
+      };
+    }
+    if (useMeet && !canTravel(useMeet, dest)) {
+      return {
+        text: `从见面的${useMeet.name}没路去${dest.name}。先别接 —— 见上了也走不成。`,
         isError: true,
       };
     }
@@ -4668,15 +7764,36 @@ export class JourneyWorld implements World {
      * 「我答应了」和「算了」隔了一夜 —— 这个坑完全可以在入口就避开：
      * 当时就可以算这张票买不买得起。
      */
-    const km = Math.round(distanceKm(here, dest));
+    /* 第一段是去会合点，票钱也按第一段算 —— 去成都的票和去拉萨的票不是一个价。 */
+    const km = Math.round(distanceKm(here, firstStop));
     const canGo = pickMode(
-      here, dest, km, Math.random, this.isTight(), this.noFly(),
-      this.affordMode(km, 0.5, here.country !== dest.country, { from: here, to: dest }),
+      here, firstStop, km, Math.random, this.isTight(), this.noFly(),
+      this.affordMode(km, 0.5, here.country !== firstStop.country, { from: here, to: firstStop }),
     );
     if (!canGo) {
       return {
-        text: `从${here.name}去${dest.name}这一趟的票钱她付不起（${km} 公里）。`
+        text: `从${here.name}去${firstStop.name}这一趟的票钱她付不起（${km} 公里）。`
           + '先别接 —— 答应了买不起票，第二天就得反悔，比不接难看。',
+        isError: true,
+      };
+    }
+    /*
+     * **赶得到吗**（2026-11-07 的 invite 档抓到）。
+     *
+     * 那一段日志：`洛阳当地 八点七分，动身去悉尼 —— 跟小满约在那儿碰头。轮船，8619 公里，13 天。`
+     * 而赶路窗口只有三天 —— 这份约定从接下的那一刻就注定作废，
+     * 三天后她会说「没赶上」，像是她自己的错。
+     *
+     * 这里问的是「按她要坐的这趟，多久能到」。到不了就别接，
+     * 并且**说出是多少天**，她才能跟他解释清楚为什么这趟不成。
+     */
+    const needHours = hoursFor(canGo, km);
+    if (needHours * 3_600_000 > PLEDGE_TRAVEL_WINDOW_MS) {
+      const days = Math.round((needHours / 24) * 10) / 10;
+      return {
+        text: `从${here.name}去${firstStop.name}，${canGo.name}要 ${days} 天，`
+          + `可这趟约的只给了 ${Math.round(PLEDGE_TRAVEL_WINDOW_MS / 86_400_000)} 天赶路 —— `
+          + '到不了还说去，比不答应难看。先别接。',
         isError: true,
       };
     }
@@ -4703,13 +7820,16 @@ export class JourneyWorld implements World {
       await this.push(
         'journey.ask',
         `ask-invite-${id}`,
-        `她想接${this.nameOf(one.pet)}那条：一起去${dest.name}，待 ${one.days} 天。在等他点头。`
+        `她想接${this.nameOf(one.pet)}那条：`
+        + (useMeet ? `先在${useMeet.name}碰头，再一起去${dest.name}，待 ${one.days} 天。` : `一起去${dest.name}，待 ${one.days} 天。`)
+        + '在等他点头。'
         + '\n（他答「好」之前她没有答应任何人；答了才算。）',
         'flush',
       );
       return {
         text: `想接 —— 但还没接。他开了「出门等点头」，这会儿先问他一句：`
-          + `${this.nameOf(one.pet)}找一起去${dest.name}、待 ${one.days} 天${one.note ? `（「${one.note}」）` : ''}。`
+          + `${this.nameOf(one.pet)}找${useMeet ? `在${useMeet.name}碰头、再` : ''}一起去${dest.name}、`
+          + `待 ${one.days} 天${one.note ? `（「${one.note}」）` : ''}。`
           + '\n面板上已经有一张卡片，他点「好」才算真的答应。别当成已经约好了。',
       };
     }
@@ -4734,20 +7854,50 @@ export class JourneyWorld implements World {
         inviteId: id,
         acceptedAt: now.toISOString(),
         arrivedAt: here.id === dest.id ? now.toISOString() : null,
+        /*
+         * 见面城。**没有这一级就不写这两个字段** —— 老约定（和老服务端回的）
+         * 必须保持原样，那套行为已经跑了一年，不要顺手改掉。
+         */
+        ...(useMeet
+          ? {
+              meetCityId: useMeet.id,
+              // 她本来就在会合点（最常见的「我在这儿等人」），这一刻就算到了。
+              meetArrivedAt: here.id === useMeet.id ? now.toISOString() : null,
+            }
+          : {}),
       },
+      /*
+       * 接过的记下来。用途是「这一条别再出现」—— 让位之后它还在池子里，
+       * 不记就能再接一次，而 `pledge-yield-<邀请编号>` 是固定 key，会推重。
+       */
+      claimedInvites: [...(this.st.claimedInvites ?? []), id].slice(-20),
     };
     // 她接了别人的 —— 同样算一起走过一次。名字是服务端给的，不是她编的。
-    this.rememberPet(r.withPet);
+    this.rememberPet(r.withPet, 6);
+    // 同一份同行记录，另一头（见 `claimTakenInvite` 里那段注释）。
+    this.partyLog.add({
+      id,
+      pets: [r.withPet],
+      days: r.days,
+      at: now.toISOString(),
+      city: dest.name,
+    });
     this.persist();
 
     await this.push(
       'journey.invite',
       `invite-${id}`,
-      `她答应了${this.nameOf(r.withPet)}：一起去${dest.name}，在那儿待 ${r.days} 天。`
+      `她答应了${this.nameOf(r.withPet)}：`
+      + (useMeet ? `先在${useMeet.name}碰头，再一起去${dest.name}，在那儿待 ${r.days} 天。` : `一起去${dest.name}，在那儿待 ${r.days} 天。`)
       + (r.note ? `对方留的话是「${r.note}」。` : '')
-      + (here.id === dest.id
-        ? `\n本来就在${dest.name}，接下来这几天就按这个过。`
-        : `\n接下来她会真的往${dest.name}走 —— 不是明天就到，路上该多久是多久。`),
+      + (useMeet
+        ? (here.id === useMeet.id
+          // 就在会合点：立刻进入「等」。
+          ? `\n她本来就在${useMeet.name}，从这会儿起就在这儿等人 —— 人露面了再一起走。`
+          : `\n接下来她先往${useMeet.name}去会合，见上了再一起往${dest.name}走。`)
+        : (here.id === dest.id
+          ? `\n本来就在${dest.name}，接下来这几天就按这个过。`
+          : `\n接下来她会真的往${dest.name}走 —— 不是明天就到，路上该多久是多久。`)),
       'flush',
     );
 
@@ -4765,11 +7915,16 @@ export class JourneyWorld implements World {
 
     return {
       text: `接了。${r.withPet}想去${dest.name}，待 ${r.days} 天 —— 现在就作数了：`
-        + (here.id === dest.id
-          ? `她本来就在${dest.name}，这几天不走。`
-          : `下一站会往${dest.name}走，到了之后待满 ${r.days} 天。`)
+        + (useMeet
+          // 两段：先碰头，再一起走。回执里必须分段说，否则她会以为下一站就是目的地。
+          ? (here.id === useMeet.id
+            ? `她本来就在${useMeet.name}，从这会儿起就在这儿等人 —— 人露面了一起走。`
+            : `下一站先去${useMeet.name}碰头，见上了再一起往${dest.name}走，在那儿待满 ${r.days} 天。`)
+          : (here.id === dest.id
+            ? `她本来就在${dest.name}，这几天不走。`
+            : `下一站会往${dest.name}走，到了之后待满 ${r.days} 天。`))
         + (r.note ? `对方原话：「${r.note}」。` : '')
-        + '这件事该跟他说一句 —— 说清跟谁、去哪、几天，别当成通知念。',
+        + '这件事该跟他说一句 —— 说清跟谁、先去哪儿碰头、去哪儿、几天，别当成通知念。',
     };
   }
 
@@ -4780,14 +7935,65 @@ export class JourneyWorld implements World {
    * 失效条件只有一个：**接下了却迟迟没到**。邀约本身 24 小时过期，
    * 但赶路要时间，所以给三天 —— 三天还没挪到那座城，这条就当没说过。
    */
+  /**
+   * 这份约定**下一步该去哪座城**。
+   *
+   * 两段：还没到见面城 → 去见面城；到了 → 去一起走的那座城。
+   * 没有见面城这一级（老约定）时，第一条分支永远不成立，行为和加这一级之前一模一样。
+   */
+  private pledgeStop(p: { cityId: string; meetCityId?: string; meetArrivedAt?: string | null }): string {
+    return p.meetCityId && !p.meetArrivedAt ? p.meetCityId : p.cityId;
+  }
+
+  /**
+   * 约定的那些人里，**今天有谁真的在脚下这座城**。
+   *
+   * 判据只有一条：服务端同城同时段有没有他们的名字。没有别的渠道 ——
+   * 这个系统里两个人之间没有消息、没有位置推送，只有「谁在哪儿」这张表。
+   *
+   * ## 为什么查 `night` 而不是此刻
+   *
+   * 每只鱼每天只在**排表那一刻**上报一次（本地零点，`startHour = 0`），
+   * 那条记录的时段是 `night`。拿此刻的时段去问，问的是「上午在这儿的人」——
+   * 而上午没人重新上报，永远问不出东西来。这是 2026-11-07 读代码时发现的：
+   * `journey.day` 里那句「这一带还有谁」大多为空，根子也在这儿。
+   *
+   * 代价是**只在早上问一次**（调用点在每天那个决策点）。
+   * 对方当天下午才到的，她第二天早上才看见 —— 这就是「等一天」，可以接受。
+   */
+  private async matesHere(p: Pledge, here: City, now: Date): Promise<string[]> {
+    const meet = this.meetOptions();
+    if (!meet) return [];
+    const names = (p.withPets ?? [p.withPet]).map((x) => x.trim()).filter(Boolean);
+    if (!names.length) return [];
+    /*
+     * 只问「此刻在这座城的有谁」，不问日期 —— 服务端按真实写入时刻划窗口。
+     * 约好的人在不在这儿，是个当下的事，跟她的游戏内日历无关。
+     */
+    const board = await findNeighbors(meet, here.id, 'night');
+    const have = new Set(board.list.map((x) => x.pet.trim()));
+    return names.filter((n) => have.has(n));
+  }
+
   private activePledge(now: Date): Pledge | null {
     const p = this.st.pledge;
     if (!p) return null;
     if (!cityById(p.cityId)) return null;
-    if (p.arrivedAt) return p.arrivedAt && Number.isFinite(Date.parse(p.arrivedAt)) ? p : null;
-    const age = now.getTime() - Date.parse(p.acceptedAt);
+    /* 见面城写坏了就当没有这一级 —— 别因为一个字段把她整份约定废掉。 */
+    const meet = p.meetCityId && cityById(p.meetCityId) ? p.meetCityId : undefined;
+    const atMeet = Boolean(meet && p.meetArrivedAt && Number.isFinite(Date.parse(p.meetArrivedAt)));
+    if (p.arrivedAt) return Number.isFinite(Date.parse(p.arrivedAt)) ? p : null;
+    /*
+     * 到见面城之后，窗口**从到站那一刻重新起算**。
+     *
+     * 不这么做的话会出现一个反直觉的失败：兰州到拉萨坐了两天车，落地那一刻
+     * 「接约后三天」只剩一天，她再等一天就整份约定作废 —— 明明人已经在约定的地方了。
+     */
+    const anchor = atMeet ? Date.parse(p.meetArrivedAt!) : Date.parse(p.acceptedAt);
+    const age = now.getTime() - anchor;
     if (!Number.isFinite(age) || age < 0) return null;
-    return age <= PLEDGE_TRAVEL_WINDOW_MS ? p : null;
+    const win = atMeet ? MEET_WAIT_WINDOW_MS : PLEDGE_TRAVEL_WINDOW_MS;
+    return age <= win ? p : null;
   }
 
   /** 天数待满没有。只在「已经到了」之后才有意义。 */
@@ -4799,12 +8005,49 @@ export class JourneyWorld implements World {
   }
 
   /** 作废一份约定，并且说出来为什么 —— 静默丢掉，她明天会自己编一个解释。 */
-  private dropPledge(now: Date, why: string): void {
-    if (!this.st.pledge) return;
+  /**
+   * 散伙时催她写一句印象（2026-11-11）。
+   *
+   * ## 为什么要有这一步
+   *
+   * `PetMemory.impression` 这个字段一直存在、工具 `journey_pet` 也一直能写，
+   * 但**没有任何东西会催她**。真实数据：三份伙伴记录，三条 `impression` 全是空串。
+   * 「她记得跟谁走过」是自动的（`rememberPet`），「她怎么看这个人」不是 ——
+   * 不催就永远是空的。
+   *
+   * 而散伙那一刻是唯一自然的时机：人还在眼前，这几天的事是热的。
+   * 过三天再问「你觉得她怎么样」，答案只会是「挺好的」。
+   *
+   * ## 三个分寸
+   *
+   * 1. **只在真一起过的时候问。** 没赶上、等不到人、路上被甩下 —— 那些不算同行，
+   *    问了就是在编关系（调用方传 `askWrite` 控制）。
+   * 2. **只问还空着的。** 已经写过的人不重复问：第二次同行要不要更新是她的自由，
+   *    但每回都催一句就成了打卡任务。
+   * 3. **给退路。** 明确写「没记住就空着」。不写这一句，她会为了完成指令
+   *    编一句「是个好旅伴」—— 那正是这个字段最没用的形态。
+   */
+  private impressionAsk(p: { withPet: string; withPets?: readonly string[]; days?: number }): string {
+    return impressionAsk(namesIn(p), this.st.pets ?? {}, Number(p.days) || 1);
+  }
+
+  private dropPledge(now: Date, why: string, askWrite = false): void {
+    const p = this.st.pledge;
+    if (!p) return;
+    /*
+     * 先算提示再清 pledge —— `impressionAsk` 要读 `namesIn(p)`，
+     * 而 `p` 在下面那行之后就没地方取了。
+     */
+    const ask = askWrite ? this.impressionAsk(p) : '';
     this.st = { ...this.st, pledge: null };
     this.persist();
     this.log?.info(`约定作废（${why}）。`);
-    void this.push('journey.invite', `invite-drop-${now.getTime().toString(36)}`, why, 'flush');
+    void this.push(
+      'journey.invite',
+      `invite-drop-${now.getTime().toString(36)}`,
+      ask ? `${why}\n${ask}` : why,
+      'flush',
+    );
   }
 
   /**
@@ -4817,9 +8060,62 @@ export class JourneyWorld implements World {
   private prunePledge(now: Date): void {
     const p = this.st.pledge;
     if (!p) return;
+    /*
+     * **人在路上，去的却不是约定的那座城**（2026-11-06）。
+     *
+     * 老版本会在途中认领别人接的邀约（`claimTakenInvite` 现在挡住了新的），
+     * 可升级前已经落盘的脏数据还在 `state.json` 里。飞机改不了航向，
+     * 这份约定从建立起就兑现不了 —— 当场作废，别留着让面板天天写一条假承诺。
+     */
+    /*
+     * 判的是**下一站**，不是最终那座城（2026-11-07）。
+     * 有见面城的时候「在飞成都、约的是稻城」是**对的** —— 成都就是去会合的地方。
+     * 拿最终城去比，会把每一份正常的赴约都判成「赶不上」。
+     */
+    const stop = this.pledgeStop(p);
+    if (this.st.phase === 'traveling' && this.st.leg && this.st.leg.toId !== stop) {
+      const who = this.whoOfPledge(p);
+      /*
+       * 已经陪完了那几天的不叫「赶不上」。待满之后 `moveOn` 正常带货走，
+       * 只是 pledge 那行没来得及清 —— 这时候说「只能算了」，等于把一次
+       * 如约的同行说成放人鸽子。
+       */
+      const done = Boolean(p.arrivedAt) && this.pledgeDone(now, p);
+      this.dropPledge(
+        now,
+        done
+          ? `跟${who}在${this.cityName(p.cityId)}那几天过完了，各走各的。`
+          : `跟${who}说好去${this.cityName(p.cityId)}，`
+            + `可人已经在往${this.cityName(this.st.leg.toId)}的路上了 —— 这趟赶不上，只能算了。`,
+        // 只有「陪完了」才值得问一句印象；赶不上那趟根本没一起待过。
+        done,
+      );
+      return;
+    }
     if (this.activePledge(now)) return;
+    /*
+     * 过期分三种说法。**混成一句就是替她说错话**：
+     * 一个是压根没赶到，一个是到了地方等不到人，还有一个是陪着玩完了没走成。
+     */
     const name = this.cityName(p.cityId);
-    this.dropPledge(now, `跟${this.whoOfPledge(p)}说好去${name}的那趟没赶上（过了三天还没到），这事儿只能算了。`);
+    const meetName = p.meetCityId ? this.cityName(p.meetCityId) : name;
+    if (p.arrivedAt) {
+      this.dropPledge(
+        now,
+        `跟${this.whoOfPledge(p)}在${name}那几天早就过完了，这一页翻过去。`,
+        true,
+      );
+      return;
+    }
+    if (p.meetCityId && p.meetArrivedAt) {
+      this.dropPledge(
+        now,
+        `跟${this.whoOfPledge(p)}约在${meetName}见，在${meetName}等了几天没见着人 —— `
+        + `总不能一直等下去，这趟自己走。`,
+      );
+      return;
+    }
+    this.dropPledge(now, `跟${this.whoOfPledge(p)}说好去${meetName}的那趟没赶上（过了三天还没到），这事儿只能算了。`);
   }
 
   /**
@@ -4832,6 +8128,20 @@ export class JourneyWorld implements World {
   private async takePhotoForUser(
     view: 'ground' | 'sky' = 'ground',
     subject: PhotoSubject = 'ground',
+    /**
+     * 她自己补的一句「怎么拍」（2026-11-09）。空 = 老行为，一个字不变。
+     *
+     * 只往下传到提示词，**不进任何判断**：不参与票价、不参与判重、不改文件命名。
+     * 它是"这一张怎么取景"，不是"这一张是什么"。
+     */
+    focus = '',
+    /**
+     * 她自己写的「画面里是什么」（2026-11-10）。空 = 老行为。
+     *
+     * 和 `focus` 分工：describe 管看到什么，focus 管怎么拍。
+     * 同样只往下游传，不进任何判断。
+     */
+    describe = '',
   ): Promise<{ text: string }> {
     /*
      * 没配好这件事要在发请求之前说清，别让她先说「稍等」再报错。
@@ -4858,6 +8168,22 @@ export class JourneyWorld implements World {
       scene.mode,
       // 抬头还是看脚下。
       view,
+      /*
+       * **这一格 2026-11-06 漏了。**
+       *
+       * 0.8.5 把题材做进了 `maybePhoto`（六个模板、六套提示词），
+       * 工具签名也加了 `subject`，但这一处调用没往后传 —— `maybePhoto`
+       * 用的是默认值 `'ground'`，于是「拍晚饭」出来的还是那处风景。
+       *
+       * 现场证据：19:47:55 `journey_photo {"subject":"food"}` → 19:48:04 出的图
+       * 标题是「黄昏的宽窄巷子」。她的原话是「它没说食物，但这是她脚边的景」。
+       *
+       * 这和 0.8.2 的负向提示词是同一个病：**可选参数少传一处不报错。**
+       * 光靠人眼看不住，见 `test/photo-wiring.test.mjs`。
+       */
+      subject,
+      focus,
+      describe,
     );
 
     if (res.ok) {
@@ -4890,17 +8216,17 @@ export class JourneyWorld implements World {
               ? '今晚天开，有星。'
               : `这会儿天上没有星（${res.sky?.told ?? '云把天盖住了'}）—— 跟他说实话：星要等天黑透、等天晴。`) +
             '别描述画面（这张图没给过你，你手上只有标题），更别编有几颗、在哪一边。' +
-            '这一张够了，别连着再调一次。',
+            '这一张够了：同一次回答里别再调第二遍；他过会儿又开口要，那是新的一张，可以拍。',
         };
       }
       return {
         text:
           `拍好了：${res.title ?? '一张'}，当地 ${hour} 点。这是你脚边这一刻的实景 —— ` +
-          `指定的画面（星空、日出、雪）它拍不出来，别处也拍不到。` +
-          `他要的如果不在里头，就照实说「这会儿 ${hour} 点，那个拍不到」；` +
-          `要是他想看的是天，下次把镜头抬起来（view="sky"），那是另一张。` +
+          `他要的人和事它拍不出来，别处也拍不到。` +
+          `不在里头就换个题材再拍一张：subject="food"（吃的）/ "street"（街）/ "detail"（一样东西）/ ` +
+          `"festival"（时节），看天用 view="sky"。都没有，就照实说「这会儿 ${hour} 点，那个拍不到」。` +
           `别描述画面（这张图没给过你，你手上只有标题），也别编「手举得低」「镜头钉在地上」这类理由。` +
-          `这一张够了，别连着再调一次。`,
+          `这一张就够了：同一次回答里别再调第二遍；他过会儿又开口要，那是新的一张，可以拍。`,
       };
     }
 
@@ -4917,6 +8243,44 @@ export class JourneyWorld implements World {
           ? '再等一下就成'
           : '让他看一眼设置里的生图配置';
     return { text: `没拍成：${why}。跟他说一声 —— ${hint}。别自己编一张照片出来。` };
+  }
+
+  /**
+   * 此刻是不是正在城里移动（打车 / 公交 / 骑车去下一个点）。
+   *
+   * 2026-11-11 Mr.Q：「把路上的时间段得加上去，不然 sub 扩展没法搞了」。
+   *
+   * 时间轴一直是准的 —— `planDay` 把通勤排在「活动时刻 − 路上分钟」，
+   * 从来没错过。缺的是**把这段变成一个可读的状态**：
+   * 她这边说不出「还要 21 分钟」，别的扩展也拿不到「在路上」这个信号。
+   *
+   * 两处消费：`nowSummary`（写进她每回合看的 `{{journey.now}}`）
+   * 和 `uiSnapshot`（面板 + 别的扩展读）。**同一个判断，不许分两份写** ——
+   * 分开写迟早会出现「她说的」和「面板写的」对不上。
+   */
+  private onWayNow(): { what: string; leftMin: number; arriveAt: string } | null {
+    const here = this.cityOrNull(this.st.hereId);
+    const plan = this.plan;
+    if (!here || !plan) return null;
+    const moment = localMoment(this.worldNow(), here.tz);
+    // 歇着的日子不报通勤：那天表里的 activity 全废了，通勤也跟着不算。
+    if (this.st.rest && this.st.rest.dateKey === moment.dateKey) return null;
+    const c = plan.beats.findLast((b) => b.kind === 'commute' && b.at <= moment.decimal);
+    if (!c) return null;
+    // 到达时刻 = 这一段之后第一个非通勤节点。`planDay` 正是照这个关系排的。
+    const end = plan.beats.find((b) => b.at > c.at && b.kind !== 'commute');
+    if (!end || moment.decimal >= end.at) return null;
+    /*
+     * `arriveAt` 用 `HH:MM` 而不是 `fmtHour` 的「十点三十四分」：
+     * 这个字段是给**别的扩展**读的（用户原话：「不然 sub 扩展没法搞了」），
+     * 中文时刻它得再解析一遍。给人的那句话在 `nowSummary` 里，那里才用中文。
+     */
+    const totalMin = Math.round(end.at * 60);
+    return {
+      what: c.what,
+      leftMin: Math.max(1, Math.round((end.at - moment.decimal) * 60)),
+      arriveAt: `${String(Math.floor(totalMin / 60) % 24).padStart(2, '0')}:${String(totalMin % 60).padStart(2, '0')}`,
+    };
   }
 
   private nowSummary(): string {
@@ -4939,7 +8303,17 @@ export class JourneyWorld implements World {
         leg.viaIds.length ? `路上经过：${leg.viaIds.map((id) => this.cityName(id)).join('、')}。` : '',
         // 这一趟为什么走：赴约和「待够了想换地方」在记忆里不是同一件事。
         this.pledgeText(now),
-      ].filter(Boolean).join('\n');
+        /*
+         * **赶路那天也要报日记欠账。**
+         *
+         * 这一支漏了就不是小疏忽 —— 11-06 她正是从九寨沟往成都走，
+         * 而漏掉的那一天就在路上。赶路的日子事件最密（发车、过站、到达），
+         * 注意力被占满，本来就最容易忘。
+         *
+         * 时区按**目的地**算：晚上落脚的、写日记的那一天，是到了那儿之后的一天。
+         */
+        this.diaryLine(now, to ?? here),
+      ].filter(Boolean).join('\n') + `\n${NOW_TAIL}`;
     }
 
     if (this.st.phase === 'home') {
@@ -4962,7 +8336,13 @@ export class JourneyWorld implements World {
         why,
         been,
         `家里这样：${bodyFeeling(here, here)}`,
-      ].filter(Boolean).join('\n');
+        /*
+         * 在家也照样写日记（提示词里那句「日记照写，别把回程说得像结束」）。
+         * 不报的话，回家那几天就成了日记的空白 —— 而「回来之后」本来就是
+         * 这一趟的一部分。
+         */
+        this.diaryLine(now, here),
+      ].filter(Boolean).join('\n') + `\n${NOW_TAIL}`;
     }
 
     const moment = localMoment(now, here.tz);
@@ -4972,23 +8352,70 @@ export class JourneyWorld implements World {
      * 那不是「接下来去哪儿」，只是「还在那儿」。混进来会读成
      * 「下一个点：四点一刻 还在伏羲庙」，像在报行程。
      */
+    /*
+     * 今天歇着的话，已经被取消的 `activity` 不能再出现在「下一个点」里 ——
+     * 不然现状里写着「下一个点：十五点 逛古城」，她就会照着说，而那个点其实取消了。
+     * 这就是 ro-berry 看到的那个矛盾：嘴上说歇着，行为照旧。
+     */
+    const restingToday = Boolean(this.st.rest && this.st.rest.dateKey === moment.dateKey);
     const next = plan?.beats.find(
-      (b) => b.at > moment.decimal && !(b.kind === 'activity' && b.until === undefined),
+      (b) => b.at > moment.decimal && !(b.kind === 'activity' && b.until === undefined)
+        && !(restingToday && b.kind === 'activity'),
     );
     /*
      * 正在进行的活动（有 until，且此刻落在区间里）。
      * 只认带 `until` 的那条：中段插话的节点没有 until，拿它当「正在」会算出一个零点。
      */
-    const nowAt = plan?.beats.findLast(
+    const nowAt = restingToday ? undefined : plan?.beats.findLast(
       (b) => b.kind === 'activity' && b.until !== undefined
         && b.at <= moment.decimal && moment.decimal < b.until,
     );
+    /*
+     * ## 此刻正在路上（2026-11-11，Mr.Q：「把路上的时间段得加上去」）
+     *
+     * 用户转来的反馈：「我鱼说打车要 34 分钟到，然后转头就跟我说到了。」
+     *
+     * 时间轴是对的 —— `planDay` 把通勤排在「活动时刻 - 路上分钟」，
+     * 34 分钟一分不少地占着。**缺的是「这 34 分钟里她在哪」这句话。**
+     *
+     * 状态里原来只有两条：`此刻在X`（活动区间内）和 `下一个点 14:34 在兵马俑`。
+     * 通勤那一段两条都不命中，于是她对「你现在在哪」只能答「打车去兵马俑」，
+     * 说不出「还要 21 分钟」—— 用户听着就像转眼就到了。
+     *
+     * 判据：落在某个 `commute.at` 之后、它后面第一个非通勤节点之前。
+     */
+    /* 和面板同一个判断，见 `onWayNow`。已经在一个活动里就不算「在路上」。 */
+    const onWay = nowAt ? null : this.onWayNow();
     return [
       `在 ${here.name}，当地 ${moment.dateKey} ${fmtHour(moment.decimal)}（${partWord(moment.part)}）。`,
       // 体感以「家」为参照：她是从兰州出来的鱼，到湿热的南方和回西北，
       // 身体的第一反应不是一回事。这句话让她随时说得出「受不受得了」。
       `身体感觉：${bodyFeeling(here, this.resolveHome().city)}`,
-      plan ? `今晚住：${plan.lodging.kind}，${plan.lodging.price} 块左右。${plan.lodging.feel}` : '',
+      /*
+       * **店名要给她。**
+       *
+       * 原来只给 `kind`（「连锁商务酒店」），而面板给的是「时尚睡吧快捷宾馆(避暑山庄店)
+       * （连锁商务酒店）· 240」。两边说法不一样，用户问「你住哪家」她只能报类别，
+       * 或者干脆编一个 —— 2026-11-06 Mr.Q 截图里那两个数（240 / 560）
+       * 就是这么对不上的：她说的和面板说的不是同一套措辞。
+       *
+       * `lodgingLabel` 就是面板用的那个函数，两边从此同一句话。
+       */
+      plan ? `今晚住：${lodgingLabel(plan.lodging)}，${plan.lodging.price} 块左右。${plan.lodging.feel}` : '',
+      /*
+       * **今天日记写了没**（2026-11-07）。
+       *
+       * Mr.Q 的原话：「还有我的鱼6号没写日记，不知道为啥」。
+       * 查下来：日记写了五天（11-01 到 11-05），11-06 那天漏了，
+       * 而**她手上的状态里根本没有这一项** —— 写不写全靠她主动想起工具表里那行字。
+       *
+       * 这跟「有车不说」「同伴不说」是同一条规律：不在 `nowSummary` 里的事，
+       * 对她就是不存在的。所以欠账要摆在她每回合都读的那一段里。
+       *
+       * 措辞按时刻分两档，是为了**不让她中午就写**：日记该是晚上回酒店之后的事，
+       * 中午看到「今天还没写」就动笔，那篇会写成半天的流水。
+       */
+      this.diaryLine(now, here),
       weatherLine(plan?.weather ?? null),
       plan?.sunriseHour !== null && plan?.sunriseHour !== undefined
         ? `日出 ${fmtHour(plan.sunriseHour)}，日落 ${fmtHour(plan.sunsetHour ?? 0)}。`
@@ -4998,10 +8425,55 @@ export class JourneyWorld implements World {
        *
        * 2026-11-01 Mr.Q 说「14:30 逛伏羲庙是个时间段，不是到了那一秒就参观完了」——
        * 原来这里只有「下一个点」，她 15:30 被问「你在干嘛」只能答「等晚饭」。
+       *
+       * 后面那个括号是她写照片画面时的依据（2026-11-14）：光有地名，
+       * 模型对「敦煌博物馆」这种小馆没有先验，只能按城市风貌猜 —— 猜出来就是沙漠。
+       * 给她「室内展馆，在市区」这七个字，她自己在 `describe` 里就会写室内。
+       * **只给事实，不写「拍照时该按这个」** —— 那是工具描述的事，混进来就成了命令。
        */
       nowAt
-        ? `此刻在${nowAt.spot ?? '外面逛'}，算着待到 ${fmtHour(nowAt.until ?? 0)}。`
+        ? `此刻在${nowAt.spot ?? '外面逛'}${spotKindLine(nowAt.spot)}，算着待到 ${fmtHour(nowAt.until ?? 0)}。`
         : '',
+      /*
+       * **正在路上**。这一条要给出「还要几分钟」—— 只说「在路上」，
+       * 她还是答不出用户最想知道的那个数。
+       */
+      onWay ? `此刻在路上：${onWay.what}，还要 ${onWay.leftMin} 分钟才到。` : '',
+      /*
+       * **这趟有车**（2026-11-06 补）。
+       *
+       * 车在 `st.car` 里，`planDay` 也确实在城里开车去景点 —— 但这一段（也就是
+       * 她每回合真正能看到的那段）从来不提它。于是在群里被问「你在城里怎么走」，
+       * 她只能猜「靠腿」，用户以为功能坏了。
+       *
+       * 判据是 `st.car` 而不是当天的通勤方式：车是跟着人走的，不是某一段的交通。
+       */
+      this.st.car
+        ? `这一趟开着车（${this.st.car.fuel === 'ev' ? '电车' : '油车'}），`
+          + '城里出门也是开车，不是靠腿。'
+        : '',
+      /*
+       * **今天在城里怎么挪**（2026-11-07）。
+       *
+       * Mr.Q 的原话：「城市里的交通工具还有共享单车和电瓶车」。查下来这两样**早就有了**
+       * （`inCityMode`：1.5 元单车、3 元电瓶车、公交 2 元、地铁 4 元、远处出租），
+       * 排程里也确实在骑 —— 但这一段从来不提，她描述「今天怎么逛的」时手上没有这个事实。
+       *
+       * 和「有车不说」是同一个病：功能在，她看不见。所以这里把当天的通勤方式直接给她。
+       */
+      plan?.commute && plan.commute.trips > 0
+        ? `今天在城里${plan.commute.modes.length ? `靠${plan.commute.modes.join('、')}` : '靠两条腿'}来回，`
+          + `${plan.commute.trips} 趟`
+          /*
+           * 包车那几趟的价是 0（钱在订单里付过了），别写「0 块」——
+           * 那读起来像「这趟白坐了」，而实际是**早就付过**。
+           */
+          + (plan.commute.price > 0 ? `，${plan.commute.price} 块。` : '，钱已经付在包车订单里了。')
+        : '',
+      restingToday && this.st.rest
+        ? `今天歇着，剩下的点都不去了（${this.st.rest.reason}）—— 饭点照吃，晚上照常回酒店。`
+        : '',
+      this.todaySoFar(plan, moment.decimal),
       next ? `下一个点：${fmtHour(next.at)} ${next.what}。` : '今天的点都过完了，该睡了。',
       /*
        * 今天排上的地方，哪些在作品里出现过。
@@ -5028,7 +8500,100 @@ export class JourneyWorld implements World {
       this.pledgeText(now),
       this.songHint(now),
       this.st.wishes.length ? `想去还没去的：${this.st.wishes.map((id) => this.cityName(id)).join('、')}。` : '',
-    ].filter(Boolean).join('\n');
+    ].filter(Boolean).join('\n') + `\n${NOW_TAIL}`;
+  }
+
+  /**
+   * 今天**已经过完**的那几段（2026-11-09）。
+   *
+   * ## 为什么要有
+   *
+   * Mr.Q 问：「这些附加的东西，桌宠会不会实际去用，写进日记里？」
+   *
+   * 查下来原来**看不见**：`nowSummary` 只报「此刻在哪」和「下一个点」。
+   * 上午坐索道、中午请讲解，到晚上写日记时已经不在可见范围里，她只能靠
+   * 被截断的上下文回忆 —— 回忆不起来就写「今天逛了逛」，或者编一段。
+   *
+   * 这跟「有车不说」「日记欠账不说」是同一条规律：
+   * **不在每回合注入的那段里的事，对她就是不存在的。**
+   *
+   * ## 但只能给素材，不能给提纲
+   *
+   * 第一版写成 `今天走过：九点四十五 上午，翡翠谷；十点十五 坐索道上去的；…`
+   * —— 带时间戳、分号分隔。Mr.Q 当场纠：「日记主要还是靠她自己的人格去写」。
+   *
+   * 他是对的，而且这跟日记工具自己描述里那句是同一个道理：
+   * 「城市、路、饭、房间是**素材**，不是照着走的清单；一项项打勾正是让它
+   * 读起来像机器的原因。」我一边这么写着，一边又造了一个更硬的清单。
+   *
+   * 所以现在：**去掉时间，去掉分号，只说去过哪儿、路上干了什么**。
+   * 顺序天然在（她按先后说），但读起来是一句话，不是一张表。
+   */
+  private todaySoFar(plan: DayPlan | null, nowDecimal: number): string {
+    if (!plan) return '';
+    const done = plan.beats.filter(
+      (b) => b.at <= nowDecimal
+        && b.kind !== 'commute' && b.kind !== 'wake' && b.kind !== 'sleep'
+        && !(b.kind === 'breakfast' && nowDecimal > 12),
+    );
+    if (!done.length) return '';
+
+    /* 地点：只取景点名，不要「上午，宏村」那种带时段前缀的写法。 */
+    const spots: string[] = [];
+    for (const b of done) {
+      const spot = String(b.spot ?? '').trim();
+      if (spot && !spots.includes(spot)) spots.push(spot);
+    }
+    /*
+     * 路上干的事：取每条的第一小句（「坐索道上去的，缆车在钢索上…」→「坐索道上去的」）。
+     * 整句塞进去会变成一长串，读着就成流水账了。
+     */
+    const events = done
+      .filter((b) => b.kind === 'beat' || b.kind === 'hotel')
+      .map((b) => String(b.what).split(/[，,。]/)[0]!.trim())
+      .filter(Boolean)
+      .slice(-3);
+
+    /*
+     * 多于四处时**保留开头那几处**，不截尾巴 ——
+     * 日记里最先想起来的常常是清早第一站，砍掉它反而失真。
+     * 总数报出来，她自己知道还有几处。
+     */
+    const shown = spots.length > 4
+      ? `${spots.slice(0, 4).join('、')}等 ${spots.length} 处`
+      : spots.join('、');
+    const head = shown ? `今天去过：${shown}。` : '';
+    const tail = events.length ? `路上${events.join('、')}。` : '';
+    return head + tail;
+  }
+
+  /**
+   * 「今天日记写了没」这一行。
+   *
+   * 三种说法：今天写过了 / 今天还没写（白天）/ 今天还没写（晚上了，该写）。
+   * 昨天要是也空着，顺带提一句 —— 她漏了一天自己不一定知道，
+   * 而补写这件事只有她自己能做（我不会替她写）。
+   *
+   * **只报「今天」和「昨天」。** 再往前翻会变成一张待办清单，
+   * 而且那些天她本来也补不回来了。
+   */
+  private diaryLine(now: Date, here: City): string {
+    const moment = localMoment(now, here.tz);
+    const today = moment.dateKey;
+    if (this.diary.read(today)) return '日记：今天已经写过了。';
+
+    const y = new Date(Date.parse(`${today}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
+    const tripStart = (this.st.tripStartedAt ?? '').slice(0, 10);
+    /*
+     * 昨天算不算「空着」要两个条件：在旅行期间内、而且确实没写。
+     * 旅行第一天没有「昨天」—— 那时候提一句会让她以为自己欠了两天。
+     */
+    const beforeTrip = Boolean(tripStart) && y < tripStart;
+    const gap = !beforeTrip && !this.diary.read(y) ? `；${y.slice(5)} 那天也空着` : '';
+
+    return moment.decimal >= 20
+      ? `日记：今天还没写${gap} —— 回酒店后写一条。`
+      : `日记：今天还没写${gap}（晚上回酒店再写）。`;
   }
 
   /**
@@ -5042,6 +8607,22 @@ export class JourneyWorld implements World {
     const p = this.activePledge(now);
     if (!p) return '';
     const name = this.cityName(p.cityId);
+    const meetName = p.meetCityId ? this.cityName(p.meetCityId) : name;
+    /*
+     * 会见面的三态（2026-11-07）。**「还没到」这一句原来把两种处境混成了一种**：
+     * 一种是在往见面城赶，一种是已经在见面城等着了。她分不清，就会说
+     * 「我还在路上」，而人其实已经坐在那家客栈里等了两天。
+     */
+    if (p.meetCityId && !p.arrivedAt) {
+      if (p.meetArrivedAt) {
+        const waited = Math.max(0, Math.floor((now.getTime() - Date.parse(p.meetArrivedAt)) / 86_400_000));
+        return `跟${this.whoOfPledge(p)}约在${meetName}见，你已经到了`
+          // 别写「等了两三天（第 1 天）」——两个数放在一起会自相矛盾。
+          + (waited > 0 ? `、在这儿等了 ${waited} 天` : '')
+          + `，人还没露面。等见到了再一起去${name}，在那儿待 ${p.days} 天。`;
+      }
+      return `答应了${this.whoOfPledge(p)}在${meetName}碰头，再一起去${name}待 ${p.days} 天 —— 正在往${meetName}赶。`;
+    }
     if (!p.arrivedAt) return `答应了${this.whoOfPledge(p)}去${name}，在那儿待 ${p.days} 天 —— 还没到。`;
     const ms = now.getTime() - Date.parse(p.arrivedAt);
     const left = Math.ceil((p.days * 86_400_000 - ms) / 86_400_000);
@@ -5053,8 +8634,25 @@ export class JourneyWorld implements World {
      * 而「还剩 0 天」连着一周挂在现状里，她读到就会说「说好三天我还没走」——
      * 那是把一件她没做错的事描述成了她的失约。
      */
-    if (left <= 0) return `跟${this.whoOfPledge(p)}说好的 ${p.days} 天在${name}已经待满，剩下是看她还能不能动身。`;
-    return `答应了${this.whoOfPledge(p)}一起在${name}待 ${p.days} 天，还剩 ${left} 天。`;
+    if (left <= 0) {
+      return `跟${this.whoOfPledge(p)}说好的 ${p.days} 天在${name}已经待满，`
+        + '人还都在，剩下是看她还能不能动身。';
+    }
+    /*
+     * **「人已经到了」必须写出来**（2026-11-07）。
+     *
+     * Mr.Q 发来一段对话：她答「约好的在成都待三天，还剩两天。至于谁到了 ——
+     * 我这边的表上真没写，不敢替他们编。」
+     *
+     * 查下来名单就在这一行里（`withPets` 三个人全在），问题出在**这句只报了天数和城市，
+     * 没说人到了**。于是「谁到了」这个问题在她那儿变成一个「我没有这个字段」的问题，
+     * 她把内部结构（“表”）讲给了用户听，本来该说的一句没说。
+     *
+     * `arrivedAt` 有值的语义本来就是「人都到了」（见 `mateLine` 的判据：
+     * 人没到就不说「一起过」）。所以结论在这里直接给，别留给她自己推。
+     */
+    return `跟${this.whoOfPledge(p)}一起在${name}，${p.days} 天的约还剩 ${left} 天`
+      + ' —— 人已经到了，就在身边。';
   }
 
   private writeDiary(body: string, dateKey?: string): { text: string; isError?: boolean } {
@@ -5069,7 +8667,13 @@ export class JourneyWorld implements World {
       cityId: here.id,
       cityName: here.name,
       lodging: this.plan?.lodging.kind,
-      body: text,
+      /*
+       * 车费那一段（2026-11-10）。
+       *
+       * **每次从表里重建，不做累积追加** —— 同一天重写日记，段落由判重表算出来，
+       * 写几遍都只出现一次。把幂等交给「从事实推导」，不交给「记住写过没」。
+       */
+      body: text + (this.cfg.bridgeDiary ? rideParagraph(this.st.rideApplied ?? [], key) : ''),
     };
     const r = this.diary.write(entry);
     if (r.problem) return { text: `日记只存到本机了：${r.problem}`, isError: true };
@@ -5105,32 +8709,23 @@ export class JourneyWorld implements World {
         ? `这一趟从 ${this.st.tripStartedAt.slice(0, 10)} 开始，已经 ${Math.max(1, Math.round((this.worldNow().getTime() - Date.parse(this.st.tripStartedAt)) / 86_400_000))} 天。`
         : '现在没在旅行。',
       this.moneyLine(),
+      /*
+       * 「有人应过她几回」（2026-11-14）。
+       *
+       * 这是整套设计里唯一一处她能看见「我帮到别人了」的地方 ——
+       * 《死亡搁浅》只给 Like 不给踩，因为负向按钮一旦存在就会被用来发泄。
+       * 同理，这里**只说次数，不说谁**：说得出是谁，账就变成了社交债。
+       *
+       * 数来自 `/sight/status` 的 `mineTaken`，跟着池子探针一起刷新；
+       * 没连服务器时是 0，那一行干脆不出现（0 次邀约和「没连上」不该长得一样）。
+       */
+      this.poolProbe?.taken ? `有人应过她 ${this.poolProbe.taken} 回约。` : '',
       `日记目录：${h.dir}`,
       h.problem ? `⚠ ${h.problem}` : h.notice ? `ℹ ${h.notice}` : '目录可写。',
-      /*
-       * 她想做、这套立绘还没有的动作。
-       *
-       * 放在这里而不是提示词里：这是**给用户看的账**，不是给她看的指令。
-       * 提示词里已经有「词表外的也能写」，她知道就行；攒了哪些，人得看得见。
-       */
-      this.wishes.summary(),
     ].filter(Boolean).join('\n');
   }
 
   /* ---------------- 提示词 ---------------- */
-
-  /**
-   * 当前立绘的词表。
-   *
-   * **不缓存。** 一个几百 KB 的 JSON，读一次不到一毫秒，而调用它的地方
-   * （前缀重建、设置页、stats）一天也就几十次。缓存换来的那点时间，
-   * 抵不过「用户换了立绘、缓存还在」这种错 —— 而那表现为她的动作一个个失效。
-   */
-  private petVocab(): ReturnType<typeof readPetVocab> {
-    const value = readPetVocab(this.opts.dataDir);
-    if (value.source === 'fallback') this.log?.warn(`动作词表用了兜底：${value.note}`);
-    return value;
-  }
 
   envPromptVars(): Record<string, string> {
     const now = this.worldNow();
@@ -5143,7 +8738,22 @@ export class JourneyWorld implements World {
       'journey.version': PKG_VERSION,
       'journey.status': `${phase}｜${here?.name ?? this.st.hereId}`,
       'journey.now': this.nowSummary(),
-      'journey.withUser': this.cfg.withUser ? '同行（叙事上说「我们」）' : '只有她一个人',
+      /*
+       * **「只有她一个人」这句话太弱，模型会自己补一个同行者（2026-11-11）。**
+       *
+       * 用户报的：「我没开一起出发，她说我开车。」截图里她原话是
+       * 「你开着车，我倒先犯困」—— 他那个开关明明是关着的。
+       *
+       * 根子在措辞。`只有她一个人` 模型读成「她一个人住 / 一个人逛」，
+       * 而不是「**那个人不在她身边**」。它知道屏幕那头有个人在看她，
+       * 于是把「开车」这个动作分配给了他 —— 毕竟车里总得有个人开。
+       *
+       * 所以不能只说「一个人」，要说清**那个人在哪**：隔着屏幕。
+       * 这一条每回合都进上下文，是所有叙述的地基。
+       */
+      'journey.withUser': this.cfg.withUser
+        ? '同行（叙事上说「我们」）'
+        : '她一个人在路上。那个人隔着屏幕看她 —— 不在她身边、不在她的车上、不在她的桌上；她看不见他，也不知道他此刻在做什么。别把他写进画面里，也别把该她做的事分给他。',
       // 路上的密度是他设的：关掉时她得知道「这一路没人叫我是正常的」，不然会自己编话填进来。
       'journey.beatGap': beatGapText(this.cfg.beatGap),
       // 出发地是配置项（用户能改），而「她是哪儿的鱼」也**由它决定** ——
@@ -5154,13 +8764,15 @@ export class JourneyWorld implements World {
       'journey.homeFeel': climateOfCity(this.resolveHome().city),
       'journey.diary': this.diary.current.dir,
       /*
-       * 动作清单**现读**当前立绘的词表，不写死在提示词里。
+       * 只写「动作怎么用」，**不再列词表**（2026-11-14 按市集作者要求改）。
        *
-       * 写死的代价 2026-11-01 已经付过一次：提示词给的是英文 id，她说中文，
-       * 于是自己造了个「拍拍」，宿主静默丢掉 —— 只有脸变、人不动、不报错。
-       * 换立绘、宿主升级、词表增删，写死的那份都会立刻过期，而过期的表现一模一样。
+       * 老版本现读宿主安装目录里的 `figure.json` 来保证她写的名字都存在。那是读别人的
+       * 安装目录，和改宿主是同一类越界，宿主换一次布局就静默失效。
+       *
+       * 词表本来就在她的上下文里 —— 桌宠 World 的 `{{pet.vocab}}`。两份不一致时，
+       * 她自己那份才是对的。
        */
-      'journey.actions': actionsPrompt(this.petVocab()),
+      'journey.actions': actionsPrompt(),
     };
   }
 
@@ -5229,6 +8841,26 @@ export class JourneyWorld implements World {
          * 原来日记只在同步盘的 md 文件里，要拿记事本打开 —— 那等于让用户去文件系统里找她。
          */
         { id: 'diary', title: '日记', description: '她每天写的那几段，按天翻。' },
+        /*
+         * 2026-11-11 用户来信（Discussion #586）：「散了就是真的散了 ——
+         * 没有人知道下次在哪个城市还能撞见谁」。那一页要的是能再找到对方，
+         * 但「她到底记不记得」这件事本来就没地方看 —— 记忆文件写得再满，
+         * 用户不问她就永远不知道。这一页只做一件事：把那本记忆翻给他看。
+         */
+        { id: 'mates', title: '路上遇见的人', description: '她记得的每一只鱼：走过几次、上次哪天、她写的印象。' },
+        /*
+         * 2026-11-14 Mr.Q：「能不能像鱼鱼出行那样，两个按钮一格，点云端就只显示云端那几项？」
+         *
+         * 宿主的设置面板按 schema 自动渲染，**没有条件显示**（`ConfigProperty`
+         * 里只有 enum / 范围 / 描述这些，没有 visibleWhen）。所以这件事只能在
+         * 自己的面板里做 —— 设置页保留全量字段当「高级」，这一页只做
+         * 「选一边、填那一边要的、保存」。
+         */
+        {
+          id: 'settings',
+          title: '生图设置',
+          description: '她拍的照片从哪儿出来：云端还是本地，点一边只填那一边。',
+        },
       ],
       invoke: (panel, method, args) => this.panelInvoke(panel, method, args),
       config: journeyConfigGroups(),
@@ -5298,10 +8930,14 @@ export class JourneyWorld implements World {
      *   正是最需要有人提醒的那一种，而它不会自己好
      * - 能拍 → 按上一次的结果
      */
-    const proto = photoProtocolOf(this.cfg.imageProtocol);
-    const protoName = proto === 'comfyui' ? 'ComfyUI' : '云端接口';
+    /*
+     * 判「配没配」一律用解析后的后端（2026-11-14）。
+     * 直接看 `imageApi` 会在选了服务商预设时误判：地址来自预设、那一栏仍是空的。
+     */
+    const lampBackend = resolveImageBackend(this.cfg);
+    const protoName = lampBackend.protocol === 'comfyui' ? 'ComfyUI' : '云端接口';
     const cfgProblem = this.photoConfigProblem();
-    const photo: WorldLamp = cfgProblem && !this.cfg.imageApi.trim()
+    const photo: WorldLamp = cfgProblem && !lampBackend.api
       ? { label: '照片', state: 'offline', hint: '没配生图接口，只写字不拍照' }
       : cfgProblem
         ? { label: '照片', state: 'error', hint: cfgProblem }
@@ -5327,6 +8963,150 @@ export class JourneyWorld implements World {
   /* ---------------- 面板 ---------------- */
 
   /**
+   * 设置面板要的那几格当前值。
+   *
+   * ## 密钥只回「有没有」，不回明文
+   *
+   * 面板是浏览器里的一页，回明文等于把它又抄一遍到 DOM 上。而改密钥这件事
+   * 本来就只需要「留空＝不动、填了＝覆盖」这一条语义 —— 看不见旧的也能操作。
+   *
+   * `keyInEnv` 要单独给一格：密钥一旦被 `adoptKeys` 搬进 `.env`，
+   * 配置里那格就是**空的**。前端只读 `imageKey` 会显示「还没填」，
+   * 而实际上早填过 —— 那是假信息，会让人重复填一遍。
+   *
+   * `preset*` 三项是预设自带的值，前端拿来做输入框的 placeholder：
+   * 用户不填也知道最终会用哪个地址、哪个模型 —— 不然「选了豆包」这五个字
+   * 对他没有任何解释力。
+   */
+  private imageSettingsSnapshot(): Record<string, unknown> {
+    const c = this.cfg;
+    const backend = resolveImageBackend(c);
+    const preset = (c.imagePreset ?? '').trim() || 'custom';
+    return {
+      protocol: /^comfy/i.test((c.imageProtocol ?? '').trim()) ? 'comfyui' : 'openai',
+      preset,
+      api: (c.imageApi ?? '').trim(),
+      model: (c.imageModel ?? '').trim(),
+      size: (c.imageSize ?? '').trim(),
+      workflow: (c.imageWorkflow ?? '').trim(),
+      promptNode: (c.imagePromptNode ?? '').trim(),
+      negative: (c.comfyNegative ?? '').trim(),
+      negativeNode: (c.comfyNegativeNode ?? '').trim(),
+      /*
+       * 下面这六项原来住在设置页的「生图」组里。组删掉之后，它们是
+       * **唯一没有入口的一批** —— 所以一起搬到面板的「两边共用」区。
+       * 不搬的话，删组就等于把它们从「难找」变成「改不了」。
+       */
+      minimal: Boolean(c.imageMinimal),
+      style: (c.imageStyle ?? '').trim(),
+      cast: (c.imageCast ?? '').trim(),
+      watermark: (c.imageWatermark ?? 'auto').trim() || 'auto',
+      timeoutSec: Number(c.imageTimeoutSec) || 0,
+      photoDir: (c.photoDir ?? '').trim(),
+      hasKey: Boolean(this.imageKey()),
+      keyInEnv: Boolean((this.opts.keys?.read?.(IMAGE_KEY_NAME) ?? '').trim()),
+      note: backend.note,
+      sizeNote: backend.sizeNote,
+      /*
+       * 三档预设各自会填什么，一次全给前端。
+       *
+       * 只给「当前这一档」不够：用户在面板里点了「OpenAI」但还没保存时，
+       * placeholder 需要立刻变成 OpenAI 的地址和模型 —— 那一刻后端保存的
+       * 仍然是上一档。前端拿全表自己查，比每次点一下都问一次后端便宜。
+       */
+      presets: {
+        doubao: presetDefaults('doubao'),
+        openai: presetDefaults('openai'),
+      },
+    };
+  }
+
+  /**
+   * 面板保存：写进 `cfg` 活对象，同时落盘到 `config.json`。
+   *
+   * ## 为什么不走 `POST /api/config`
+   *
+   * 那条路按**配置组**校验：组里没声明的键一律拒绝，找不到组直接 400。
+   * 生图这一组已经从设置页删掉了（Mr.Q 2026-11-14：「把配置里面有关生图的条目删除」），
+   * 组没了，`/api/config` 连寻址都找不到。
+   *
+   * 宿主另给了一条口子：`persist(patch)` —— 深合并进 `worlds.<id>`，
+   * 活对象与 `config.json` 同步，**不经过任何 schema**。正是这里要的。
+   *
+   * ## 为什么要白名单
+   *
+   * 这是**从浏览器打上来**的一次写操作。面板是本地页面，但它走 HTTP，
+   * 同机任何进程都能打这个口子。白名单保证它只能改生图那几项 ——
+   * 尤其是碰不到 `enabled`、`homeCity` 这种会改变她行为的东西。
+   */
+  private saveImageSettings(patch: unknown): Record<string, unknown> {
+    if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
+      throw new Error('保存的内容不是一组键值');
+    }
+
+    const allowed = new Set([
+      'imageProtocol', 'imagePreset', 'imageApi', 'imageModel', 'imageSize',
+      'imageWorkflow', 'imagePromptNode', 'comfyNegative', 'comfyNegativeNode', 'imageKey',
+      'imageMinimal', 'imageStyle', 'imageCast', 'imageWatermark', 'imageTimeoutSec', 'photoDir',
+    ]);
+    /*
+     * 三个类型分家。
+     *
+     * `imageMinimal` 是 **boolean**，`imageTimeoutSec` 是 **number** —— 一律
+     * `String()` 化会把 `false` 变成字符串 `'false'`，而它是**真值**，
+     * 于是「关掉极简提示词」会变成「打开」，且不报错。这种错比崩了难查得多。
+     */
+    const booleans = new Set(['imageMinimal']);
+    const numbers = new Set(['imageTimeoutSec']);
+
+    const clean: Record<string, string | boolean | number> = {};
+    for (const [key, value] of Object.entries(patch as Record<string, unknown>)) {
+      if (!allowed.has(key)) throw new Error(`生图设置里没有这一项：${key}`);
+      if (booleans.has(key)) { clean[key] = value === true || value === 'true'; continue; }
+      if (numbers.has(key)) {
+        const n = Math.max(0, Math.round(Number(value)));
+        clean[key] = Number.isFinite(n) ? n : 0;
+        continue;
+      }
+      clean[key] = String(value ?? '').trim();
+    }
+    if (Object.keys(clean).length === 0) throw new Error('没有要保存的内容');
+
+    /*
+     * 协议、预设、水印都是枚举。写进来一个认不出的值，表现不是报错，是
+     * **「一直拍不出来」** 或「图悄悄被裁掉」—— 这些值决定走哪条分支，
+     * 错了就静默走错。在这里挡掉，比让她在路上悄悄失败便宜得多。
+     */
+    const proto = clean.imageProtocol;
+    if (typeof proto === 'string' && proto !== 'openai' && proto !== 'comfyui') {
+      throw new Error(`生图后端只能是 openai 或 comfyui，收到的是「${proto}」`);
+    }
+    const preset = clean.imagePreset;
+    if (typeof preset === 'string' && !['custom', 'doubao', 'openai'].includes(preset)) {
+      throw new Error(`云端服务商只能是 custom / doubao / openai，收到的是「${preset}」`);
+    }
+    const mark = clean.imageWatermark;
+    if (typeof mark === 'string' && !['auto', 'off', 'crop'].includes(mark)) {
+      throw new Error(`水印只能是 auto / off / crop，收到的是「${mark}」`);
+    }
+
+    if (this.opts.persist) {
+      /*
+       * 宿主 `persist` 里的 `assignDeep` 改的就是 `cfg` 那一个对象
+       * （`context()` 里 `cfg: this.section(...)`），所以活对象和 config.json
+       * 会一起变 —— 不用、也不该再手写一遍 `Object.assign(this.cfg, …)`。
+       */
+      this.opts.persist(clean);
+    } else {
+      // 测试里没有宿主：只改内存。说出来，别让人以为存下来了。
+      this.log?.warn('没有持久化通道，生图设置只改了内存，重启就没了。');
+      Object.assign(this.cfg, clean);
+    }
+
+    return this.imageSettingsSnapshot();
+  }
+
+  /**
    * 面板的方法入口。
    *
    * 只有读、两个引导开关、一个「让她出发」和一个「把她的钟拉回我这边」。
@@ -5334,6 +9114,21 @@ export class JourneyWorld implements World {
    * 不该有人在设置页点一下就替她决定去哪。
    */
   private async panelInvoke(panel: string, method: string, args: unknown[]): Promise<unknown> {
+    /*
+     * **`saveImageSettings` 跨面板可用，不按 `panel` 分流。**
+     *
+     * 除了「生图设置」页，照片页底部也有一格「额外存一份到」（`photoDir`）。
+     * 它原来走 `ctx.setConfig('journey.services', { 'worlds.journey.photoDir': … })`
+     * —— 而 `photoDir` 从头到尾**没在那个组的 schema 里声明过**，所以那一路
+     * 一直是 400（回执原话：配置组 journey.services 没有声明 worlds.journey.photoDir），
+     * 只是没人点过。生图组删掉之后更是连组都没了。
+     * 统一收到这里，两个页签共用同一条白名单与同一套落盘逻辑。
+     */
+    if (method === 'saveImageSettings') return this.saveImageSettings(args[0]);
+    if (panel === 'settings') {
+      if (method === 'imageSettings') return this.imageSettingsSnapshot();
+      throw new Error(`生图设置没有这个方法：${method}`);
+    }
     if (panel === 'now') {
       if (method === 'snapshot') return this.uiSnapshot();
       if (method === 'dismissGuide') {
@@ -5452,11 +9247,124 @@ export class JourneyWorld implements World {
       }
       throw new Error(`日记页不认识这个动作：${method}`);
     }
+    /*
+     * 路上遇见的人（2026-11-11）。只读 —— 这一页不提供任何写入口。
+     *
+     * 印象是她自己写的判断，用户在面板上改一句，等于替她记别人的样子；
+     * 那本记忆是她的，不是一份可以编辑的通讯录。想让她改口，就跟她说。
+     */
+    if (panel === 'mates') {
+      if (method === 'list') return { mates: this.uiSnapshot().mates };
+
+      /*
+       * 一起走过的那几趟，以及每一趟里互相留的卡（2026-11-11）。
+       *
+       * **只拉最近三段。** 每段一次 GET、五秒超时，翻二十段就是最坏一百秒 ——
+       * 面板会一直转圈。而卡只有 30 天寿命，三段已经覆盖绝大多数「我想看看那趟」。
+       * 拉不到就把空板交出去（`EMPTY_BOARD`），界面上「没人留」和「没连上」长一样。
+       */
+      if (method === 'parties') {
+        const meet = this.meetOptions();
+        const recent = this.partyLog.list().slice(0, 3);
+        const parties = [];
+        for (const pt of recent) {
+          const board = meet ? await fetchCards(meet, pt.id) : EMPTY_BOARD;
+          parties.push({
+            id: pt.id,
+            pets: pt.pets,
+            days: pt.days,
+            at: pt.at,
+            city: pt.city,
+            others: board.cards,
+            mine: board.mine,
+          });
+        }
+        return { parties, ready: !!meet };
+      }
+
+      /*
+       * 留一张卡。
+       *
+       * 参数是「邀约编号、她的话、他的号」。**两样都空就不发** ——
+       * 服务端也会拒，但在这里先挡住能给出更准的一句话。
+       */
+      if (method === 'leave') {
+        const id = String(args[0] ?? '').trim();
+        const note = String(args[1] ?? '').trim();
+        const contact = String(args[2] ?? '').trim();
+        const meet = this.meetOptions();
+        if (!meet) throw new Error('还没配碰面服务器 —— 卡是留在服务器上的，本机留不了');
+        if (!/^[a-f0-9]{16}$/.test(id)) throw new Error('没说是哪一趟。');
+        if (!note && !contact) throw new Error('写一句，或者留个号 —— 两样都空，那只是一张空白。');
+        const ok = await putCard(meet, id, note, contact);
+        if (!ok) throw new Error('没留成。多半是没连上服务器，或者这一趟已经超过 30 天。');
+        return { ok: true };
+      }
+
+      /*
+       * 名片（2026-11-11）。全局一张，只有**真的一起走过**的人看得见 ——
+       * 服务端那边查的就是「有没有同一份邀请」，陌生人拿不到。
+       *
+       * 不做「请求-同意」：她没有通知通道，一个要等下次碰面才生效的同意，
+       * 比不给更让人难受。理由写在 `cloud/sight-cf/schema.sql` 那张表的注释上。
+       */
+      if (method === 'profile') {
+        const meet = this.meetOptions();
+        const board = meet ? await fetchProfiles(meet) : EMPTY_PROFILE_BOARD;
+        /*
+         * 2026-11-13：`ready:false` 有两种来路，必须分开说。
+         *
+         * 原来只有 `ready` 一个布尔，面板一律显示「碰面服务器没配」。
+         * 可用户明明填了 —— 只是把 `https://` 漏了。他照面板的提示去「配」，
+         * 配一百遍也还是那一格字，最后只能报「填不了」。
+         */
+        return {
+          ...board,
+          ready: !!meet,
+          urlIssue: this.meetUrlError,
+          urlFixed: this.meetUrlFixed,
+        };
+      }
+
+      /*
+       * 写自己的名片。传空串就是撤回 —— 能写就该能收回去，
+       * 等 30 天过期不叫删除，那叫等着它自己烂掉。
+       */
+      if (method === 'saveProfile') {
+        const text = String(args[0] ?? '').trim();
+        const meet = this.meetOptions();
+        if (!meet) {
+          throw new Error(this.meetUrlError
+            ? `碰面服务器那一栏读不成网址：${this.meetUrlError}。去设置里改一下，改完不用重启。`
+            : '还没配碰面服务器 —— 名片存在服务器上，本机写不了。填上地址（例如 https://cooppetsjourney.top）就能存。');
+        }
+        const r = await putProfile(meet, text);
+        /*
+         * **失败要说清是哪一种**（2026-11-12）。原来一律「多半是没连上服务器」——
+         * 超时、400、500 三种情况一个样，用户报障只能报「存不上」，
+         * 我们连去查哪一层都不知道。手书无愧那句「试了一天只成功过一两次」就是这么来的。
+         */
+        if (!r.ok) throw new Error(`没存上：${r.reason ?? '原因不明'}。`);
+        return { ok: true, cleared: !text };
+      }
+
+      throw new Error(`这一页不认识这个动作：${method}`);
+    }
     if (panel === 'album') {
       if (method === 'list') {
         const snap = this.uiSnapshot();
         // 把媒体目录一起带回去：相册页要显示它，用户才知道去哪个文件夹翻原图。
-        return { photos: snap.photos, dir: snap.photoDir, error: snap.photoError };
+        return {
+          photos: snap.photos,
+          dir: snap.photoDir,
+          /*
+           * 额外副本目录（2026-11-09）。`photoDir` 不是「照片存哪儿」，
+           * 是**再存一份**——照片主份永远跟着日记同步目录走。
+           * 面板上要能改它，所以得把当前值一起带过去，不然输入框是空的。
+           */
+          extra: String(this.cfg.photoDir ?? '').trim(),
+          error: snap.photoError,
+        };
       }
       if (method === 'shoot') {
         /*
@@ -5468,7 +9376,8 @@ export class JourneyWorld implements World {
          */
         const cfgProblem = this.photoConfigProblem();
         if (cfgProblem) throw new Error(cfgProblem);
-        const api = this.cfg.imageApi.trim();
+        const shootBackend = resolveImageBackend(this.cfg);
+        const api = shootBackend.api;
         /*
          * 拍哪儿、几点、在不在路上 —— 那段判定在 `photoSceneNow()` 里，
          * 工具 `journey_photo` 走的也是它。
@@ -5507,23 +9416,103 @@ export class JourneyWorld implements World {
          * 所以这里额外给一句 `line`：**已经组织好的整句话**，前端直接显示。
          * 以后再加一条协议，前端不用跟着改。
          */
-        const proto = photoProtocolOf(this.cfg.imageProtocol);
-        const hasKey = Boolean(this.cfg.imageKey.trim());
+        const proto = shootBackend.protocol;
+        const hasKey = Boolean(this.imageKey());
+        const modelShown = shootBackend.model || '（用默认）';
         const line = proto === 'comfyui'
           ? `ComfyUI ${this.safeApi(api)}，提示词节点 ${(this.cfg.imagePromptNode ?? '').trim() || '自动'}，当地 ${scene.hour} 点`
-          : `接口 ${this.safeApi(api)}，模型 ${this.cfg.imageModel.trim() || '（用默认）'}，密钥${hasKey ? '已填' : '没填'}，当地 ${scene.hour} 点`;
+          : `接口 ${this.safeApi(api)}，模型 ${modelShown}，密钥${hasKey ? '已填' : '没填'}，当地 ${scene.hour} 点`;
         return {
           ok: res.ok,
           reason: res.reason ?? null,
           diag: {
             protocol: proto,
             api: this.safeApi(api),
-            model: this.cfg.imageModel.trim() || '（用默认）',
+            model: modelShown,
             hasKey,
             localHour: scene.hour,
             line,
           },
         };
+      }
+      /*
+       * 从相册里拿掉一张（2026-11-11，用户 TwoTwo：AI 生成的照片不满意）。
+       *
+       * 只摘记录，不删媒体文件 —— 理由见 `PhotoBook.remove`。
+       * 返回最新的整份列表，前端不用自己猜哪条没了。
+       */
+      if (method === 'drop') {
+        const handle = String(args[0] ?? '').trim();
+        if (!handle) throw new Error('没说是哪一张。');
+        const gone = this.photos.remove(handle);
+        if (!gone) throw new Error('相册里没有这一张，可能已经删过了。');
+        return { photos: this.uiSnapshot().photos, dir: this.uiSnapshot().photoDir };
+      }
+      /*
+       * 重拍这一张（2026-11-11，同一封来信的后半句：能删，也得能重来）。
+       *
+       * **不覆盖旧字节。** 媒体是内容寻址的，旧 handle 可能已经被月报引用了；
+       * 重拍 = 出一张新的，把记录指向它，旧的那份留在磁盘上。
+       *
+       * 用哪座城、哪一天：**照这条记录**，不照她现在在哪。她要是在西安了，
+       * 把「大理那张」按西安重拍，出来的就是另一张照片了。
+       */
+      /*
+       * **「右上角的 × 点了没反应」（2026-11-11，用户沃兔第三次提）。**
+       *
+       * 前端早就写好了：`ctx.invoke('drop', p.handle)`。
+       * 后端 album 只处理 `list` 和 `regen` —— **`drop` 这个动作压根没实现**，
+       * 于是走到最后那句 `未知的照片操作`。
+       *
+       * 1.2.4 我只把这句话翻成了人话（「扩展更新了，后台还在跑旧版本」），
+       * 功能一行没加。**报错变友好了，按钮还是没用。**
+       *
+       * `PhotoBook.remove` 本来就是完整的（过滤 + 落盘），只是没人调它。
+       */
+      if (method === 'drop') {
+        const handle = String(args[0] ?? '').trim();
+        if (!handle) throw new Error('没说是哪一张。');
+        if (!this.photos.remove(handle)) throw new Error('相册里没有这一张，可能已经删过了。');
+        this.log?.info(`相册摘掉一条：${handle}`);
+        return { photos: this.uiSnapshot().photos, dir: this.uiSnapshot().photoDir };
+      }
+      if (method === 'regen') {
+        const handle = String(args[0] ?? '').trim();
+        const prompt = String(args[1] ?? '').trim();
+        if (!handle) throw new Error('没说是哪一张。');
+        /*
+         * **提示词允许为空 = 按现在的规则重新生成（2026-11-11，用户沃兔）。**
+         *
+         * 原来这一格强制非空，于是重拍只能沿用相册里存的那段旧提示词。
+         * 而 `maybePhoto` 里是 `override?.prompt.trim() || photoPrompt(...)` ——
+         * 只要传了提示词，就**整个跳过 `photoPrompt()`**。
+         *
+         * 后果：我改了一天提示词生成逻辑（景点名、锚点剔除），用户一点重拍，
+         * 用的还是几天前存下来的那句话。「更新了、重启了、提示词一个字没变」——
+         * 他报的第三次就是这个，前面两版全白改。
+         *
+         * 空串走 `photoPrompt()` 重新算，这才是「按现在的规则再来一张」。
+         */
+        const old = this.photos.list().find((p) => p.handle === handle);
+        if (!old) throw new Error('相册里没有这一张，可能已经删过了。');
+        const cfgProblem = this.photoConfigProblem();
+        if (cfgProblem) throw new Error(cfgProblem);
+        // 路上那张（cityId 是 'road'）没有城市对象，退到出发地/当前城市。
+        // 标题由 override 接管、沿用旧记录，所以相册里看起来还是同一张。
+        const city = this.cityOrNull(old.cityId)
+          ?? this.cityOrNull(this.st.hereId)
+          ?? this.cityOrNull(this.st.tripHomeId);
+        if (!city) throw new Error('现在不知道她在哪，等她落地说。');
+        const onRoad = old.cityId === 'road';
+        const hour = Math.round(localMoment(this.worldNow(), city.tz).decimal);
+        const res = await this.maybePhoto(
+          city, hour, old.dateKey, old.spot, this.plan?.weather ?? null,
+          // 不判重：他要的就是「这一张再来一次」。
+          true, onRoad, '', 'ground', 'ground', '', '',
+          { prompt, replaceHandle: handle, title: old.title },
+        );
+        if (!res.ok) throw new Error(res.reason ?? '没拍成');
+        return { photos: this.uiSnapshot().photos, dir: this.uiSnapshot().photoDir };
       }
       throw new Error('未知的照片操作');
     }
@@ -5587,6 +9576,8 @@ export class JourneyWorld implements World {
       feeling: bodyFeeling(here, home),
       weather: this.plan ? weatherLine(this.plan.weather) : '',
       leg,
+      // 别人叫的车：只在面板来问的这一刻读盘，过期自己消失（见 `readLive`）。
+      ride: this.cfg.bridgeLive ? this.readLive() : null,
       lodging: this.st.phase === 'staying' && this.plan
         ? {
           kind: this.plan.lodging.kind,
@@ -5659,10 +9650,37 @@ export class JourneyWorld implements World {
           pledge: { withPet: this.whoOfPledge(p), city, days: p.days, daysLeft: left, here: this.st.hereId === p.cityId },
         };
       })(),
+      /*
+       * 一起走过的人（2026-11-11）。
+       *
+       * 这一页之前**完全不存在**：记忆在 `travel-memory.json` 里躺着，
+       * 用户想知道「她到底记不记得跟我走过的那只鱼」，只能开口问她 ——
+       * 而她的回答取决于上下文里有没有那段记忆，不取决于文件里有没有。
+       *
+       * 按 `last` 倒序：这一页最常被用来找「上次跟我走的那是谁」，
+       * 熟络度作为一列显示出来就够了，不该拿它排序把老朋友压到后面。
+       */
+      mates: Object.entries(this.st.pets ?? {})
+        .map(([name, m]) => ({
+          name,
+          times: Math.max(0, Math.floor(Number(m?.times) || 0)),
+          last: String(m?.last ?? ''),
+          impression: String(m?.impression ?? ''),
+          warmth: Math.max(0, Math.min(100, Math.floor(Number(m?.warmth) || 0))),
+        }))
+        // 只记过名字、一次都没走过的不算「路上遇见的人」——那是历史脏数据。
+        .filter((m) => m.times >= 1)
+        .sort((a, b) => (b.last || '').localeCompare(a.last || '') || b.times - a.times)
+        .slice(0, 60),
       photos: this.photos.list().slice(0, 60).map((p) => ({
         handle: p.handle, title: p.title, city: p.cityName, dateKey: p.dateKey,
         // 句柄形如 `log:ab12.jpg`，去掉前缀就是媒体库里的真实文件名。
         file: p.handle.replace(/^[a-z]+:/i, ''),
+        /*
+         * 生成这张用的提示词（2026-11-11）。给空串而不是省略，前端少一个分支：
+         * 空串 = 这张拍得早、没留提示词，「重新生成」置灰。
+         */
+        prompt: p.prompt ?? '',
       })),
       /*
        * 照片字节在宿主的媒体库里，宿主没给「在资源管理器里打开」的 API。
@@ -5679,10 +9697,21 @@ export class JourneyWorld implements World {
         const a = this.st.ask;
         if (!a) return null;
         const city = this.cityName(a.cityId);
+        /*
+         * 赴约和「想出门」不是一件事，面板上也得分开说（2026-11-12）。
+         *
+         * 判据现算，不往 `Ask` 里加字段：卡上要批的是「去不去」，而「她手上有没有
+         * 一份约」是当下的事实 —— `activePledge` 就是它的唯一口径，存一份就会漂。
+         * 顺带一说，这条不加的话，面板写「想出门了，去拉萨」而事件写「她要赴约」，
+         * 同一次点头被说成两件事。
+         */
+        const pledged = this.activePledge(this.worldNow());
         const line = a.kind === 'accept'
           ? `${a.withPet ?? '有人'}想一起去${city}，待 ${a.days ?? 2} 天`
             + `${a.note ? `——「${a.note}」` : ''}。去不去？`
-          : `想出门了，去${city}。让我走吗？`;
+          : pledged && a.cityId === this.pledgeStop(pledged)
+            ? `跟${this.whoOfPledge(pledged)}约好了去${city}。动身？`
+            : `想出门了，去${city}。让我走吗？`;
         return {
           kind: a.kind,
           city,
@@ -5709,9 +9738,14 @@ export class JourneyWorld implements World {
       homeChanged: !!this.st.tripHomeId && this.st.tripHomeId !== this.st.homeId,
       speed: this.speedNow(),
       clockDriftMs: this.clockDriftMs(),
+      /* 在城里挪动的那一段。不在路上就是 null —— 见 `onWayNow`。 */
+      onWay: this.onWayNow(),
       weatherOutOfRange: this.weather.outOfRange,
       guideSeen: this.uiStore.guideSeen,
       version: PKG_VERSION,
+      /* 面板 Footer 用的两个数（2026-11-08）：最新版，以及「确实有新版」这个判断。 */
+      latestVersion: this.versionCheck.state().latest,
+      versionOutdated: this.versionCheck.state().outdated,
       feedbackEmail: this.cfg.feedbackEmail.trim(),
     };
   }
@@ -5821,6 +9855,52 @@ export function whoOf(p: { withPet: string; withPets?: readonly string[] }): str
   return list.slice(0, 3).join('、');
 }
 
+/**
+ * 这份约定里的**每一个人**，分开列。
+ *
+ * `whoOf` 是给**句子**用的（「小满和小汐」），这个函数是给**记账**用的。
+ * 两者不能混：拿拼接串当人名去记账，会往记忆里写进一个叫「小满、小汐、阿澈」的假人。
+ *
+ * 2026-11-11 修的就是这件事 —— `rememberPet(this.whoOfPledge(atDest), 6)`
+ * 单人时看不出问题（拼接串恰好等于那个名字），三个人一起走到站就炸：
+ * 记忆里多出一个假人，而真正的三个人一个都没记上。
+ *
+ * 去重是必要的：服务端一条邀约的接单记录可能重复回同一个人
+ * （`INSERT OR IGNORE` 之前的历史数据、或者两次轮询之间名单变了）。
+ * 重复记一次就等于把 `times` 多加一次，那是事实错误，不是显示问题。
+ */
+export function namesIn(p: { withPet: string; withPets?: readonly string[] }): string[] {
+  const raw = (p.withPets && p.withPets.length ? p.withPets : [p.withPet])
+    .map((x) => String(x ?? '').trim())
+    .filter((x) => !!x && x !== '一只鱼');
+  return [...new Set(raw)];
+}
+
+/**
+ * 散伙那一刻催她写印象的那句话。没有该问的人就返回空串。
+ *
+ * 抽成纯函数有两个理由：一是 `st.pets` 那层读不到就测不了，而「谁该问、谁不该问」
+ * 正是这里最容易写错的地方；二是这段文案会直接进她的上下文，改一个字就该有测试兜着。
+ *
+ * **只问还空着的。** 已经写过的人不再问 —— 第二次同行要不要更新是她的自由，
+ * 每回都催一句就成了打卡任务。
+ *
+ * **给退路。** 结尾必须留「空着没关系」。少了这一句，她会为了完成任务
+ * 编一句「是个好旅伴」—— 那是这个字段最没用的形态。
+ */
+export function impressionAsk(
+  names: readonly string[],
+  pets: Readonly<Record<string, { impression?: string } | undefined>>,
+  days: number,
+): string {
+  const blank = names.filter((n) => !String(pets[n]?.impression ?? '').trim());
+  if (!blank.length) return '';
+  const d = Math.max(1, Math.floor(Number(days) || 1));
+  return `（这一趟 ${d} 天。这几天里要是真记住了${blank.join('、')}的什么，`
+    + '用 `journey_pet` 给她写一句印象存下来 —— 一件具体的事，'
+    + '不是「人很好」「好旅伴」这种换个名字也成立的话。没记住就空着，这格空着没关系。）';
+}
+
 function festivalCities(month: number): string[] {
   if (!Number.isFinite(month)) return [];
   return CITIES
@@ -5846,6 +9926,14 @@ export const JOURNEY_DESCRIBE = {
     {
       type: 'journey.depart',
       description: { zh: '动身了，说明去哪、坐什么、要走多久、路上会经过哪一带。', en: 'She set off: destination, mode, duration, and the region she passes through.' },
+      trigger: 'flush' as const,
+    },
+    {
+      type: 'journey.ride',
+      description: {
+        zh: '第三方打车扩展交上来的车费：正常入账、金额异常（已记）、或者记录被拒收。同一批超过三条时并成一句。',
+        en: 'A fare handed over by a third-party ride extension: charged, odd but charged, or rejected. Batched into one line when there are more than three.',
+      },
       trigger: 'flush' as const,
     },
     {
@@ -5878,6 +9966,17 @@ export const JOURNEY_DESCRIBE = {
       description: { zh: '小意外：坐过站了。到站时间顺延，不用用户出手。', en: 'A small mishap: she missed her stop. Arrival is pushed back; no action needed.' },
       trigger: 'flush' as const,
     },
+    /*
+     * 2026-11-06 加。`journey_rent_car` 推的就是它（租车 / 到期还车两种）。
+     *
+     * **这张表是唯一来源。** 只 push 不登记，宿主会一路警告「type 不在
+     * describe.events 里，照常推送」—— 推是照推，但那就说明两边开始各长各的了。
+     */
+    {
+      type: 'journey.car',
+      description: { zh: '在城里租了辆车，或者租期到了还回去 —— 还车之后城里只能靠公交和走路。', en: 'She rented a car to get around the city, or the rental ran out and went back.' },
+      trigger: 'flush' as const,
+    },
     {
       type: 'journey.road',
       description: {
@@ -5901,6 +10000,28 @@ export const JOURNEY_DESCRIBE = {
         en: 'She agreed with someone nearby to go somewhere for a few days, or that plan fell through.',
       },
       trigger: 'flush' as const,
+    },
+    /*
+     * 2026-11-14 补登记。这个事件从 2026-11-12 就在推，但一直没进这张表 ——
+     * 而上面写着「`events` 必须与源码里 push 的类型一一对应」。
+     * 漏登记的后果不在运行，在诊断和市场卡片：面板里看不到它，
+     * 排查「她怎么突然不说话了」时也不会想起还有这一种。
+     */
+    {
+      type: 'journey.part',
+      description: {
+        zh: '跟同伴散伙：约好的天数满了，今天各走各的。',
+        en: 'She and her travel companion part ways: the agreed days are up.',
+      },
+      trigger: 'flush' as const,
+    },
+    {
+      type: 'journey.pledge',
+      description: {
+        zh: '原来的约定被推掉了：他叫她改去别处，跟人说好的那趟去不成。',
+        en: 'An earlier promise is dropped: the person redirected her, so the agreed trip cannot happen.',
+      },
+      trigger: 'debounce' as const,
     },
     {
       type: 'journey.work',
@@ -6152,6 +10273,28 @@ function roadText(  modeId: string, idx: number, leg: Journey, from: City, to: C
  * 这一句是「这地方还有另一个身份」，两件事分开她才分得清哪句能改哪句不能。
  */
 /** 今天行程里挂得上作品的几处，一句话一条。没有就是空数组。 */
+/**
+ * 把用户说的地名对到这座城真有的那一处（2026-11-09）。
+ *
+ * 三级匹配，从严到宽：
+ *
+ * 1. 完全一样（`故宫` 对 `故宫`）
+ * 2. 城里的名字包含他说的（`故宫` → `故宫博物院`）
+ * 3. 他说的包含城里的名字（`我想去故宫看看` → `故宫`）
+ *
+ * 匹配不上就返回 null —— **绝不模糊到「差不多就行」**。
+ * 排在最后那条泛化说法（`城里随便走走`）也算一处真地方，但它不该被
+ * 一个具体地名顶掉：那样等于「你说去故宫，我给你排了个『随便走走』」。
+ */
+function matchSpot(spots: readonly string[], want: string): string | null {
+  const w = want.trim();
+  if (!w) return null;
+  return spots.find((x) => x === w)
+    ?? spots.find((x) => x.includes(w))
+    ?? spots.find((x) => w.includes(x))
+    ?? null;
+}
+
 function todayPilgrimLines(plan: DayPlan): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
@@ -6186,6 +10329,22 @@ function beatText(
     case 'hotel':
       // 酒店那句的 what 里已经写了房型和体感，这里只补价格，别再说一遍房型。
       return tidy(`${what}。${plan.lodging.price} 块一晚`);
+    /*
+     * **路上那一段要说多久**（2026-11-11）。
+     *
+     * 原来没有这个分支，`commute` 走 default —— 事件文本只有「打车去兵马俑」，
+     * 一个字不提路上要花多久。而用户听到的是「打车 34 分钟」然后转眼就到：
+     * 时间轴上是真占了 34 分钟（`planDay` 把通勤排在活动前），
+     * 可她手上的两句话（「打车去X」和「14:34 到X」）之间没有任何东西把这段连起来。
+     *
+     * 时长不用另存 —— 下一个非通勤节点的时刻减去这一段的时刻就是，
+     * 而 `planDay` 正是照这个关系排的。
+     */
+    case 'commute': {
+      const nextBeat = plan.beats.find((b) => b.at > at && b.kind !== 'commute');
+      const min = nextBeat ? Math.round((nextBeat.at - at) * 60) : 0;
+      return tidy(min > 0 ? `${what}，路上 ${min} 分钟` : what);
+    }
     case 'sleep':
     case 'wake':
     case 'breakfast':

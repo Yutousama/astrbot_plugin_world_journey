@@ -200,6 +200,16 @@
 .jr-ask-row .jr-btn { margin-top: 12px; }
 .jr-ask-hint { margin: 10px 0 0 !important; font-size: 11.5px; color: var(--jr-soft); }
 
+/* ---------- 正在打车（第三方扩展交上来的那一张） ---------- */
+/*
+ * 用左侧竖线和一个更浅的底，跟上面的「她此刻」区分开 ——
+ * 这一段是别的扩展在说话，不是她自己的行程。混在一起读，会以为她在城际路上。
+ */
+.jr-ride { margin-top: 18px; padding: 12px 14px; border-left: 2px solid var(--jr-accent); border-radius: 0 10px 10px 0; background: var(--jr-line); }
+.jr-ride[hidden] { display: none; }
+.jr-ride > .jr-leg-top:first-child { margin-bottom: 4px; }
+.jr-ride > .jr-leg-top:first-child .jr-leg-mode { font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase; }
+
 /* ---------- 在路上 ---------- */
 .jr-leg { margin-top: 20px; }
 .jr-leg[hidden] { display: none; }
@@ -242,6 +252,47 @@
 /* ---------- 脚注 ---------- */
 .jr-foot { margin-top: 26px; padding-top: 14px; border-top: 1px solid var(--jr-line); font-size: 12px; color: var(--jr-soft); }
 .jr-foot p + p { margin-top: 4px !important; }
+/* 版本行（2026-11-08）：平时跟脚注一样淡；确认有新版时提亮一点，但不要像报错。 */
+/*
+ * 版本徽章（2026-11-08 从页脚挪到标题）。
+ *
+ * 它挂在 `.jr-eyebrow` 里，而那一行是 10px + `letter-spacing: .26em` +
+ * `text-transform: uppercase` —— 三条都会传染给 span，所以这里逐条覆盖。
+ * 不覆盖的话出来是「V 1 . 0 . 3」，字距大得像个编号。
+ */
+.jr-ver-tag {
+  margin-left: 10px;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  font-variant-numeric: tabular-nums;
+  color: var(--jr-soft);
+}
+/*
+ * 有新版：实心胶囊。
+ *
+ * 页脚那版是「灰字 + 换个颜色」，Mr.Q 说太不明显 —— 那是对的：
+ * 报障前要确认的第一个数，不该是整块面板上最弱的元素。
+ */
+.jr-ver-tag[data-new="1"] {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--jr-accent, #c06a35);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  vertical-align: 1px;
+}
+/* 深色模式下 accent 更亮，白字对比不够 —— 换成深色字。 */
+@media (prefers-color-scheme: dark) {
+  .jr-ver-tag[data-new="1"] { color: #201810; }
+}
+:root[style*="color-scheme: dark"] .jr-ver-tag[data-new="1"],
+:root[style*="color-scheme:dark"] .jr-ver-tag[data-new="1"] {
+  color: #201810;
+}
 .jr-linkbtn {
   margin-top: 10px;
   padding: 0;
@@ -286,6 +337,29 @@
   max-width: 100%;
   overflow-wrap: anywhere;
 }
+/*
+ * 改路径（2026-11-09）：点「改路径」之后这一行换成「标签 + 输入框 + 保存/取消」。
+ * `.jr-linkbtn` 自带 margin-top: 10px，在这条 flex 行里会把按钮顶歪，先清零。
+ */
+.jr-dir .jr-linkbtn { margin-top: 0; }
+.jr-dir-input {
+  flex: 1 1 320px;
+  min-width: 190px;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11px;
+  padding: 3px 7px;
+  border: 1px solid var(--jr-line);
+  border-radius: 6px;
+  background: var(--jr-card);
+  color: var(--jr-ink);
+}
+.jr-dir-input:focus { outline: none; border-color: var(--jr-accent); }
+/* 这一行里唯一该被看见的按钮 */
+.jr-linkbtn-on { color: var(--jr-accent); font-weight: 600; }
+/* 说明占满一行，放在按钮下面 —— 塞在行中间会把整条挤乱 */
+.jr-dir-tip { flex: 1 1 100%; font-size: 11px; line-height: 1.5; color: var(--jr-muted); }
+/* 「× 不删原图」那行。独占一行：它讲的是后果，不该挤在路径旁边当装饰。 */
+.jr-dir-note { flex: 1 1 100%; font-size: 11px; line-height: 1.55; color: var(--jr-muted); }
 /* 文件名：缩略图点不出原图，这个名字是唯一线索 */
 .jr-file {
   font-family: ui-monospace, Consolas, monospace;
@@ -306,6 +380,49 @@
   border-radius: 12px;
   overflow: hidden;
   background: var(--jr-card);
+  position: relative;
+}
+/*
+ * 「拿掉这一张」。
+ *
+ * 默认半透明浮在角上，hover 才实 —— 照片墙是给人看的，按钮不该抢戏；
+ * 但也不能藏到看不见（那和没有一样）。轻色面板上用深字压白底。
+ */
+.jr-photo-del {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--jr-ink);
+  background: rgba(255, 255, 255, .78);
+  opacity: .55;
+  transition: opacity .15s ease;
+}
+.jr-photo-del:hover, .jr-photo-del:focus-visible { opacity: 1; }
+.jr-photo-del:disabled { cursor: default; opacity: .3; }
+/*
+ * 二次确认态（2026-11-12，Mr.Q：「我害怕误点到图片删除」）。
+ *
+ * 平时是 22px 的圆点；点一下变成胶囊「确定删？」并转成警示色，
+ * 3 秒内再点才真的删。宽高从 22px 放开，才能把字放进去 ——
+ * 绝对定位在右上角，`right` 固定，所以它往左长，不会挤到缩略图的删除钩子。
+ */
+.jr-photo-del-armed {
+  width: auto;
+  min-width: 44px;
+  padding: 0 8px;
+  border-radius: 11px;
+  font-size: 12px;
+  color: #fff;
+  background: #c0392b;
+  opacity: 1;
 }
 .jr-photo img {
   display: block;
@@ -323,6 +440,71 @@
   color: var(--jr-soft);
 }
 .jr-photo figcaption b { color: var(--jr-ink); font-size: 12.5px; font-weight: 600; }
+
+/*
+ * 相册页那一段介绍（2026-11-11）。
+ *
+ * 三个动作（看提示词 / 按这段重拍 / 拿掉）光有按钮不够，得先说清各自会做什么、
+ * 不会做什么 —— 尤其「重拍不删旧图」和「× 只摘记录」，不说就会被当成删除。
+ */
+.jr-album-intro {
+  margin: 14px 0 0;
+  max-width: 62ch;
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--jr-soft);
+}
+
+/*
+ * 提示词折叠区。
+ *
+ * 相册是一天一张、一个月三十张，全摊开就成文档了；折起来只占一行，
+ * 点开能看能改能重拍。用 details 而不是自己写开关 —— 键盘和读屏都自带。
+ */
+.jr-prompt {
+  margin: 0 10px 10px;
+  padding-top: 6px;
+  border-top: 1px solid var(--jr-line);
+}
+.jr-prompt-sum {
+  padding: 2px 0;
+  font-size: 11.5px;
+  color: var(--jr-soft);
+  cursor: pointer;
+  list-style: none;
+}
+.jr-prompt-sum::-webkit-details-marker { display: none; }
+.jr-prompt-sum::before { content: '▸ '; }
+.jr-prompt[open] .jr-prompt-sum::before { content: '▾ '; }
+.jr-prompt-txt {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  margin: 6px 0;
+  padding: 6px 8px;
+  border: 1px solid var(--jr-line);
+  border-radius: 8px;
+  background: var(--jr-bg);
+  color: var(--jr-ink);
+  font: inherit;
+  font-size: 11.5px;
+  line-height: 1.55;
+  resize: vertical;
+}
+.jr-prompt-txt:disabled { opacity: .6; }
+.jr-prompt-go {
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--jr-line);
+  border-radius: 8px;
+  background: var(--jr-accent-soft);
+  color: var(--jr-ink);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.jr-prompt-go:hover:not(:disabled) { border-color: var(--jr-accent); }
+.jr-prompt-go:disabled { cursor: default; opacity: .45; }
 
 /* ---------- 天气 / 今晚 / 日出 ---------- */
 /*
@@ -541,4 +723,385 @@
   font-size: 11.5px;
   color: var(--jr-soft);
   word-break: break-all;
+}
+
+/*
+ * 「路上遇见的人」（2026-11-11，Discussion #586）。
+ *
+ * 一张卡一个人：名字和时间一行，熟络度一条细线，她写的印象在下面。
+ *
+ * 排成单列、限宽 68ch，不走网格 —— 这一页要读的是**句子**
+ * （她怎么想这个人），两列会把句子挤成窄条，读起来像名单。
+ */
+.jr-mates {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 16px;
+  max-width: 68ch;
+}
+.jr-mate {
+  padding: 12px 14px;
+  border: 1px solid var(--jr-line);
+  border-radius: 12px;
+  background: var(--jr-bg);
+}
+.jr-mate-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.jr-mate-name {
+  color: var(--jr-ink);
+  font-size: 14px;
+  font-weight: 600;
+}
+.jr-mate-meta {
+  color: var(--jr-soft);
+  font-size: 11.5px;
+  /* 数字用等宽位，几行并排时「走过 2 次」「走过 13 次」不会左右跳。 */
+  font-variant-numeric: tabular-nums;
+}
+.jr-mate-bar {
+  height: 3px;
+  margin: 9px 0 10px;
+  border-radius: 2px;
+  background: var(--jr-line);
+  overflow: hidden;
+}
+.jr-mate-fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--jr-accent);
+}
+.jr-mate-imp {
+  margin: 0;
+  color: var(--jr-ink);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+/* 没写印象时说「她还没写」，灰一档就够 —— 不要用斜体，那像一句旁白。 */
+.jr-mate-imp-empty { color: var(--jr-soft); }
+
+/*
+ * 一起走过的那几趟 + 同行卡（2026-11-11，Discussion #586）。
+ *
+ * 和上面「她记得谁」用同一套卡片语言，但多一层「这一段」的分组：
+ * 一趟一个框，框里先列别人留的，再是自己的那张。
+ */
+.jr-parties-title {
+  margin: 32px 0 0;
+  color: var(--jr-ink);
+  font-size: 15px;
+  font-weight: 600;
+}
+.jr-parties {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 14px;
+  max-width: 68ch;
+}
+.jr-party {
+  padding: 12px 14px;
+  border: 1px solid var(--jr-line);
+  border-radius: 12px;
+  background: var(--jr-bg);
+}
+.jr-party-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.jr-party-city { color: var(--jr-ink); font-size: 13.5px; font-weight: 600; }
+.jr-party-meta { color: var(--jr-soft); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+
+/*
+ * 一张卡。别人留的和自己留的用同一种框、不同的左边线 ——
+ * 用颜色区分「谁留的」比加标题省地方，也不会读成两个区域。
+ */
+.jr-card {
+  margin-top: 8px;
+  padding: 9px 11px;
+  border-radius: 9px;
+  background: var(--jr-accent-soft);
+}
+.jr-card-mine { background: transparent; border: 1px dashed var(--jr-line); }
+.jr-card-who { margin: 0 0 4px; color: var(--jr-soft); font-size: 11px; }
+.jr-card-note { margin: 0; color: var(--jr-ink); font-size: 12.5px; line-height: 1.6; }
+.jr-card-contact {
+  margin: 4px 0 0;
+  color: var(--jr-ink);
+  font-size: 12px;
+  /* 号里可能有下划线和数字，等宽位读起来不容易看错。 */
+  font-variant-numeric: tabular-nums;
+  word-break: break-all;
+}
+.jr-card-txt {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  border: 1px solid var(--jr-line);
+  border-radius: 8px;
+  background: var(--jr-bg);
+  color: var(--jr-ink);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.55;
+  resize: vertical;
+}
+.jr-card-go {
+  width: 100%;
+  margin-top: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--jr-line);
+  border-radius: 8px;
+  background: var(--jr-bg);
+  color: var(--jr-ink);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.jr-card-go:hover:not(:disabled) { border-color: var(--jr-accent); }
+.jr-card-go:disabled { cursor: default; opacity: .45; }
+.jr-card-tip { margin: 6px 0 0; color: var(--jr-soft); font-size: 11px; line-height: 1.5; }
+
+/* 名片块（2026-11-11）。比卡片松一点 —— 这一页最上面那块，得让人愿意写。 */
+.jr-profile {
+  margin-top: 22px;
+  max-width: 68ch;
+}
+.jr-profile-hint {
+  margin: 8px 0 0;
+  color: var(--jr-soft);
+  font-size: 12px;
+  line-height: 1.65;
+}
+.jr-profiles {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 18px;
+  max-width: 68ch;
+}
+
+/* ---------------- 设置页：生图的云端 / 本地（2026-11-14） ---------------- */
+
+/*
+ * 为什么这页的控件是手搓的、不复用上面那套卡片
+ *
+ * 上面那套是给「读」用的（时间、天气、照片），字号和行距都偏松。
+ * 这一页是给「填」用的：一行一项、标签窄、输入框撑满，眼睛要能竖着往下扫，
+ * 而不是横着读句子。所以标签固定 96px，值占剩下的全部。
+ */
+.jr-set-h1 {
+  margin: 2px 0 6px;
+  font-size: 19px;
+  letter-spacing: .01em;
+}
+.jr-set-intro {
+  margin: 0 0 18px;
+  color: var(--jr-soft);
+  font-size: 12.5px;
+  line-height: 1.7;
+  max-width: 62ch;
+}
+
+/* 两个按钮一格。选中那个用赤陶描边 —— 和「她此刻」的强调色一致，不引入新颜色。 */
+.jr-set-seg {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+.jr-set-seg-btn {
+  flex: 1;
+  padding: 9px 12px;
+  border: 1px solid var(--jr-line);
+  border-radius: 9px;
+  background: var(--jr-card);
+  color: var(--jr-soft);
+  font-size: 13px;
+  font-weight: 600;
+  transition: border-color .15s, color .15s, background .15s;
+}
+.jr-set-seg-btn:hover {
+  border-color: var(--jr-accent);
+  color: var(--jr-accent);
+}
+.jr-set-seg-btn.on {
+  border-color: var(--jr-accent);
+  background: var(--jr-accent-soft);
+  color: var(--jr-accent);
+  box-shadow: 0 1px 4px rgba(120, 80, 40, .08);
+}
+
+.jr-set-side {
+  margin: 0 0 10px;
+  color: var(--jr-soft);
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+/* 一行：标签 / 输入 / 小字。第 2 列留给值和说明。 */
+.jr-set-row {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  gap: 4px 12px;
+  align-items: center;
+  padding: 8px 0;
+  border-top: 1px dashed var(--jr-line);
+}
+.jr-set-k {
+  color: var(--jr-soft);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.jr-set-v {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--jr-line);
+  border-radius: 8px;
+  background: var(--jr-card);
+  color: var(--jr-ink);
+  font: inherit;
+  font-size: 13px;
+}
+.jr-set-v::placeholder {
+  color: var(--jr-soft);
+  opacity: .72;
+}
+.jr-set-v:focus {
+  outline: none;
+  border-color: var(--jr-accent);
+  box-shadow: 0 0 0 3px var(--jr-accent-soft);
+}
+.jr-set-hint {
+  grid-column: 2;
+  margin-top: -2px;
+  color: var(--jr-soft);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+.jr-set-keybox {
+  grid-column: 2;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+}
+.jr-set-keybox .jr-set-v {
+  flex: 1;
+  min-width: 0;
+}
+.jr-set-keybox .jr-btn {
+  flex: none;
+  white-space: nowrap;
+}
+
+/* 预设三个小胶囊。比下拉少一次点击，而且三个选项一眼全看见。 */
+.jr-set-chips {
+  grid-column: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.jr-set-chip {
+  padding: 5px 11px;
+  border: 1px solid var(--jr-line);
+  border-radius: 999px;
+  background: var(--jr-card);
+  color: var(--jr-soft);
+  font-size: 12px;
+  transition: border-color .15s, color .15s, background .15s;
+}
+.jr-set-chip:hover {
+  border-color: var(--jr-accent);
+  color: var(--jr-accent);
+}
+.jr-set-chip.on {
+  border-color: var(--jr-accent);
+  background: var(--jr-accent-soft);
+  color: var(--jr-accent);
+  font-weight: 600;
+}
+
+/* 「现在连的是」—— 这一行是这一页唯一的反馈，别做得太轻。 */
+.jr-set-note {
+  margin: 16px 0 0;
+  padding: 9px 12px;
+  border-left: 2px solid var(--jr-accent);
+  background: var(--jr-accent-soft);
+  border-radius: 0 8px 8px 0;
+  color: var(--jr-ink);
+  font-size: 12px;
+  line-height: 1.6;
+  word-break: break-all;
+}
+.jr-set-note b {
+  color: var(--jr-accent);
+  font-weight: 600;
+}
+.jr-set-warn {
+  color: var(--jr-accent);
+}
+
+.jr-set-foot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+}
+.jr-set-status {
+  color: var(--jr-soft);
+  font-size: 12px;
+}
+.jr-set-more {
+  margin: 20px 0 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--jr-line);
+  color: var(--jr-soft);
+  font-size: 11.5px;
+  line-height: 1.65;
+}
+
+/* 窄屏：标签跑到上面一行去，别再挤成 96px。 */
+@media (max-width: 560px) {
+  .jr-set-row {
+    grid-template-columns: 1fr;
+    gap: 5px;
+  }
+  .jr-set-hint,
+  .jr-set-keybox,
+  .jr-set-chips {
+    grid-column: 1;
+  }
+  .jr-set-h1 {
+    font-size: 17px;
+  }
+}
+
+/* 「两边共用」那一区（2026-11-14）。跟着设置页一起上线，和上面同一套变量。 */
+.jr-set-other {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--jr-line);
+}
+.jr-set-h2 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--jr-accent);
+  letter-spacing: .06em;
+}
+.jr-set-check {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--jr-accent);
+  cursor: pointer;
 }

@@ -45,6 +45,16 @@ export interface RawModule {
     botName: string;
     now?: () => Date;
     nowPlaying?: () => { title: string; artist: string; at: number } | null;
+    /**
+     * 上游 1.6.19 起可选的密钥端口（`ctx.secret` / `ctx.storeSecret`）。
+     * **套壳故意不传**，也故意不传下面的 `persist`：上游 `adoptKeys()` 第一句是
+     * `if (!ports) return`，不传就完全不发生「把 amapKey/imageKey 搬进部署 `.env`
+     * 并清空配置」这件事。AstrBot 场景没有那套密钥落盘约定，高德 key 与生图 key
+     * 本来就由插件配置表单写进 `engine-config.json`，被上游抹掉反而没人能改回来。
+     * 上游若哪天把这两个参数变成必需，`assertRawWorldShape` 或 typecheck 会先报。
+     */
+    keys?: { read?(name: string): string; write?(name: string, value: string): void };
+    persist?: (patch: { amapKey?: string; imageKey?: string }) => void;
   }) => JourneyWorldType;
   readonly JOURNEY_DEFAULTS: () => JourneyConfigSection;
   readonly JOURNEY_ID: string;

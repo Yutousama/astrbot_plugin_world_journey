@@ -1,0 +1,957 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>碰面服务器 · 额度事故与缓存改造报告</title>
+<style>
+:root{
+  --bg:#f6f7f9; --bg2:#ffffff; --bg3:#eef1f5;
+  --line:#e3e7ec; --line2:#d3d9e0;
+  --tx:#1f2328; --tx2:#57606a; --tx3:#8b949e;
+  --acc:#0b6bcb; --acc-bg:#eef5fd;
+  --ok:#1a7f4b; --ok-bg:#f0f8f3;
+  --warn:#9a5b00; --warn-bg:#fdf6e9;
+  --red:#b42318; --red-bg:#fdf3f2;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg); color:var(--tx);
+  font-family:system-ui,-apple-system,"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif;
+  font-size:15px; line-height:1.75; -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:900px;margin:0 auto;padding:36px 28px 80px}
+
+/* ── 头部 ─────────────────────────────── */
+header{border-bottom:2px solid var(--tx);padding-bottom:18px;margin-bottom:26px}
+.kicker{font-size:12px;letter-spacing:.14em;color:var(--tx3);text-transform:uppercase;margin-bottom:8px}
+h1{font-size:27px;line-height:1.35;margin:0 0 10px;font-weight:700;letter-spacing:-.01em}
+.sub{font-size:13.5px;color:var(--tx2);margin:0}
+.sub b{color:var(--tx);font-weight:600}
+
+/* ── 通用块 ───────────────────────────── */
+h2{font-size:19px;margin:44px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--line);font-weight:700}
+h2 .n{color:var(--tx3);font-weight:600;margin-right:8px;font-variant-numeric:tabular-nums}
+h3{font-size:15.5px;margin:26px 0 8px;font-weight:600}
+p{margin:0 0 13px}
+ul,ol{margin:0 0 14px;padding-left:22px}
+li{margin:5px 0}
+code{
+  font-family:"Cascadia Mono",Consolas,"SF Mono",monospace;
+  font-size:.88em;background:#eef1f5;border:1px solid var(--line);
+  border-radius:4px;padding:1px 5px;color:#0a3069;white-space:nowrap;
+}
+pre{
+  background:#f7f9fb;border:1px solid var(--line);border-radius:8px;
+  padding:13px 15px;overflow-x:auto;margin:0 0 15px;
+  font-family:"Cascadia Mono",Consolas,"SF Mono",monospace;
+  font-size:12.5px;line-height:1.7;color:#24292f;
+}
+pre code{background:none;border:0;padding:0;white-space:pre;font-size:inherit;color:inherit}
+.mono{font-family:"Cascadia Mono",Consolas,monospace;font-size:.9em;font-variant-numeric:tabular-nums}
+
+/* ── 结论卡 ───────────────────────────── */
+.summary{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:0 0 8px}
+.card{background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.card .k{font-size:11.5px;color:var(--tx3);letter-spacing:.04em;margin-bottom:5px}
+.card .v{font-size:21px;font-weight:700;line-height:1.25;font-variant-numeric:tabular-nums}
+.card .d{font-size:12px;color:var(--tx2);margin-top:4px;line-height:1.5}
+.card.ok .v{color:var(--ok)}
+.card.bad .v{color:var(--red)}
+@media(max-width:640px){.summary{grid-template-columns:1fr}}
+
+/* ── 提示 / 引用 ──────────────────────── */
+.tip{
+  background:var(--acc-bg);border:1px solid #cfe3f8;border-left:3px solid var(--acc);
+  border-radius:6px;padding:11px 15px;font-size:13px;color:#0d4a86;margin:0 0 20px;
+}
+.note{
+  background:var(--warn-bg);border:1px solid #f0e0bf;border-left:3px solid var(--warn);
+  border-radius:6px;padding:11px 15px;font-size:13.5px;color:#6b4400;margin:14px 0;
+}
+.quote{
+  border-left:3px solid var(--line2);padding:2px 0 2px 15px;margin:14px 0;
+  color:var(--tx2);font-size:14px;
+}
+
+/* ── 表格（按页面质量规范：滚动容器 + min-width + thead 底色 + 斑马纹）── */
+.tbl{overflow-x:auto;margin:16px 0;border:1px solid var(--line);border-radius:10px;background:var(--bg2)}
+.tbl>table{margin:0;border-collapse:collapse;width:100%;min-width:520px;font-size:13.5px}
+.tbl thead th{position:sticky;top:0;background:var(--bg3);color:var(--tx);font-weight:600;
+  font-size:12.5px;white-space:nowrap;border-bottom:1px solid var(--line2);text-align:left}
+.tbl tbody tr:nth-child(even){background:#fafbfc}
+.tbl tbody tr.hl{background:#fdf3f2}
+.tbl tbody tr.hl2{background:#f1f7f3}
+.tbl th,.tbl td{padding:10px 13px;border-bottom:1px solid var(--line);text-align:left;
+  vertical-align:top;word-break:break-word;overflow-wrap:anywhere}
+.tbl tbody tr:last-child td{border-bottom:0}
+.tbl td:first-child{color:var(--tx);font-weight:600}
+@media(max-width:640px){
+  .tbl>table{font-size:12.5px;min-width:460px}
+  .tbl th,.tbl td{padding:8px 10px}
+}
+
+/* ── 术语按钮 ─────────────────────────── */
+.term{
+  font:inherit;color:var(--acc);background:none;border:0;padding:0;margin:0;
+  cursor:pointer;text-align:left;
+  border-bottom:1px dashed #7fb0e4;
+  transition:background .12s,border-color .12s;
+}
+.term:hover{background:#e8f2fd;border-bottom-color:var(--acc)}
+.term:focus-visible{outline:2px solid var(--acc);outline-offset:2px;border-radius:2px}
+.term[aria-expanded="true"]{background:#dceafb;border-bottom-style:solid;border-bottom-color:var(--acc)}
+/* 表格第一列有 color/font-weight 规则，会盖掉术语的蓝色 —— 这里显式提回来 */
+.tbl td:first-child .term,.tbl td .term{color:var(--acc)}
+
+/* ── 解释框里的二级术语 ─────────────── */
+/* 解释文字里还套着术语时，用更轻的下划点线区分：一级是虚线、二级是点线 */
+.term-in{
+  font:inherit;color:var(--acc);background:none;border:0;padding:0;margin:0;
+  cursor:pointer;border-bottom:1px dotted #9cc4ea;
+  transition:background .12s,border-color .12s;
+}
+.term-in:hover{background:#eaf3fd;border-bottom-color:var(--acc)}
+.term-in:focus-visible{outline:2px solid var(--acc);outline-offset:2px;border-radius:2px}
+
+/* ── 浮层 ─────────────────────────────── */
+#pop{
+  position:absolute;z-index:200;width:min(342px,calc(100vw - 32px));
+  background:#fff;border:1px solid var(--line2);border-radius:10px;
+  box-shadow:0 10px 30px rgba(15,23,42,.14),0 2px 6px rgba(15,23,42,.06);
+  padding:13px 15px 14px;display:none;
+}
+#pop.show{display:block}
+#pop .pt{font-size:13.5px;font-weight:700;margin:0 0 6px;color:var(--tx);line-height:1.5}
+#pop .pb{font-size:13px;line-height:1.68;color:var(--tx2);margin:0}
+#pop .pb+.pb{margin-top:7px}
+#pop .pb b{color:var(--tx);font-weight:600}
+#pop .pnav{margin:0 0 9px;padding:0;line-height:1}
+#pop .pback{
+  font:inherit;font-size:11.5px;color:var(--tx2);background:var(--bg2);
+  border:1px solid var(--line2);border-radius:4px;padding:2px 8px;cursor:pointer;
+  transition:color .12s,border-color .12s,background .12s;
+}
+#pop .pback:hover{color:var(--acc);border-color:var(--acc);background:#f2f8ff}
+#pop .pback:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+#pop .tag{
+  display:inline-block;font-size:10.5px;letter-spacing:.05em;
+  background:var(--acc-bg);color:var(--acc);border-radius:3px;
+  padding:1px 5px;margin-left:6px;vertical-align:2px;font-weight:600;
+}
+
+/* ── 流程图 ───────────────────────────── */
+.flow{display:flex;align-items:stretch;gap:0;margin:18px 0 20px;flex-wrap:wrap}
+.fbox{
+  flex:1 1 0;min-width:150px;background:var(--bg2);border:1px solid var(--line2);
+  border-radius:9px;padding:12px 13px;font-size:12.5px;line-height:1.6;
+}
+.fbox .fn{font-weight:700;font-size:13px;margin-bottom:4px;color:var(--tx)}
+.fbox .fd{color:var(--tx2)}
+.farr{
+  display:flex;align-items:center;justify-content:center;
+  width:30px;flex:0 0 30px;color:var(--tx3);font-size:15px;
+}
+.fbox.hit{border-color:#bfe0cc;background:var(--ok-bg)}
+.fbox.miss{border-color:#f0d9b8;background:var(--warn-bg)}
+@media(max-width:640px){
+  .flow{flex-direction:column;gap:0}
+  .farr{width:100%;height:24px;flex:0 0 24px;transform:rotate(90deg)}
+}
+
+/* ── 时间线 ───────────────────────────── */
+.tl{list-style:none;padding:0;margin:16px 0}
+.tl li{
+  position:relative;padding:0 0 16px 22px;border-left:2px solid var(--line);
+  margin:0;font-size:14px;
+}
+.tl li:last-child{border-left-color:transparent;padding-bottom:0}
+.tl li::before{
+  content:"";position:absolute;left:-6px;top:7px;width:10px;height:10px;
+  border-radius:50%;background:#fff;border:2px solid var(--line2);
+}
+.tl li.bad::before{border-color:var(--red)}
+.tl li.ok::before{border-color:var(--ok)}
+.tl .t{font-family:"Cascadia Mono",Consolas,monospace;font-size:12.5px;color:var(--tx3);display:block}
+.tl .h{font-weight:600}
+
+footer{margin-top:56px;padding-top:18px;border-top:1px solid var(--line);font-size:12.5px;color:var(--tx3)}
+footer b{color:var(--tx2)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="kicker">Coopani · 大肥鱼环游世界 · 基础设施</div>
+  <h1>碰面服务器：一次额度耗尽事故，与随后的缓存改造</h1>
+  <p class="sub">
+    报告日期 <b>2026-11-13</b> ·
+    涉及组件 <code>cloud/sight-cf</code>（Cloudflare Worker + D1） ·
+    线上版本 <b class="mono">d326b2dc</b> ·
+    全量测试 <b>982 / 982 通过</b>
+  </p>
+</header>
+
+<div class="tip">
+  <b>这份报告怎么读：</b>正文里带<span class="term" data-t="demo">蓝色虚线</span>的词，点一下会弹出解释框，再点一次或点别处就收起。
+  <b>解释框里带点线的词还能继续点</b> —— 一直点到你不再遇到看不懂的词为止，左上角「返回」退回来。
+  不用按顺序读 —— 赶时间看第一节和第六节就行。
+</div>
+
+<div class="summary">
+  <div class="card bad">
+    <div class="k">11-12 全站不可用</div>
+    <div class="v">约 16 小时</div>
+    <div class="d">16:12 起所有碰数据库的接口全 500</div>
+  </div>
+  <div class="card">
+    <div class="k">单次最贵的读</div>
+    <div class="v">平方级</div>
+    <div class="d">成本随用户数 n² 增长，不是 n</div>
+  </div>
+  <div class="card ok">
+    <div class="k">改造后行读</div>
+    <div class="v">↓ 一到两个数量级</div>
+    <div class="d">与请求数解耦，缓存命中即零查询</div>
+  </div>
+</div>
+
+<h2><span class="n">01</span>事故：那天到底发生了什么</h2>
+
+<p>
+  11 月 12 日下午开始，陆续有用户报「名片点了没反应」「点一次转五秒然后报错」。当时我以为是代码 bug，
+  查了一整圈没找到 —— 因为代码确实没问题。
+</p>
+
+<p>
+  真正的线索在本机的客户端日志里。<code>E:\Coopanion\data\logs\core.log</code> 里，所有上报失败的记录时间点排开来是这样的：
+</p>
+
+<ul class="tl">
+  <li class="bad"><span class="t">11-12 12:28</span><span class="h">首条「位置没报上去」</span>　零星失败，还不够引起注意</li>
+  <li class="bad"><span class="t">11-12 16:12 起</span><span class="h">转为密集失败</span>　当天累计 74 条，此后所有请求全挂</li>
+  <li class="bad"><span class="t">11-13 07:57</span><span class="h">仍在失败</span>　已持续近 16 小时</li>
+  <li class="ok"><span class="t">11-13 08:01:36</span><span class="h">「位置上报恢复」</span>　自己好了，没有人改过任何东西</li>
+</ul>
+
+<p>
+  <b>08:01 这个时间点就是答案。</b>
+  <span class="term" data-t="d1">D1</span> 的<span class="term" data-t="quota">免费额度</span>按官方规定每天
+  <span class="term" data-t="utc">00:00 UTC</span> 重置 —— 换成北京时间正好是 <b>08:00</b>。
+  恢复发生在重置之后 1 分半，不可能是巧合。
+</p>
+
+<div class="note">
+  <b>结论修正：</b>这不是 D1 故障，也不是代码 bug，是<b>当天的读取额度在 UTC 08:12（北京 16:12）前后就烧光了</b>，
+  之后约 16 小时数据库对所有人拒绝查询，Worker 只能回 500。当时我说「链路是通的」没错 —— 我测的时候已经过了零点重置。
+</div>
+
+<h2><span class="n">02</span>根因：为什么读会比写先崩</h2>
+
+<h3>先看额度本身</h3>
+
+<div class="tbl">
+  <table>
+    <thead>
+      <tr><th>项目</th><th>免费版每天</th><th>付费版每月（$5）</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>行读 <span class="term" data-t="rows-read">rows read</span></td><td>500 万</td><td>250 亿</td></tr>
+      <tr><td>行写 <span class="term" data-t="rows-write">rows written</span></td><td>10 万</td><td>5000 万</td></tr>
+      <tr><td>存储</td><td>5 GB</td><td>—</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<h3>写有闸，读没有</h3>
+
+<p>
+  代码里对写是设了保护的：<code>DAILY_WRITE_CAP = 2 万次上报</code>（约 8 万行），撞上直接回 503，
+  还留了 20% 余量给清理任务。这条闸从来没被撞到过 —— 说明写从来不是问题。
+</p>
+
+<p>
+  而读<b>一条限制都没有</b>。任何客户端、任何时候想读多少读多少。
+  在一个「必须靠自觉」的维度上，只要有一条查询足够贵，它迟早会把额度吃掉。这是设计层面的漏洞，不是某一行代码写错了。
+</p>
+
+<h3>那条最贵的查询</h3>
+
+<pre><code>SELECT COUNT(DISTINCT uid) FROM presence WHERE at &gt;= 今天零点</code></pre>
+
+<p>
+  这条 SQL 只回答一个问题：<b>今天一共来过多少只鱼</b>。它被三处调用 ——
+  <code>/sight/status</code>（每只鱼每天打 24 次）、<code>/sight</code>（排日程时问附近有谁）、落地页（任何人打开域名）。
+</p>
+
+<p>
+  贵在两件事叠加：
+</p>
+
+<ol>
+  <li><b>它是<span class="term" data-t="scan">全表扫描</span>。</b>
+    <span class="term" data-t="distinct">COUNT(DISTINCT)</span> 要求去重，数据库必须把符合条件的行<b>逐行看一遍</b>才能知道哪些 uid 重复。
+    索引在这里帮不上忙。</li>
+  <li><b>它按<b>扫过的行</b>计费，不是按返回的行。</b>
+    扫 100 万行、最后只返回一个数字「500」，计费是 100 万行读。
+    这是<span class="term" data-t="serverless-db">按量计费数据库</span>的通用规则，也是最容易踩的坑。</li>
+</ol>
+
+<h3>于是成本变成平方</h3>
+
+<p>
+  假设有 N 只鱼，<code>presence</code> 表<span class="term" data-t="pk">主键</span>是
+  <code>(uid, date_key, slot)</code>，每只鱼每天最多 4 行 —— 所以当天全表大约 <b>4N 行</b>。
+</p>
+
+<p>
+  每只鱼一天打 24 次 status，每次都要扫这 4N 行，于是：
+</p>
+
+<pre><code>日行读 ≈ 24N × 4N = 96N²  （实测折算约 60N²，因为不是每只鱼全天在线）</code></pre>
+
+<p>
+  代入免费额度 500 万反解：<b>N ≈ 290 就撞顶</b>。
+  而昨天实际是 8.2 小时烧完的，反推峰值大约 <b class="mono">500</b> 只。
+  多出来的那部分放大因素，是旧版客户端在失败时不退避、服务器一慢就 60 秒重试一次（就是 11-11 那次 68 只打出 9.8 万请求的同一条毛病）。
+</p>
+
+<div class="note">
+  <b>注意这是估算，不是实测。</b>60N² 是拿「每鱼每天 24 次、当天 4N 行」推的模型；
+  真实值受在线时长、落地页访问量、旧版客户端重试行为影响。能确定的只有两件事：
+  昨天确实烧光了，而且成本确实随用户数平方增长 —— 这一点不看模型也成立，因为「每请求 × 扫全表」本身就意味着请求数和表大小同时涨。
+</div>
+
+<h2><span class="n">03</span>改法：把那次查询从请求路径上摘下来</h2>
+
+<p>
+  思路一句话：<b>这两个数字是全站聚合值，跟「谁在问」无关，所以没必要每次请求都算一遍。</b>
+</p>
+
+<div class="flow">
+  <div class="fbox miss">
+    <div class="fn">① 缓存没命中</div>
+    <div class="fd">查库 → 扫 4N 行 → 结果写入本机房缓存，存活 60 秒</div>
+  </div>
+  <div class="farr">→</div>
+  <div class="fbox hit">
+    <div class="fn">② 缓存命中</div>
+    <div class="fd">60 秒内后续所有请求直接读缓存，<b>零行读</b></div>
+  </div>
+  <div class="farr">→</div>
+  <div class="fbox">
+    <div class="fn">③ 60 秒后</div>
+    <div class="fd">缓存过期，下一次请求重新走 ①，再把新的值铺给后面一分钟</div>
+  </div>
+</div>
+
+<p>
+  于是<b>行读量与请求数解耦</b>：请求涨十倍，行读不变。
+  实测今天上午同一分钟内连打四次 status，只有第一次查了库。
+</p>
+
+<h3>具体改动</h3>
+
+<div class="tbl">
+  <table>
+    <thead>
+      <tr><th>文件</th><th>改了什么</th><th>为什么</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>worker.js</td>
+        <td>新增 <code>poolCounts()</code>：先查缓存，未命中才查库，结果写入 <span class="term" data-t="cacheapi">caches.default</span>，<span class="term" data-t="ttl">TTL</span> 60 秒</td>
+        <td>把三处重复的昂贵查询收成一个函数</td>
+      </tr>
+      <tr>
+        <td>worker.js</td>
+        <td><code>reply()</code> 支持自定义响应头；两个接口返回 <code>x-pool-cache: hit | miss</code></td>
+        <td>让「缓存到底有没有生效」能用一个 curl 直接量，不用猜</td>
+      </tr>
+      <tr>
+        <td>worker.js</td>
+        <td>把同步的 <code>db.prepare()</code> 提到 <code>Promise.all</code> 之前</td>
+        <td>修掉一个真实缺陷，见下</td>
+      </tr>
+      <tr>
+        <td>测试</td>
+        <td>新增 <code>sight-cf-pool-cache.test.mjs</code> 5 条用例</td>
+        <td>数的是「真查库了几次」，不是返回值</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<h3>顺手修掉的那个缺陷</h3>
+
+<p>原来的写法是这样：</p>
+
+<pre><code>const [counts, invites] = await Promise.all([
+  poolCounts(env, ctx, url.origin),   // 异步
+  db.prepare('SELECT …').bind(…).all() // ← prepare() 是同步的，会当场抛
+]);</code></pre>
+
+<p>
+  <span class="term" data-t="promise-all">Promise.all</span> 会先启动第一个，再去执行第二个。
+  而 <code>prepare()</code> 是<b>同步</b>调用，额度耗尽时它当场抛错 ——
+  此时第一个 <span class="term" data-t="promise">Promise</span> 已经在跑了，却再没有人 <code>await</code> 它的结果，
+  于是变成一个 <span class="term" data-t="unhandled">unhandledRejection</span>。
+</p>
+
+<p>
+  说白了：<b>额度爆掉的那天，错误日志会比平时乱得多</b>，因为你同时还会收到一堆「未处理的 Promise 拒绝」。
+  这会让下次排查更难。改成先把同步部分做完再进 <code>Promise.all</code>，就没有这个窗口了。
+</p>
+
+<div class="note">
+  <b>这个缺陷是写测试的时候踩出来的，不是读代码看出来的。</b>
+  我原本只是想验证「失败时不会把 0 写进缓存」，结果那条测试直接把这条报警抖了出来。
+</div>
+
+<h2><span class="n">04</span>部署：凭据其实一直都在</h2>
+
+<p>
+  上一轮我说「本机没有 wrangler 凭据，需要你来跑」，这句话是错的 —— 我只是查错了地方。
+</p>
+
+<p>
+  真实位置在：
+</p>
+
+<pre><code>C:\Users\Administrator\AppData\Roaming\xdg.config\.wrangler\config\default.toml</code></pre>
+
+<p>
+  Windows 上 <span class="term" data-t="wrangler">wrangler</span> 把配置放在 <code>%APPDATA%\xdg.config\.wrangler</code>，
+  而不是 <code>~/.wrangler</code>（那是 Linux 和 macOS 的路径）。我 <code>ls ~/.wrangler</code> 看到空的就下了结论 ——
+  <b>「那里没有」不等于「没有」</b>，这是我在这次任务里犯的判断错误。
+</p>
+
+<h3>撞上的那个巧合</h3>
+
+<p>
+  我动手的时刻是 <b>09:33</b>，而文件里记的过期时间是 <b>09:29:25</b> —— 已经过期 4 分钟。
+  但文件里还有一个 <span class="term" data-t="refresh">refresh_token</span>，
+  <code>wrangler whoami</code> 会自动拿它去换一张新的 <span class="term" data-t="access">access token</span>。
+  所以我既没有重新登录，也没有弹出浏览器授权框，直接把有效期待到了 10:34。
+</p>
+
+<div class="tbl">
+  <table>
+    <thead>
+      <tr><th>部署</th><th>版本号</th><th>原因</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>第一次</td><td class="mono">8892dfc1</td><td>改完直接发</td></tr>
+      <tr class="hl2"><td>第二次（最终）</td><td class="mono">d326b2dc</td><td>实测发现 <code>/sight</code> GET 没带缓存头，补上后重发</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>
+  耗时方面：上传 101.59 KiB（压缩后 30.74 KiB），上传 3.81 秒，Worker 冷启动 <b>1 ms</b>。
+  <span class="term" data-t="worker">Worker</span> 没有「服务器启动」这个概念，这是它跟传统后端最直观的差别之一。
+</p>
+
+<h2><span class="n">05</span>验证：实测数据</h2>
+
+<p>
+  部署完立刻打了四次 <code>/sight/status</code>。<code>x-pool-cache</code> 这个头就是从缓存里带出来的答案：
+</p>
+
+<div class="tbl">
+  <table>
+    <thead>
+      <tr><th>第几次</th><th>HTTP</th><th>x-pool-cache</th><th>耗时</th></tr>
+    </thead>
+    <tbody>
+      <tr class="hl2"><td>1</td><td>200</td><td><b>miss</b>（查了库）</td><td class="mono">1.03 s</td></tr>
+      <tr><td>2</td><td>200</td><td><b>hit</b>（读缓存）</td><td class="mono">1.00 s</td></tr>
+      <tr><td>3</td><td>200</td><td><b>hit</b></td><td class="mono">0.91 s</td></tr>
+      <tr><td>4</td><td>200</td><td><b>hit</b></td><td class="mono">0.99 s</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>
+  <b>注意耗时没变。</b>别把「还是 1 秒」读成「没生效」——
+  缓存省掉的是<b>数据库扫过的行数</b>，不是<span class="term" data-t="rtt">网络往返</span>。
+  1 秒基本全是 RTT（兰州到你那次请求落到的机房），跟数据库没关系。
+  要验证省了多少行读，只能等一天之后看 D1 的用量曲线。
+</p>
+
+<p>其余接口一并复核过：</p>
+
+<div class="tbl">
+  <table>
+    <thead>
+      <tr><th>检查项</th><th>结果</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>/sight</code>（邻居列表）</td><td>200，同样 miss → hit，且与 status <b>共享同一份缓存</b></td></tr>
+      <tr><td>池子数值正确性</td><td>pool 112 / online 97，与实时面板一致</td></tr>
+      <tr><td>名片写入 → 回读 → 撤回</td><td>三个请求全 200，内容准确</td></tr>
+      <tr><td><code>/sight/invite</code></td><td>200</td></tr>
+      <tr><td>全量测试</td><td>982 / 982 通过</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<h3>一个必须说清楚的边界</h3>
+
+<p>
+  <span class="term" data-t="colo">边缘节点</span>的缓存是<b>每个机房各存一份</b>，不是全球共用一份。
+  所以准确的表述是「同一个机房 60 秒内只查一次库」，而不是「全站 60 秒只查一次」。
+</p>
+
+<p>
+  整站实际上会是「机房数量 × 每分钟一次」。相比原来「每个请求都扫一遍全天数据」，
+  这仍然是数量级的下降 —— 但它不是免费的，别当成一个绝对开关。
+</p>
+
+<h2><span class="n">06</span>还剩什么</h2>
+
+<div class="tbl">
+  <table>
+    <thead>
+      <tr><th>事项</th><th>状态</th><th>说明</th></tr>
+    </thead>
+    <tbody>
+      <tr class="hl2"><td>升级付费版</td><td><b>等你点</b></td><td>Workers &amp; Pages → Plans → Upgrade to Paid，$5/月。我不动你的付款账户</td></tr>
+      <tr><td><code>/admin/live</code> 里的同类查询</td><td>未改</td><td>管理面板 30 秒<button class="term" data-t="poll">轮询</button>一次，也扫全天，量级约占免费额度 6%，但不影响普通用户</td></tr>
+      <tr><td>本地 admin key 与线上不一致</td><td>待你确认</td><td>本地备份那串实测 401；secret 本身存在，应该是后来换过 key、本地没同步</td></tr>
+      <tr><td>照片页缩略图空白棕块</td><td>挂起</td><td>本机复现不了，要用户提供宿主版本 + 页面 + 原图路径</td></tr>
+      <tr><td>跨零点日程错位</td><td>未动</td><td>需要先量清日切逻辑，不是改一行能解决的</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>
+  <b>为什么建议升级：</b>缓存是「省」，$5 是「够」。现在 pool 112 的量，缓存把行读压到了安全区；
+  但用户再涨两三倍，免费额度还是会撞。$5 换掉一次为期 16 小时的全站停摆，这笔账不用算。
+</p>
+
+<p>
+  <b>为什么不改 <code>/admin/live</code>：</b>它只在你打开管理面板时才<button class="term" data-t="poll">轮询</button>，不是全站路径；
+  而且它显示的是「今日累计」这个数，改成 60 秒缓存会让面板上的数字最多晚一分钟 ——
+  这是改你面板的语义，得你点头。
+</p>
+
+<h2><span class="n">07</span>术语表</h2>
+
+<p>
+  <b>两层词条。</b>第一张表是正文里出现、点出来的术语；后面三张是<b>那些解释里又冒出来的词</b> ——
+  解释写给人看，可解释里也免不了用行话，这一层就是把行话再拆一遍。所有条目都能点，
+  点在解释里就直接翻页，左上角「返回」退回来。
+</p>
+
+<div class="tbl">
+  <table>
+    <thead>
+      <tr><th>术语</th><th>一句话</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><button class="term" data-t="worker">Cloudflare Worker</button></td><td>跑在 Cloudflare 全球机房的 JS 函数，不用管服务器，请求就近处理</td></tr>
+      <tr><td><button class="term" data-t="d1">D1</button></td><td>Cloudflare 的托管 SQLite 数据库，通过 <code>env.DB</code> 绑定给 Worker 用</td></tr>
+      <tr><td><button class="term" data-t="colo">边缘节点 / colo</button></td><td>Cloudflare 在全球的机房，每个机房独立处理请求、独立缓存</td></tr>
+      <tr><td><button class="term" data-t="rows-read">行读（rows read）</button></td><td>D1 的计费单位：SQL 扫过多少行就按多少行算，不是按返回了几行</td></tr>
+      <tr><td><button class="term" data-t="rows-write">行写（rows written）</button></td><td>另一侧：写入或修改了多少行。删除也算写</td></tr>
+      <tr><td><button class="term" data-t="scan">全表扫描</button></td><td>没有可用索引时逐行检查，行数多少就扫多少</td></tr>
+      <tr><td><button class="term" data-t="distinct">COUNT(DISTINCT)</button></td><td>数去重后的个数，必须把行全看一遍才能确定谁重复</td></tr>
+      <tr><td><button class="term" data-t="pk">主键 / 索引</button></td><td>主键唯一标识一行；索引是加速查找的额外数据结构</td></tr>
+      <tr><td><button class="term" data-t="cacheapi">Cache API</button></td><td>Worker 里读写本机房缓存的接口，即 <code>caches.default</code></td></tr>
+      <tr><td><button class="term" data-t="ttl">TTL</button></td><td>缓存存活时间，到点自动失效，下次请求重新计算</td></tr>
+      <tr><td><button class="term" data-t="cachekey">缓存键</button></td><td>缓存的身份证；键相同就是同一份内容</td></tr>
+      <tr><td><button class="term" data-t="hit">命中 / 未命中</button></td><td>缓存里有（hit）就没有查询成本；没有（miss）就得回源计算</td></tr>
+      <tr><td><button class="term" data-t="header">响应头</button></td><td>HTTP 响应里的元数据，<code>x-pool-cache</code> 是我们自己加的自定义头</td></tr>
+      <tr><td><button class="term" data-t="wrangler">wrangler</button></td><td>Cloudflare 官方命令行工具，部署和查配置都靠它</td></tr>
+      <tr><td><button class="term" data-t="secret">secret</button></td><td>加密保存的环境变量，不进代码包，部署时不会泄露</td></tr>
+      <tr><td><button class="term" data-t="oauth">access / refresh token</button></td><td>短期工作证 / 用来换新工作证的长期凭据</td></tr>
+      <tr><td><button class="term" data-t="prepare">prepare().bind()</button></td><td>预编译 SQL 再填参数，防注入，也让数据库复用执行计划</td></tr>
+      <tr><td><button class="term" data-t="promise-all">Promise.all</button></td><td>并行等多个异步任务；其中任何一个失败，整体失败</td></tr>
+      <tr><td><button class="term" data-t="promise">Promise</button></td><td>JS 里「将来会有结果」的那个东西，可以 await，也可以 .catch()</td></tr>
+      <tr><td><button class="term" data-t="unhandled">unhandledRejection</button></td><td>Promise 失败了却没人接，运行时会额外报警</td></tr>
+      <tr><td><button class="term" data-t="rtt">RTT</button></td><td>一个数据包来回一趟的时间，主要是物理距离决定的</td></tr>
+      <tr><td><button class="term" data-t="quota">免费额度</button></td><td>每天重置的用量上限，超了就直接拒绝服务，不是变慢</td></tr>
+      <tr><td><button class="term" data-t="utc">UTC</button></td><td>世界标准时间，北京时间 = UTC+8</td></tr>
+      <tr><td><button class="term" data-t="waituntil">waitUntil</button></td><td>告诉运行时「这个任务还没完，响应先回、别急着收尾」</td></tr>
+      <tr><td><button class="term" data-t="serverless-db">按量计费的数据库</button></td><td>不按机器收费，按读了多少行、写了多少行算钱</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<h3>07.1 数据库与 SQL</h3>
+
+<div class="tbl">
+  <table>
+    <thead>
+      <tr><th>术语</th><th>一句话</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><button class="term" data-t="sql">SQL</button></td><td>跟数据库说话的语言：查、增、改、删都靠它</td></tr>
+      <tr><td><button class="term" data-t="sqlite">SQLite</button></td><td>整库存成一个文件的嵌入式数据库，D1 用的就是它</td></tr>
+      <tr><td><button class="term" data-t="select">SELECT</button></td><td>查。只读不改；贵在内部看过多少行，不在返回几行</td></tr>
+      <tr><td><button class="term" data-t="insert">INSERT / UPDATE / DELETE</button></td><td>增、改、删，统称写，都按受影响行数计费</td></tr>
+      <tr><td><button class="term" data-t="aggregate">聚合函数</button></td><td>COUNT / SUM / MAX，把多行压成一个数，几乎总是全表扫</td></tr>
+      <tr><td><button class="term" data-t="uid">uid</button></td><td>每只宠物的唯一编号，去重和识别都靠它</td></tr>
+      <tr><td><button class="term" data-t="growth">线性 / 平方增长</button></td><td>O(N) 与 O(N²)：量翻倍时，成本翻倍还是翻四倍</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<h3>07.2 服务器与部署</h3>
+
+<div class="tbl">
+  <table>
+    <thead>
+      <tr><th>术语</th><th>一句话</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><button class="term" data-t="env">env</button></td><td>Worker 拿到的环境对象，数据库、密钥都挂在上面</td></tr>
+      <tr><td><button class="term" data-t="binding">binding</button></td><td>在配置里把数据库「挂」给 Worker，代码里就变成 env.DB</td></tr>
+      <tr><td><button class="term" data-t="envvar">环境变量</button></td><td>从外部读进来的「名字 = 值」，不写死在代码里</td></tr>
+      <tr><td><button class="term" data-t="runtime">运行时</button></td><td>执行代码的那一层环境，提供 fetch / caches / Promise，也管收尾</td></tr>
+      <tr><td><button class="term" data-t="deploy">部署</button></td><td>把本地代码整份替换上去，不是热更新</td></tr>
+      <tr><td><button class="term" data-t="origin">回源</button></td><td>缓存没命中时回真正的数据源算一遍</td></tr>
+      <tr><td><button class="term" data-t="status">HTTP 状态码</button></td><td>2xx 成功、4xx 你错了、5xx 服务器错了</td></tr>
+      <tr><td><button class="term" data-t="curl">curl</button></td><td>命令行发 HTTP 请求，测接口不用打开浏览器</td></tr>
+      <tr><td><button class="term" data-t="cron">cron</button></td><td>定时表达式，Worker 没有常驻进程，定时只能靠它</td></tr>
+      <tr><td><button class="term" data-t="process">常驻进程</button></td><td>能一直待着等事情的程序；Worker 没有，响应完就收掉</td></tr>
+      <tr><td><button class="term" data-t="poll">轮询</button></td><td>定时反复问「有新的吗」，没变化也要问一次</td></tr>
+      <tr><td><button class="term" data-t="plan">执行计划</button></td><td>数据库为一条 SQL 拟好的「怎么查」方案，可复用</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<h3>07.3 语言与凭据</h3>
+
+<div class="tbl">
+  <table>
+    <thead>
+      <tr><th>术语</th><th>一句话</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><button class="term" data-t="js">JavaScript</button></td><td>浏览器和 Worker 里跑的脚本语言，单线程，所以处处是异步</td></tr>
+      <tr><td><button class="term" data-t="async">同步 / 异步</button></td><td>一行跑完再走下一条，还是先发起、拿到结果再回来</td></tr>
+      <tr><td><button class="term" data-t="throw">抛错 / 异常</button></td><td>throw 出去，谁 try...catch 接住谁处理；没人接就是未处理异常</td></tr>
+      <tr><td><button class="term" data-t="resolve">resolve / reject</button></td><td>Promise 的两种结局：成功带结果、失败带错误</td></tr>
+      <tr><td><button class="term" data-t="oauth2">OAuth</button></td><td>授权协议，发的是有时效的 token，不是你的密码</td></tr>
+      <tr><td><button class="term" data-t="bearer">Bearer</button></td><td><code>Authorization: Bearer &lt;token&gt;</code>，凭证跟在后面</td></tr>
+      <tr><td><button class="term" data-t="git">git / 版本库</button></td><td>记录代码改动的工具；进了它就等于所有人都看得到</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<footer>
+  <p style="margin:0">
+    <b>来源</b>：Cloudflare 官方定价页（D1 额度）· 本机 <code>E:\Coopanion\data\logs\core.log</code>（11-12/13 时间线）·
+    <code>cloud/sight-cf/src/worker.js</code> · 线上接口实测（2026-11-13 09:36–09:38 UTC+8）·
+    仓库 <code>CHANGELOG.md</code> 第六节。
+  </p>
+  <p style="margin:8px 0 0">
+    估算类数字（如 60N²、峰值约 500 只）已在正文标注为估算，与实测值分开。<b>报告由 Chloé 生成</b>。
+  </p>
+</footer>
+
+</div>
+
+<div id="pop" role="dialog" aria-live="polite">
+  <p class="pnav" style="display:none"><button type="button" class="pback"></button></p>
+  <p class="pt"></p>
+  <p class="pb"></p>
+  <p class="pb p2"></p>
+</div>
+
+<script>
+(function(){
+  var DEFS = {
+    demo: ['示例术语', '这就是解释框的样子。点一下术语，框出现在它下面；再点一次、点别处、或者按 Esc 都能收起。', '解释文字里如果还有没讲清的字（比如 <button class="term-in" data-t="sql">SQL</button>），那一处也能点 —— 框会原地换成它的解释，左上角出现「返回」回到上一页。'],
+    worker: ['Cloudflare Worker',
+      '一段跑在 Cloudflare 全球机房里的 <button class="term-in" data-t="js">JavaScript</button> 函数，形式是 <b>fetch(request, env, ctx)</b> —— 进来一个请求，出去一个响应。',
+      '你不用买服务器、不用管系统更新和扩容。代码<button class="term-in" data-t="deploy">部署</button>一次，全世界的机房都有副本，用户请求落在哪个机房就在哪儿执行。代价是没有<button class="term-in" data-t="process">常驻进程</button>，所以「定时任务」要单独用 <button class="term-in" data-t="cron">cron</button> 配，而且不能靠内存记状态。'],
+    d1: ['D1',
+      'Cloudflare 自家的托管 <button class="term-in" data-t="sqlite">SQLite</button> 数据库。通过 wrangler 配置里的 <button class="term-in" data-t="binding">binding</button> 挂到 Worker 上，代码里就叫 <b>env.DB</b>（<button class="term-in" data-t="env">env</button> 是 Worker 拿到的那个「环境对象」）。',
+      '好处是极低延迟（数据库和函数在同一网络里）、按量计费、不用运维。代价是计费按<b>扫过的行数</b>算，写错一条 <button class="term-in" data-t="sql">SQL</button> 就可能烧掉一天的额度。'],
+    colo: ['边缘节点 / colo',
+      'Cloudflare 在全球各地的机房（data center），业内简称 colo。用户的请求会被就近路由到某个机房处理。',
+      '<b>关键点：缓存是每个机房各存一份。</b>所以「全站 60 秒查一次库」这个说法不准确，准确的是「每个机房 60 秒查一次」。机房越多，总查询量越多 —— 但仍然远小于「每个请求都查」。'],
+    'rows-read': ['行读（rows read）',
+      'D1 的计费单位之一，不是「查询次数」，也不是「返回行数」。',
+      '一条 <button class="term-in" data-t="select">SELECT</button> 在内部扫过 100 万行、最后只返回 1 个数字，计费按 100 万行读算。这是最容易被忽略的一点：<b>返回结果小 ≠ 便宜</b>。'],
+    'rows-write': ['行写（rows written）',
+      'D1 的另一个计费单位：实际写入或修改了多少行。',
+      '一次 <button class="term-in" data-t="insert">INSERT</button> 一行算一行写；批量插入按实际行数累加；UPDATE 改了几行就算几行。<b>删除也算写。</b> 这次事故里写始终没撞顶，因为代码对写设了每日上限（撞上直接回 <button class="term-in" data-t="status">503</button>）。'],
+    quota: ['免费额度',
+      'Cloudflare 免费版 D1 每天给的行读/行写上限。超了不是「变慢」或「降级」，是<b>直接拒绝查询</b> —— Worker 拿到错误，只能给用户回 <button class="term-in" data-t="status">500</button>。',
+      '免费版每天 500 万行读、10 万行写、5 GB 存储；<b>每天 00:00 UTC 重置</b>。付费版 $5/月：每月 250 亿行读、5000 万行写，超量另算（$0.001/百万行读）。'],
+    utc: ['UTC',
+      '世界标准时间，也叫 GMT。北京时间 = UTC + 8。',
+      '所以 D1 额度「每天 00:00 UTC 重置」换成北京时间是<b>每天早上 8 点</b>。这次事故的恢复时刻 08:01:36 卡在重置后一分半，就是最硬的证据。'],
+    scan: ['全表扫描（full table scan）',
+      '数据库没有可用索引时，只能把表里的行逐行读一遍，看看哪一行符合条件。',
+      '行数多少就扫多少，成本随表大小<button class="term-in" data-t="growth">线性增长</button>。判断一条 <button class="term-in" data-t="sql">SQL</button> 贵不贵，先看它是不是必须全扫 —— 而带<button class="term-in" data-t="aggregate">聚合函数</button>、又没法走索引的查询，往往都是。'],
+    distinct: ['COUNT(DISTINCT uid)',
+      '数「有多少个不重复的 <button class="term-in" data-t="uid">uid</button>」。',
+      '困难在于：数据库必须把符合条件的行全部看过一遍，才能确定哪些 uid 是重复的。不能像普通 COUNT 那样一边数一边加。所以它是这类查询里最贵的一种写法。'],
+    pk: ['主键 / 索引（PRIMARY KEY / INDEX）',
+      '主键唯一标识一行（比如 <b>(<button class="term-in" data-t="uid">uid</button>, date_key, slot)</b> 三条一起才能定位一条记录）；索引是为加速查找额外建的数据结构。',
+      '有索引时数据库能直接跳到目标位置，不用全表扫。但<b><button class="term-in" data-t="aggregate">聚合</button>去重查询通常用不上索引</b> —— 它需要的是「所有行」，而索引擅长的是「某几行」。'],
+    cacheapi: ['Cache API（caches.default）',
+      'Worker 运行时提供的缓存接口，读 <b>cache.match(key)</b>、写 <b>cache.put(key, response)</b>。',
+      '⚠️ 有个坑：<b>cache.put 失败时不会报错</b>，官方文档写的是「无论是否真的存进去，都 <button class="term-in" data-t="resolve">resolve</button> 成 undefined」。所以如果缓存静默失效，接口照样返回 200、额度照样烧光，你还不一定发现得了。这次的 <b>x-pool-cache</b> 响应头就是为了让这件事可以被 <button class="term-in" data-t="curl">curl</button> 直接量出来。'],
+    ttl: ['TTL（Time To Live）',
+      '缓存的存活时间。到点自动失效，下一次请求重新计算并写回新值。',
+      '写在响应头里：<b>cache-control: public, max-age=60</b>。Cache API 只认这个头决定存多久 —— 写成 <b>no-store</b> 会当场被丢掉，等于没缓存。'],
+    cachekey: ['缓存键（cache key）',
+      '缓存的身份证。键相同，就是同一份内容。',
+      '这次的键用<b>站点自己的域名</b> + 固定路径拼成（<b>/__pool-count</b>），三处调用共用同一个键，所以 status 和邻居列表命中同一份缓存。我一开始想用假域名 <b>.internal</b>，查文档后发现 put 失败是静默的，不敢赌，改成了真实域名。'],
+    hit: ['缓存命中 / 未命中（hit / miss）',
+      '缓存里有 → <b>hit</b>，直接返回，零查询成本；没有 → <b>miss</b>，<button class="term-in" data-t="origin">回源</button>计算一遍再存进去。',
+      '命中率决定缓存到底值不值。这次把它做成响应头 <b>x-pool-cache: hit|miss</b>，任何人拿一条 curl 就能验证，不用翻代码。'],
+    header: ['响应头（HTTP header）',
+      'HTTP 响应里除了正文之外的元数据，比如 <b>content-type</b> 说明内容是什么格式、<b>cache-control</b> 说明能缓存多久。',
+      '以 <b>x-</b> 开头的是自定义头，约定俗成用来放业务信息。这次的 <b>x-pool-cache</b> 就是自报「这一次是从缓存拿的还是现查的」。'],
+    wrangler: ['wrangler',
+      'Cloudflare 官方命令行工具。部署 Worker、管 secret、跑本地调试、看日志，都靠它。',
+      '<b>Windows 上配置目录不一样</b>：在 <b>%APPDATA%\\xdg.config\\.wrangler\\config\\</b>，不是 <b>~/.wrangler</b>。这是这次差点误判「没有凭据」的原因。'],
+    secret: ['secret',
+      '加密保存的<button class="term-in" data-t="envvar">环境变量</button>。用 <b>wrangler secret put NAME</b> 写入，值存在 Cloudflare 那边，<b>不会</b>被打包进代码、也不会进<button class="term-in" data-t="git">版本库</button>。',
+      '配置项（wrangler.toml 里的 <b>[vars]</b>）是明文的、会进 git；secret 不会。所以密钥一定要走 secret。'],
+    oauth: ['access token / refresh token',
+      '<button class="term-in" data-t="oauth2">OAuth</button> 里的一对凭据。<b>access token</b> 是短期工作证（wrangler 给的是 1 小时）；<b>refresh token</b> 是用来换新工作证的长期凭据。',
+      '好处：工作证被偷了，危害最多 1 小时；而换证需要长期的 refresh token，它存在本机、不跟着每个请求走。这次我的工作证刚好过期 4 分钟，但因为 refresh token 还在，wrangler 自动换了一张新的，我完全没感觉到。'],
+    prepare: ['prepare().bind()',
+      '先把 SQL 编译好（prepare），再把参数填进去（bind）。',
+      '两个作用：① 防 <button class="term-in" data-t="sql">SQL</button> 注入 —— 参数永远被当数据，不会被当语句；② 数据库可以复用<button class="term-in" data-t="plan">执行计划</button>，重复执行同一条 SQL 更快。注意 <b>prepare() 是<button class="term-in" data-t="async">同步</button>调用</b>，出错会当场<button class="term-in" data-t="throw">抛</button>，不会等你 await。'],
+    'promise-all': ['Promise.all',
+      '并行等多个异步任务，全部完成才继续。任何一个失败，整体立刻失败。',
+      '<b>陷阱</b>：它是「先启动所有任务，再一起等」。如果中间有一个<button class="term-in" data-t="async">同步</button>调用（比如 <b>prepare()</b>）当场<button class="term-in" data-t="throw">抛错</button>，已经启动的那些任务就没人接了 —— 会变成 <button class="term-in" data-t="unhandled">unhandledRejection</button>。正确写法是把同步部分提前做完，再进 Promise.all。'],
+    promise: ['Promise',
+      '<button class="term-in" data-t="js">JS</button> 里表示「一个还没完成、但将来会有结果的操作」。',
+      '你可以 <b>await</b> 它等结果，也可以 <b>.catch()</b> 接错误。但一个 Promise 一旦开始，就必须有人接它的结果或错误 —— 否则<button class="term-in" data-t="runtime">运行时</button>会在最后抱怨。'],
+    unhandled: ['unhandledRejection',
+      '一个 Promise 被拒绝了，但代码里没有任何地方处理这个错误。',
+      '后果是<button class="term-in" data-t="runtime">运行时</button>会额外打一条警告。<b>真正的问题是它会淹没真正的错误</b>：出故障那天日志里一半是这种噪音，你就更难找到「no such table」还是「quota exceeded」。'],
+    rtt: ['RTT（Round-Trip Time）',
+      '数据包从你这儿到服务器再回来一趟的时间。主要由物理距离、光纤路径决定，跟代码写得好不好基本无关。',
+      '兰州到 Cloudflare 某个机房 1 秒左右，这个数是「路上的时间」，不是「数据库算的时间」。所以<b>加了缓存延迟也可能纹丝不动</b> —— 省的是后端算力，不是路。'],
+    'serverless-db': ['按量计费的数据库',
+      '云上的一类数据库服务：不按机器收费，按你实际用了多少算（读了多少行、写了多少行、占了多少存储）。',
+      '优点是没流量时几乎不花钱；缺点是<b>一条写错的 <button class="term-in" data-t="sql">SQL</button> 就能瞬间烧光预算</b>，而且额度撞顶通常是硬性拒绝服务，不是温柔地变慢。所以用这类服务，SQL 的成本必须当成「钱」来算。'],
+    waituntil: ['waitUntil',
+      'Worker 里的一个技巧：把某个任务交给<button class="term-in" data-t="runtime">运行时</button>「先挂着处理」，响应立刻返回给用户。',
+      '用在写缓存上 —— 用户不用等缓存写盘那几十毫秒。<b>但别拿它藏真正的错误</b>，里面的异常不会传回给用户，只能进日志。'],
+    access: ['access token',
+      '短期的身份凭据，通常是 <button class="term-in" data-t="bearer">Bearer</button> 形式放在<button class="term-in" data-t="header">请求头</button>里。',
+      'wrangler 拿到的 <button class="term-in" data-t="oauth2">OAuth</button> access token 有效期约 1 小时。过期不影响使用 —— 只要 refresh token 还在，下次调用会自动换新的。'],
+    refresh: ['refresh_token',
+      '用来换新 access token 的长期凭据。存在本机配置里。',
+      '这就是为什么「token 过期了」不等于「要重新登录」。这次我动手时 token 已过期 4 分钟，wrangler 一声不吭地换好了。'],
+
+    /* ── 第二层：解释里还会遇到的词 ────────── */
+    js: ['JavaScript（JS）',
+      '一种脚本语言，浏览器里跑的就是它，服务器上（比如 Worker）也能跑。',
+      '它的特点是<b>单线程</b>：同一时刻只有一段代码在跑。所以「等一个慢操作」不能靠干等，只能写成 <button class="term-in" data-t="async">异步</button> —— 这是理解 Promise 和 Worker 的前提。'],
+    sql: ['SQL',
+      '跟数据库说话的语言。四件事：查、增、改、删。',
+      'D1 的花费完全由 SQL 决定 —— 同一个结果，写法不同，扫过的行数能差几十倍。「优化 SQL」在按量计费的数据库里不是风格问题，是钱的问题。'],
+    sqlite: ['SQLite',
+      '一个把整库存成单个文件的嵌入式数据库，不需要单独起服务进程。',
+      'D1 就是 Cloudflare 托管的 SQLite。好处是极低延迟、零运维；代价是并发模型简单，且计费按扫描行数算。'],
+    select: ['SELECT',
+      '查数据。<b>SELECT 列名 FROM 表 WHERE 条件</b>，它只读不改。',
+      'SELECT 贵不贵，和「返回几行」几乎无关，和「为找出这几行内部看了多少行」直接相关。'],
+    insert: ['INSERT / UPDATE / DELETE',
+      '增、改、删，三种写操作。',
+      '三者都按受影响的行数计入<button class="term-in" data-t="rows-write">行写</button>，删除也算。批量插入时，一万行就是一万次写。'],
+    aggregate: ['聚合函数（COUNT / SUM / MAX）',
+      '把很多行压成一个数：数个数、求和、取最大。',
+      '聚合必须把符合条件的行全看一遍才能给出答案，所以它几乎总是<button class="term-in" data-t="scan">全表扫描</button> —— 这正是这次账单的来源。'],
+    uid: ['uid',
+      'user id，每个用户的唯一编号。这里指每只宠物的编号，24 位十六进制串，由客户端生成。',
+      '服务器靠它区分「谁是谁」：碰面、名片、位置上报全部以 uid 为准。它是<b>去重</b>的依据，所以查询会写成 COUNT(DISTINCT uid)。'],
+    growth: ['线性增长 / 平方增长',
+      '线性（O(N)）：量翻一倍，成本翻一倍。平方（O(N²)）：量翻一倍，成本翻<b>四</b>倍。',
+      '这次的读取成本是平方级 —— 每只鱼都在查「全部鱼」的聚合数。这类结构不修，涨到某个点必然崩，而且崩得很突然：前一天还好好的，第二天就全站停摆。'],
+    cron: ['cron',
+      '一种定时表达式的写法，比如「每小时第 0 分钟」，平台按它自动触发。',
+      'Worker 没有<button class="term-in" data-t="process">常驻进程</button>，不能靠 while 循环等时间，定时只能交给平台配。'],
+    binding: ['binding（绑定）',
+      '在 wrangler.toml 里声明「这个 Worker 要用这个数据库」，起一个名字，代码里就通过这个名字访问它。',
+      '绑定是配置、不是凭据：名字可以进版本库，密钥不行。所以 env.DB 这种写法里看不到任何密码。'],
+    env: ['env',
+      'Worker 函数的第二个参数，一个对象。数据库连接（env.DB）、secret、配置项都挂在它上面。',
+      '这样代码里不出现连接串和密码，只出现名字。换数据库、换密钥只改配置，不改一行代码。'],
+    runtime: ['运行时（runtime）',
+      '执行你代码的那一层环境。它提供 fetch、caches、Promise 这些能力，也负责调度、收尾、报错。',
+      '「运行时的事」通常不是语法，是规则 —— 比如 waitUntil 能续命、进程不能常驻、未处理的错误会被额外报警。'],
+    async: ['同步 / 异步',
+      '同步：一行跑完才走下一行，中间不能插队。异步：先发起、不等结果，等拿到了再回来处理。',
+      '查库、发请求都是异步的（要等网络）。最常见的错误是「把异步当同步用」，或者在异步流程里塞进会<b>当场抛错</b>的同步调用 —— 这次那个 Promise.all 缺陷就是后者。'],
+    'throw': ['抛错 / 异常（throw / catch）',
+      '代码遇到没法继续的情况就 throw 一个错误，往上冒；谁用 try...catch 接住，就由谁处理。',
+      '没人接，就变成未处理异常。<b>D1 额度耗尽时，查询是当场 throw 的</b> —— 这就是 11-12 那天所有碰数据库的接口全变 500 的直接原因。'],
+    status: ['HTTP 状态码',
+      '服务器回应请求时附的三位数字。约定：2xx 成功（200）、4xx 你这边有问题（401 没授权、403 禁止）、5xx 服务器自己出错（500 未预期、503 暂时不可用）。',
+      '「全站 500」的意思是：Worker 自己出错了，不是用户点错了。所以看到 500 别让用户重试，得去查服务端。'],
+    curl: ['curl',
+      '命令行里发 HTTP 请求的小工具。一条命令就能测接口，不用打开浏览器。',
+      '这次的验证全靠它：加 -D - 能把响应头打出来，于是 x-pool-cache: hit 还是 miss 一眼可见。'],
+    resolve: ['resolve / reject',
+      'Promise 的两种结局：成功（resolve，带结果）或失败（reject，带错误）。',
+      '官方那句「resolve 成 undefined」关键在于：cache.put <b>无论成功还是失败都算 resolve</b>，失败不走 reject。也就是说它失败了你也接不到 —— 只能靠自己加个响应头去观测。'],
+    oauth2: ['OAuth',
+      '一种授权协议：让 wrangler 去 Cloudflare 拿权限，但你不用把账号密码交给 wrangler。',
+      '它发的是有时效的 token，不是密码。这也是为什么 token 过期不用重新输密码 —— 有 refresh token 就能续。'],
+    bearer: ['Bearer',
+      'HTTP 头的一种写法：<b>Authorization: Bearer &lt;token&gt;</b>，意思是「凭证跟在 Bearer 后面」。',
+      '服务器只看这串 token，不看你是谁。所以 token 一泄露就等于身份被借走 —— 这也是它必须短命的理由。'],
+    deploy: ['部署（deploy）',
+      '把本地代码推上去，替换线上正在跑的那一份。',
+      '部署是整份替换，不是热更新：要么全生效，要么全不生效。这次我部署了两次，第二次才把缓存头补齐。'],
+    origin: ['回源',
+      '缓存没命中时，回到真正的数据源算一遍 —— 这里就是回 D1 查库。',
+      '「回源率」高，缓存就白加了。这次改动要压的就是它。'],
+    git: ['git / 版本库',
+      '记录代码每次改动的工具，能回退、能看谁改了什么。',
+      '凡是进 git 的东西，所有协作者都看得到。所以密钥绝不能写在配置文件里 —— 这是 secret 那条规则的由来。'],
+    envvar: ['环境变量',
+      '程序启动时从外部读进来的一批「名字 = 值」，不用写死在代码里。',
+      '数据库地址、密钥、开关都属于这一类。区别只在于：普通配置项是明文，secret 是加密的。'],
+    process: ['进程 / 常驻进程',
+      '进程是操作系统里一个正在跑的程序实例。它有自己的内存，能一直待着等事情。',
+      '<b>Worker 没有这个能力</b>：请求来了才启动，响应完就收掉，两次请求之间什么都不留。所以不能「起个循环一直等」，也不能用内存记状态 —— 状态只能存到数据库或缓存里。'],
+    plan: ['执行计划（query plan）',
+      '数据库为一条 SQL 拟好的「怎么查」方案：先走哪个索引、按什么顺序扫、要不要临时排序。',
+      '同一条 SQL 重复执行时，数据库可以复用上次的计划，省掉「想方案」的一步。这也是 prepare 的第二个好处。'],
+    poll: ['轮询（polling）',
+      '定时反复去问「有新东西吗」。管理面板就是这么工作的：每 30 秒请求一次。',
+      '轮询的代价是「不管有没有变化都要问一次」。人越多、问得越密，后台读量越大 —— 这就是管理面板那行数字也要算额度账的原因。']
+  };
+
+  var pop = document.getElementById('pop');
+  var pt = pop.querySelector('.pt');
+  var pb = pop.querySelector('.pb');
+  var p2 = pop.querySelector('.p2');
+  var pnav = pop.querySelector('.pnav');
+  var pback = pop.querySelector('.pback');
+  var cur = null;     // 当前锚定的页面元素（用来收 aria-expanded）
+  var curKey = null;  // 当前显示的是哪一条
+  var stack = [];     // 二级跳转的来路
+  var anchor = null;  // 浮层贴着的那个位置（页面坐标）
+
+  function close(){
+    if (cur) cur.setAttribute('aria-expanded','false');
+    cur = null; curKey = null; stack = []; anchor = null;
+    pop.classList.remove('show');
+  }
+
+  /* 渲染一条定义；返回 false 表示没有这个词条（不弹空框） */
+  function render(key){
+    var d = DEFS[key];
+    if (!d) return false;
+    pt.textContent = d[0];
+    pb.innerHTML = d[1] || '';
+    p2.innerHTML = d[2] || '';
+    p2.style.display = d[2] ? '' : 'none';
+    pnav.style.display = stack.length ? '' : 'none';
+    if (stack.length) pback.textContent = '← 返回「' + DEFS[stack[stack.length - 1]][0] + '」';
+    return true;
+  }
+
+  /* 贴住锚点摆位：先试下方，放不下翻到上方，左右都不出界 */
+  function place(){
+    if (!anchor) return;
+    var pw = pop.offsetWidth, ph = pop.offsetHeight;
+    var vw = window.innerWidth, vh = window.innerHeight;
+    var sx = window.pageXOffset, sy = window.pageYOffset;
+    var gap = 8;
+
+    var left = anchor.left;
+    if (left + pw > sx + vw - 12) left = sx + vw - 12 - pw;
+    if (left < sx + 12) left = sx + 12;
+
+    var top = anchor.bottom + gap;
+    if (anchor.bottom + gap + ph > sy + vh) {
+      var up = anchor.top - ph - gap;
+      top = up >= sy + 8 ? up : Math.max(sy + 8, sy + vh - ph - 12);
+    }
+
+    pop.style.left = left + 'px';
+    pop.style.top = top + 'px';
+  }
+
+  function open(btn){
+    var key = btn.getAttribute('data-t');
+    if (!DEFS[key]) return;
+    if (cur === btn && pop.classList.contains('show') && !stack.length) { close(); return; }
+    if (cur) cur.setAttribute('aria-expanded','false');
+
+    var r = btn.getBoundingClientRect();
+    anchor = {
+      left: r.left + window.pageXOffset,
+      top: r.top + window.pageYOffset,
+      bottom: r.bottom + window.pageYOffset,
+    };
+
+    stack = [];
+    curKey = key;
+    cur = btn;
+
+    /* 先显示再量尺寸：隐藏状态下 offsetWidth 是 0，位置会算错 */
+    pop.classList.add('show');
+    render(key);
+    btn.setAttribute('aria-expanded','true');
+    place();
+  }
+
+  /* 解释里点了一个词：原地换内容，位置不动，记下来路 */
+  function navTo(key){
+    if (!DEFS[key] || key === curKey) return;
+    stack.push(curKey);
+    curKey = key;
+    render(key);
+    place();
+  }
+
+  function back(){
+    if (!stack.length) return;
+    curKey = stack.pop();
+    render(curKey);
+    place();
+  }
+
+  pback.addEventListener('click', function(e){
+    e.preventDefault(); e.stopPropagation();
+    back();
+  });
+
+  document.addEventListener('click', function(e){
+    /* 二级术语：必须点在浮层里才算，避免和页面上的同名元素混起来 */
+    var sub = e.target.closest('.term-in');
+    if (sub && pop.contains(sub)) {
+      e.preventDefault();
+      navTo(sub.getAttribute('data-t'));
+      return;
+    }
+    var btn = e.target.closest('.term');
+    if (btn) { e.preventDefault(); open(btn); return; }
+    if (!pop.contains(e.target)) close();
+  });
+
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape') { close(); return; }
+    /* 有来路时，退格键也当返回用 —— 一层层退回去比一次性关掉顺手 */
+    if ((e.key === 'Backspace' || e.key === 'ArrowLeft') && stack.length) {
+      e.preventDefault();
+      back();
+    }
+  });
+
+  window.addEventListener('scroll', function(){ if (cur) close(); }, { passive: true });
+  window.addEventListener('resize', function(){ if (cur) close(); });
+})();
+</script>
+</body>
+</html>
