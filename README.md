@@ -9,7 +9,7 @@
 raw/          上游 coopani-world-journey 源码（只读基线，当前 1.8.0）
 adapter/      TypeScript 套壳：宿主、配置、事件、媒体、提示词、生图提示词、HTTP、模拟
 scripts/      构建、部署、npm 源码更新、校验
-test/         89 项测试
+test/         92 项测试
 docs/         架构与上游更新文档
 plugin/       本地构建/联调目录（.gitignore 排除，不提交到本仓库）
 ```
@@ -52,7 +52,7 @@ git status
 ## 开发
 
 ```bash
-npm run check          # typecheck + 89 项测试 + upstream hash/契约
+npm run check          # typecheck + 92 项测试 + upstream hash/契约
 npm run sim -- --days 7 --speed 24 --seed 42 --data ./data/sim --offline
 npm run status -- --data ./data/sim --offline
 npm run prompt -- --data ./data/sim --offline
@@ -112,7 +112,7 @@ raw/                     上游源码基线（只读）
   ↓ 构建时复制
 plugin/.../raw/          安装后的上游源码（运行时动态加载/更新目标）
 plugin/.../engine/
-  sidecar.mjs            adapter 套壳（动态 import raw，约 102KB）
+  sidecar.mjs            adapter 套壳（动态 import raw，约 104KB）
   update.mjs             npm registry 更新器
   ↓ 回环 HTTP（token）
 main.py / bridge.py      AstrBot 命令、工具、提示词、主动消息、sidecar 生命周期
@@ -185,8 +185,11 @@ SWC/WASM loader，`raw/` 仍是磁盘上的 TS，热更新不受影响）。具�
   留空回退 `AstrBot大肥鱼`。改名要重启 sidecar，且只认前 24 字（清洗见 `normalizeBotName`）。
 - **填了 `amap_key` 会多出餐厅 POI 查询**（1.6.18 的 `journey_eat`/吃饭编排），和高德酒店查询同一个 key、
   同样带本地缓存（`engine/eatery-cache.json`）。额度敏感的用户知道这一项再去填。
-- 上游 `bridgeSpend/bridgeDiary/bridgeLive`（车费桥）默认关：它读同数据目录下第三方打车扩展写的
-  `ride-pending/`，AstrBot 场景没有那个邻居，开着也只是多读一次不存在的文件。
+- **车费桥（`bridgeSpend`/`bridgeDiary`/`bridgeLive`）由套壳固定关**：上游那三项默认是 **`true`**，
+  而 AstrBot 场景没有写 `ride-pending/` 的配套打车扩展——它读的是同一数据目录下第三方扩展的文件。
+  所以面板去掉这三项的同时，`config_map.py` 的 `PANEL_DROPPED_ENGINE_DEFAULTS` 把引擎侧钉成 `False`
+  （**「不映射」不等于「关」**：不映射就还是上游默认的 true）。想真接打车扩展，用
+  `extra_config` 写 `{"bridgeSpend":true}` 覆盖回来。
 
 ## 许可与署名
 

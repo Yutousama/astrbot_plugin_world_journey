@@ -29,7 +29,7 @@ plugin/         AstrBot Python 插件
 ## 关键边界
 
 - **adapter/raw.ts** 是唯一接触 raw 的文件；它用 `import(pathToFileURL(...))` 动态加载，
-  所以 sidecar bundle 只有约 58KB，更新 raw 不需要重打 adapter。
+  所以 sidecar bundle 只有约 104KB，更新 raw 不需要重打 adapter。
 - 安装后的 sidecar 用 Node 跑 `sidecar.mjs`，再把 `raw/src/*.ts` 动态 import 进来：
   - Node 22.7–25.x：`node --experimental-transform-types sidecar.mjs`，由 Node 自带转换；
   - Node 26+：该 flag 被移除（`process.features.typescript` 也没有 `transform` 取值了），改传
