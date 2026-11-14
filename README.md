@@ -6,10 +6,10 @@
 本仓库是**开发仓库**，维护：
 
 ```text
-raw/          上游 coopani-world-journey 源码（只读基线，当前 0.8.6）
+raw/          上游 coopani-world-journey 源码（只读基线，当前 1.8.0）
 adapter/      TypeScript 套壳：宿主、配置、事件、媒体、提示词、生图提示词、HTTP、模拟
 scripts/      构建、部署、npm 源码更新、校验
-test/         46 项测试
+test/         89 项测试
 docs/         架构与上游更新文档
 plugin/       本地构建/联调目录（.gitignore 排除，不提交到本仓库）
 ```
@@ -52,7 +52,7 @@ git status
 ## 开发
 
 ```bash
-npm run check          # typecheck + 46 项测试 + upstream hash/契约
+npm run check          # typecheck + 89 项测试 + upstream hash/契约
 npm run sim -- --days 7 --speed 24 --seed 42 --data ./data/sim --offline
 npm run status -- --data ./data/sim --offline
 npm run prompt -- --data ./data/sim --offline
@@ -112,7 +112,7 @@ raw/                     上游源码基线（只读）
   ↓ 构建时复制
 plugin/.../raw/          安装后的上游源码（运行时动态加载/更新目标）
 plugin/.../engine/
-  sidecar.mjs            adapter 套壳（动态 import raw，约 73KB）
+  sidecar.mjs            adapter 套壳（动态 import raw，约 102KB）
   update.mjs             npm registry 更新器
   ↓ 回环 HTTP（token）
 main.py / bridge.py      AstrBot 命令、工具、提示词、主动消息、sidecar 生命周期
@@ -125,11 +125,17 @@ main.py / bridge.py      AstrBot 命令、工具、提示词、主动消息、si
 
 | 上游 | 套壳用法 | 上游变了怎么办 |
 |---|---|---|
-| `JourneyWorld` 构造 | `adapter/raw.ts`（动态 import） | 改这一处 |
+| `JourneyWorld` 构造 | `adapter/raw.ts`（动态 import） | 改这一处。1.6.19 起可选 `keys`/`persist` **故意不传**：不传就不发生「密钥搬进 `.env` 并清空配置」，key 继续由 AstrBot 表单管 |
 | `start/stop/tools/envPromptVars/webUi` | `adapter/bridge.ts` + `contract.ts` | 契约测试会报 |
-| `WorldHost.log/pushEvent` | `adapter/host.ts` | 未知成员 no-op 兜底 |
+| `host.log/pushEvent`（上游只用这两个） | `adapter/host.ts` | 未知成员 no-op 兜底 |
 | `photo.ts` 的 `photoPrompt/spotFromBeat` | `adapter/photo-prompt.ts`（动态 import，只读复用） | 拍照与汇报配图退回旧提示词并写 warn，旅行不中断 |
-| 私有 `tick`/定时器 | 只在 `adapter/compat/private.ts` 的模拟里 | 只影响模拟，不影响插件 |
+| `geo/cities.ts` 的 `cityByName` | 同上，用来把路上目的地**名**反查成 city id（缺了就退化，不报错） | 少了这个只影响画面锚点/判光，不会挂 |
+| 私有 `tick`/`*Timer` 字段 | 只在 `adapter/compat/private.ts` 的模拟里（清单按对象上真实存在的 `*Timer` 逐个停） | 只影响模拟，不影响插件；测试会红 |
+
+上游 1.8.0 的面板已有 5 页（`now/album/diary/mates/settings`）、23 个工具、事件多出
+`journey.car/part/ride`；工具与事件是动态透传的，**加东西不用改壳**，只有做聊天侧快捷
+指令时才动 `main.py`（现有三条：`/journey_eat`、`/journey_signpost`、`/journey_mates`）。
+`settings`（生图设置）那一页是 Coopani 专属，套壳不接——AstrBot 有自己的配置表单与热重载。
 
 安装后的 sidecar 用 Node 直接运行 `plugin/raw/src/*.ts`，所以更新源码只要替换 raw 目录 +
 重启 sidecar，不用重新编译 adapter。跑 TS 的能力有两种来源：Node 22.7–25.x 用
@@ -166,6 +172,17 @@ SWC/WASM loader，`raw/` 仍是磁盘上的 TS，热更新不受影响）。具�
 - `raw/` 的立绘动作/音乐扩展联动不适用于 AstrBot；提示词会剥掉动作段。
 - 上游私有 `tick` 只用于模拟；上游改了它只影响模拟，不影响插件运行。
 - 运行时更新只更新**上游源码**；本套壳/Python 代码仍随插件版本更新。
+- **上游 1.0.1 起自带 npm 版本对账**：sidecar 启动时会打一次
+  `registry.npmjs.org`（8 秒超时、失败静默、结果缓存在 `engine/version-check.json`），
+  之后每 3 小时一次。它没有开关，也和插件自己的 `/journey_update` 各管各的——
+  上游那份只是「知道有没有新版」，真正更新仍走我们的更新器。离线环境表现为一次失败的请求，不影响旅行。
+- **配了 `meet_url` 才有对外上报**：位置心跳（20 分钟）、到站写足迹（1.8.0）、路标（`/journey_signpost`）、
+  名片/同行卡（1.6.x）。可见内容是宠物名/城市/时段（24 小时过期）与你自己留下的那句话；
+  留空则一条都不发。1.7.1 起上游不再随包提供自建服务端，只能填公共池或留空。
+- **填了 `amap_key` 会多出餐厅 POI 查询**（1.6.18 的 `journey_eat`/吃饭编排），和高德酒店查询同一个 key、
+  同样带本地缓存（`engine/eatery-cache.json`）。额度敏感的用户知道这一项再去填。
+- 上游 `bridgeSpend/bridgeDiary/bridgeLive`（车费桥）默认关：它读同数据目录下第三方打车扩展写的
+  `ride-pending/`，AstrBot 场景没有那个邻居，开着也只是多读一次不存在的文件。
 
 ## 许可与署名
 

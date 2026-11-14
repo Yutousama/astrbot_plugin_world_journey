@@ -74,9 +74,21 @@ test('点头/回程桥接：没有在等批时明确拒绝；在路上能叫她�
     assert.equal(back.ok, true);
     assert.ok(bridge.events.recent(30).some((e) => e.type === 'journey.depart'));
 
-    // 能力实测：0.8.6 的 raw 真有这三样，health 应如实上报（壳的版本闸信这个）。
+    // 能力实测：当前 raw 真有这些能力，health 应如实上报（壳的版本闸信这个）。
     const caps = bridge.capabilities();
-    assert.deepEqual(caps, { answerAsk: true, returnHome: true, photoSubject: true });
+    // 老三项（0.5.19 / 0.7.9 / 0.8.5）：指令 /journey_yes、/journey_back、/journey_photo 题材。
+    for (const key of ['answerAsk', 'returnHome', 'photoSubject'] as const) {
+      assert.equal(caps[key], true, `能力实测缺 ${key}`);
+    }
+    // 1.0.7 / 1.0.9：拍照的「怎么拍」与「她自己写的画面」。
+    assert.equal(caps.photoFocus, true);
+    assert.equal(caps.photoDescribe, true);
+    // 1.x 新工具（1.0.6 / 1.0.8 / 1.0.10 / 1.6.18 / 1.8.0）+ 0.8.7 的租车。
+    for (const key of ['planChange', 'hotelNight', 'spotRide', 'setSlot', 'eat', 'signpost', 'rentCar', 'rest'] as const) {
+      assert.equal(caps[key], true, `能力实测缺 ${key}`);
+    }
+    // 1.11 起的「路上遇见的人」面板（/journey_mates 只读那一页的数据）。
+    assert.equal(caps.matesPanel, true);
     assert.deepEqual(bridge.health().capabilities, caps);
   } finally {
     await bridge.stop();
@@ -101,6 +113,100 @@ test('ComfyUI 协议下自拍套壳整体停用：reportImage 直接返回 null�
     // selfieEnabled=true 但协议是 comfyui 且没单独配 selfieApi —— 自拍/汇报配图应安静跳过。
     const image = await bridge.reportImage('她在大荔看黄河');
     assert.equal(image, null);
+  } finally {
+    await bridge.stop();
+  }
+});
+test('接口形状：地址是 api.x.ai 却显式配成别的形状时 warn 一句', async () => {
+  const dir = tempDir();
+  const warnings: string[] = [];
+  const bridge = new RawBridge({
+    dataDir: dir,
+    log: {
+      info: () => {},
+      warn: (m: string) => { warnings.push(m); },
+      error: () => {},
+      debug: () => {},
+    },
+    now: () => new Date(T0.getTime()),
+    nowPlaying: () => null,
+    echo: false,
+    initialOverrides: {
+      imageApi: 'https://api.x.ai/v1',
+      imageKey: 'k',
+      imageModel: 'grok-imagine-image-2.0',
+      // auto 会自己认成 grok（那才是对的），所以这里要构造「人配错了」的情形：
+      // 地址指向 x.ai，形状却被显式钉在 openai。
+      imageShape: 'openai',
+    } as never,
+  });
+  await bridge.start();
+  try {
+    // 不 warn 的话用户只会看到「出一张跟她无关的照片」，而日志里一路 HTTP 200。
+    // 文案按**模型名**说话（域名在中转站场景下没意义），且只在形状被钉住时才 warn。
+    assert.ok(
+      warnings.some((m) => m.includes('Grok') && m.includes('形状被钉死')),
+      warnings.join(' | '),
+    );
+  } finally {
+    await bridge.stop();
+  }
+});
+
+test('接口形状：auto 不吵 —— 降级链混用 grok 与 gpt-image 是正常配置', async () => {
+  const dir = tempDir();
+  const warnings: string[] = [];
+  const bridge = new RawBridge({
+    dataDir: dir,
+    log: {
+      info: () => {},
+      warn: (m: string) => { warnings.push(m); },
+      error: () => {},
+      debug: () => {},
+    },
+    now: () => new Date(T0.getTime()),
+    nowPlaying: () => null,
+    echo: false,
+    initialOverrides: {
+      // 实例日志里的真实配置：中转站 + 两个 gpt-image 打头、grok 兜底。
+      // auto 下每个模型各认各的形状，这种混用不该在启动时挨一条「形状不对」的警告。
+      imageApi: 'https://ai.yutou233.cn/v1',
+      imageKey: 'k',
+      imageModels: ['gpt-image-2.6-flare', 'gpt-image-2.5-flare', 'grok-imagine-image'],
+      selfieEnabled: true,
+    } as never,
+  });
+  await bridge.start();
+  try {
+    assert.equal(warnings.filter((m) => m.includes('Grok')).length, 0, warnings.join(' | '));
+  } finally {
+    await bridge.stop();
+  }
+});
+
+test('接口形状 auto 认对了就不吵：api.x.ai 直接当 grok，不出 warn', async () => {
+  const dir = tempDir();
+  const warnings: string[] = [];
+  const bridge = new RawBridge({
+    dataDir: dir,
+    log: {
+      info: () => {},
+      warn: (m: string) => { warnings.push(m); },
+      error: () => {},
+      debug: () => {},
+    },
+    now: () => new Date(T0.getTime()),
+    nowPlaying: () => null,
+    echo: false,
+    initialOverrides: {
+      imageApi: 'https://api.x.ai/v1',
+      imageKey: 'k',
+      imageModel: 'grok-imagine-image-2.0',
+    } as never,
+  });
+  await bridge.start();
+  try {
+    assert.equal(warnings.filter((m) => m.includes('api.x.ai')).length, 0, warnings.join(' | '));
   } finally {
     await bridge.stop();
   }

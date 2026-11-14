@@ -1,5 +1,164 @@
 # 更新日志
 
+## 1.0.9 — 2026-11-15（上游 raw 0.8.6 → 1.8.0 + Grok 参考图出片 + 面板瘦身）
+
+本版主题：**吃下上游 1.x 全段**（0.9 → 1.8.0，约 60 个发布版）。核对结论是
+**公开面一处没破**，破坏只落在「模拟器停定时器」和「汇报配图与相册同源」两处，
+其余全是新功能接入与文档。
+
+### 上游更新
+
+- `npm run upstream:update`：npm 元数据 sha512 校验通过；备份 `.raw.bak-0.8.6`。
+- `raw/` 文件数 45 → **67**：新增 `data/city-play.json`、`data/hotel-facts.json`（约 1.6 MB 真数据表）、
+  上游 `docs/`，以及 `src/` 下 12 个新模块（`bridge.ts` 车费桥、`secrets.ts`、`version-check.ts`、
+  `image-backend.ts`、`party-log.ts`、`mate-talk.ts`、`geo/{city-play,eatery,hotel-facts,season,spot-profile}.ts`、
+  `plan/leisure.ts`）；`src/action-wishes.ts` 被上游删除（1.6.19 连功能一起撤）。
+- 公开面逐项复核，**没有破坏套壳契约**：`start/stop/tools/envPromptVars/webUi` 都在、
+  必需 5 个工具名都在、8 个必需提示词变量都在、`now`/`album` 面板都在、
+  `host.` 仍只有 `log`/`pushEvent`、`photo.ts` 仍导出 `photoPrompt`/`spotFromBeat`、
+  `cortico` 仍只有 `import type`、`state.ts` 的 `version` 仍是 1（旧存档继续读）。
+- 上游能力面扩张：工具 15 → **23**、面板 3 → **5**（新增 `mates`、`settings`）、
+  事件新增 `journey.car` / `journey.part` / `journey.ride`。
+
+### 壳层适配（全部在壳里解决，`raw/` 一个字没改）
+
+1. **`adapter/compat/private.ts` 定时器清单**（唯一的真破坏）：上游 1.6.19 删了 `wishTimer`，
+   新增 `heartTimer`（20 分钟位置心跳）、`versionTimer`（3 小时 npm 对账）、`reportRetryTimer`。
+   清单不更新，模拟就留着真实定时器继续跑心跳/版本检查（表现是测试跑完进程不退、CI 多打 npm）。
+2. **`adapter/raw.ts` 构造参数**：补上 1.6.19 新增的可选 `keys` / `persist` 类型，
+   并**决定不传**——上游 `adoptKeys()` 第一句 `if (!ports) return`，不传就完全不发生
+   「把 amapKey/imageKey 搬进 `.env` 并清空配置」。AstrBot 的 key 由插件配置表单管，
+   被上游抹掉反而没人能改回来。
+3. **`adapter/bridge.ts capabilities()`**：从 3 项扩到 14 项（1.x 八个新工具 +
+   `photoFocus`/`photoDescribe` + `matesPanel`）。指令版本闸的主路仍是这份实测，
+   旧版兜底表跟着同步，「壳新 raw 旧」时给准确指引。
+4. **`adapter/photo-prompt.ts` 汇报配图与上游同源**（这块的收益最实在）：
+   - 补传 `cityId`：1.8.0 的视觉锚点、季节句、太阳高度**全按 id 查**，只有地名时上游退化成
+     「只拍城市」。在城里直接读快照 `place.id`；在路上快照只给目的地**名字**，
+     于是多 import 一个上游 `geo/cities.ts` 用 `cityByName` 反查（`photo.ts` 本就依赖那张表，
+     不多加载模块）。实测差异：喀什 19 点从「判黑」变成「天还蓝、光很低」。
+   - 补上游 1.11 的判据：在路上**过半才算到目的地那一带**（`leg.progress` 是百分数）；
+     原来一律取目的地，「刚出成都两小时」窗外就成了戈壁滩。
+   - 补 `minimal` / `cast`：上游自动拍照会传这两件（1.6/1.7 加的），少传就变成
+     「相册按设置出图、汇报图不按设置」——和当初「画风不生效」同一类分裂。
+   - `hour` 改四舍五入对齐上游 `Math.round(decimal)`：18:40 那边按 19 点判光。
+   - `month`/`day` **故意仍不传**：上游 `maybePhoto` 自己也没传（`scene.month ?? 1`），
+     两边一致优先于单侧更准；已判定这是上游的遗漏，值得单独去提。
+5. **Python 壳**：新增 5 个配置项 `image_preset` / `image_minimal` / `bridge_spend` /
+   `bridge_diary` / `bridge_live`（三个桥开关默认 **关**，AstrBot 没有写 `ride-pending/` 的邻居扩展）；
+   `photo_dir` 文案改成上游 1.6.15 澄清后的真实语义（「另外再存一份」，不是「换地方存」）；
+   `_FEATURE_MIN_RAW` / `_FEATURE_CAP_KEY` 从 3 项扩到 10 项。
+6. **新指令**：`/journey_eat 火锅 [晚饭|12:30]`、`/journey_signpost 一句话`（≤40 字、需碰面服务器）、
+   `/journey_mates`（读快照里的同行记忆）；`/journey_photo` 认不出题材时不再回一句「不认识」，
+   整句按 1.0.9 的 `describe` 交给她写画面（旧上游仍走原来的题材提示）。
+
+### 明确不做（并写进 README 说明理由）
+
+`settings`（生图设置）面板与 `saveImageSettings`（AstrBot 有自己的配置表单 + 热重载，
+接两套写入口必打架）；密钥进 `.env`；车费桥的文件契约对端模拟；音乐扩展联动
+（套壳一直用自己的 `nowplaying.json` 回调）；立绘动作 / `{{pet.vocab}}`（提示词继续剥动作段）。
+
+### 验证
+
+- `npm run check` 全绿：typecheck + **60 个测试**（46 → 60）+ 上游校验「与锁一致：1.8.0（67 个文件）」；
+- `npm run build`：sidecar 81.6 KB、`engine/upstream.json` 写入 1.8.0/67、raw hash 构建前后未变；
+- 新增守卫：工具/面板清单钉死、`FIELD_MAP` 每个引擎键必须在上游 defaults 或套壳白名单里、
+  `pauseTimers` 按对象上真实存在的 `*Timer` 字段逐个查停、离线模拟不留 npm 查询成功痕迹。
+
+### Grok（xAI）参考图出片：接口形状
+
+上游 1.7.1 加了 `image-backend.ts`，但那是「哪家云端」的预设，不是「请求长什么样」。
+Grok 的 `/v1/images/edits` 与 OpenAI 那套**不是同一个形状**（官方文档 + `openapi.json` 核对）：
+只收 `application/json`（OpenAI SDK 的 `images.edit()` multipart 直接被拒）、参考图必须是
+**对象** `image:{url}`（多图换 `images:[…]` ≤5）、**没有 `size` 也没有 `watermark`**，
+尺寸改由 `aspect_ratio` + `resolution` 表达，且官方明确说单图编辑的比例总是从输入图推。
+
+形状错了的坏法正是最难查的那一种：**接口收下请求、把不认识的字段丢掉，照样 200 出一张
+跟她毫无关系的照片**。所以这一层必须在套壳的 fetch 代理里做 —— 上游的 400 阶梯只会
+**删**字段，学不会**换**字段。
+
+- `adapter/selfie.ts` 新增 `ImageShape` / `resolveImageShape()`（解析只在这一处）、
+  `grokSizeOf()`（`1664x928`→`16:9`+`1.5k`、`3:4`→比例、`2k`→分辨率）、
+  `applyGrokShape()`（空镜也换形状）、`loadSelfieReferences()`（Grok 一次喂最多 5 张参考图）、
+  `proxyHint()`（连不上时说明 Node 的 fetch 默认不走系统代理，要 `NODE_USE_ENV_PROXY=1`）。
+- 自拍超时不再写死 120 秒，改跟 `image_timeout_sec`（2k 的编辑请求实测 60–90 秒）。
+- 别家形状收到 `3:4`/`2k` 这种值时**不发 `size`** 并 warn 一行，免得吃一个看不懂的 400。
+- 内置 `DEFAULT_GROK_PROMPT`：按 xAI 的 Prompting Guide 写的「编辑型」模板
+  （先说要改什么 → 再一句话锁定身份 → 画风/时间 → 只留一条负面）。通用模板里那串
+  「不要换脸，不要变成陌生人，没有文字、水印、边框」正是官方建议避免的写法。
+  **用户写过自己的模板就永远不替换**；判据 `isBuiltInTemplate`（TS）/
+  `is_builtin_prompt`（Python）两侧一致，由测试逐字守着（`defaults.py` ↔ `selfie.ts`）。
+
+### `auto` 按**模型名**认形状（实测推翻了我最初按地址猜的方案）
+
+实测那台中转站 `ai.yutou233.cn` 一个域名后面同时挂着 `grok-imagine-image`、
+`gpt-image-2.6-flare`、`qwen-image-3.0-pro`、`wan2.7-image` —— 地址毫无信息量。
+真实请求矩阵（全部实测，不是推断）：
+
+| 参考图字段形状 | `grok-imagine-image` | `gpt-image-2.6-flare` |
+|---|---|---|
+| multipart（旧 `openai` 形状） | 未测 | **502** |
+| 顶层 `image_url` + `size` | ✅ 200 / 84.6s | 400 `images[].image_url is required` |
+| `image:{url}` 无 `size` | ✅ 200 / 76.6s | 400 同上 |
+| `images:[{image_url}]` / `[{url}]` 无 size | ✅ 200 / 57.7s、76.4s | 502 |
+| 任何形状带 `size` | ❌ 400 `Argument not supported: size` | ❌ 同 |
+| 带 `aspect_ratio` + `resolution` | ✅ 200 / 68.2s | —— |
+
+于是优先级改成：显式值 > 旧 `selfie_mode`/`selfie_edit_json` > **模型名**（`MODEL_SHAPES`）
+> 接口地址 > 默认 `openai`，并且**降级链里每换一个模型都重新认一次** ——
+顺带消掉了「形状全局一套」的限制：`gpt-image → gpt-image → grok` 这种混用在实例上
+真跑通了（前两个各失败一次，第三个用 `image:{url}` 出图 351 KB，女仆装细节和脸都对得上）。
+
+`wan` 是唯一故意不按模型名认的：同一个万相模型名既可能配百炼原生端点（要 `wan`）
+也可能配中转站兼容端点（要 `openai`），这歧义只有地址能解。
+
+### 面板瘦身：生图/自拍相关 32 → 26 项，为 Grok 一个可见选项都没加
+
+| 动作 | 旧 | 新 |
+|---|---|---|
+| 4 → 1 | `selfie_mode`、`selfie_edit_json`、`selfie_image_field`、`selfie_native_url` | `image_shape`（后来又整项去掉，见下） |
+| 2 → 1 | `image_no_size`、`image_no_response_format` | **`image_compat`**（`none`/`no_size`/`no_format`/`both`） |
+| 2 → 1 | `image_prompt_template` + `selfie_prompt` | **统一提示词模板**（默认文本直接摆在面板上，留空由迁移填回） |
+| 整项去掉 | `image_shape`、`image_preset`、`bridge_spend`/`bridge_diary`/`bridge_live` | 形状固定 `auto`；预设不映射＝上游默认 `custom`；车费桥在 `PANEL_DROPPED_ENGINE_DEFAULTS` 固定 `False`（上游默认是 `true`，**不映射不等于关**） |
+
+- 逃生口统一走 `extra_config`：`{"imageShape":"relay"}`、`{"selfieImageField":"image"}`、
+  `{"bridgeSpend":true}`、`{"imageQuality":"medium"}`。
+- 迁移（`main.py`，一次性写回）：旧四键 + 残留 `image_shape` 清空；两个模板字段合并 ——
+  只有旧 `selfie_prompt` 被用户写过就把他那份搬进统一模板，**两处都写过就保留生效那份、
+  旧那份全文备份到 `template_backup/`**（日志给路径，不静默丢用户内容）。
+- `test/config.test.ts` 的「1.8.0 新增键已接到表单」守卫改成 `PANEL_DROPPED` 显式例外表：
+  每一项必须写理由，并校验「不再映射」+「引擎侧有兜底」；同时断言旧四键不许再映射
+  （它们优先级高于模型名猜测，映射着就等于让固定 `auto` 失效）。
+- `image_minimal`（极简提示词）的 hint 从黑话重写成大白话：控制发给画图模型那段描述写多长。
+
+### 主动汇报配图不再要求开自拍
+
+以前 `selfie_enabled` 关着就完全不配图（「保持原来的成本上限」），于是
+「不想每句话都塞一张自拍、但想配一张她眼前的景」直接配不出来。
+
+- `adapter/selfie.ts` 新增 `generateSceneImageBytes()`：不带参考图，走空镜模板 +
+  同一套形状改写 + 同一条降级链。
+- `bridge.reportImage()` 双路：开着自拍走参考图编辑接口，关着走空镜。
+- `main.py` 去掉那道门槛；成本变化写进 hint 与 README。
+
+### 日志可诊断性（从实例真实日志里翻出来的两处）
+
+- 降级链**每一次失败都单独记一行**（以前只在全部失败时汇总，中间为什么没过看不见）。
+- 形状配错的 warn 只在**形状被钉住**时才发：`auto` 下混用多家是正常配置，
+  实例日志里就出现过「链子跑通并出了图，启动却先挨一条警告」的噪音。
+- 启用行改成对照表：`自拍套壳已启用：降级链形状 gpt-image-2.6-flare→openai、grok-imagine-image→grok`。
+- `/journey_debug` 增加「生图形状」「字段兼容」两行。
+
+### 本版验证
+
+- `npm run check` **89/89 通过**（本版新增 25 条测试：形状解析、grok 两条路径、尺寸映射、
+  编辑型模板与跨语言一致性、按模型名 auto、混合降级链各用各的形状、空镜配图、模板迁移）；
+- 三份 Python/Node 校验脚本（`config_map` 展开 9 组、`main.py` 迁移 9+8 组、面板与重复自检）；
+- 端到端实测：`auto` + `grok-imagine-image` → 88.7 秒出图 333 KB，日志
+  `形状=grok（按模型名认出）`、`自拍接口响应：HTTP 200（grok）`；
+- 构建：sidecar 101.8 KB、`engine/upstream.json` 1.8.0/67 文件、raw hash 构建前后未变；
+- 已部署到本地 AstrBot 实例并重载验证。
+
 ## 1.0.8 — 2026-11-07
 
 本版主题：**生图接口兼容层**——按服务商的报错逐个关掉不认的字段，参考图过大时自动压缩。

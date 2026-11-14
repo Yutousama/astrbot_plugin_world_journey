@@ -45,6 +45,26 @@ plugin/         AstrBot Python 插件
 - 配置：Python 写 `engine-config.json`（`{engine:...,wrapper:{offline}}`），sidecar 每请求检查 mtime
   并合并到 raw 的活配置对象。
 - 生图代理：`selfie.ts` 在 sidecar 进程内包一层 `fetch`，只拦截 `POST .../images/generations`：
+  - **接口形状**：把请求改成这家服务商认的写法。**面板上已经没有这一项，固定 `auto`** ——
+    `config_map.py` 不再映射 `image_shape`，也不再映射那四个会被 TS 当成显式形状的旧键
+    （`selfie_mode`/`selfie_edit_json`/`selfie_image_field`/`selfie_native_url`：它们在解析里
+    优先级高于模型名猜测，留着就等于让 auto 失效；`main.py` 的迁移负责把旧键清空）。
+    解析只在 `resolveImageShape()` 一处，优先级是
+    显式值（现在只能来自 `extra_config` 的 `imageShape`）> 旧 `selfie_mode`/`selfie_edit_json`
+    > **模型名**（`MODEL_SHAPES`：含 `grok`/`imagine`→`grok`，`gpt-image`/`dall-e`→`openai`）
+    > 接口地址（`api.x.ai`→`grok`，`dashscope|aliyuncs`→`wan`）> 默认 `openai`。
+    `auto` 下**每换一个候选模型都重新认一次**，所以中转站上混用两家也能各用各的形状；
+    `wan` 只由地址决定（同一个万相模型名既可能配百炼原生端点也可能配中转站兼容端点，
+    模型名解不了这个歧义）。Grok 那条是 `/images/edits` + JSON + 参考图 `image:{url}` 对象
+    （多图换 `images`，≤5），没有 `size`/`watermark`，尺寸由 `image_size`/`selfie_size` 的
+    `WxH`·`3:4`·`2k` 三种写法翻成 `aspect_ratio` + `resolution`；空镜（不带参考图）也照这个改，
+    因为上游的 400 阶梯只会删字段、学不会换字段。形状选错的坏法是静默的：接口收下请求、
+    丢掉不认识的参考图字段，200 出一张跟她无关的图。
+  - **面板去掉的上游键**：`image_preset`（云端服务商预设；上游默认就是 `custom`，不映射即等于
+    custom，豆包那种「选一下填三样」不再出现在插件面板）、`bridge_spend`/`bridge_diary`/
+    `bridge_live`（车费桥；上游默认 `true`，AstrBot 没有配套打车扩展，所以
+    `PANEL_DROPPED_ENGINE_DEFAULTS` 固定成 `False`，`extra_config` 仍可覆盖）。
+    `test/config.test.ts` 的 `PANEL_DROPPED` 表要求每一项都写明理由并校验兜底，不许随手放宽。
   - **模型降级**：`image_model` 是列表，Python 写成 `imageModels`，代理按顺序换 `model` 重发，
     全部失败才把错误交回上游；尺寸/字段不兼容的 400 不换模型，留给上游自己的兼容阶梯。
   - **自拍**：把空镜提示词换成自拍模板，用 `selfie_reference` 走 `/images/edits` 或带
@@ -54,8 +74,15 @@ plugin/         AstrBot Python 插件
     老模板没有时间占位符时自动把时间补在末尾。
   - 自拍关闭且没配模型列表时完全不介入；关闭自拍、只配模型列表时只做降级。
 - 主动汇报配图：Python 调 `POST /api/report-image`（`bridge.py` → `adapter/server.ts` →
-  `bridge.reportImage()`），用自拍配置生成一张图、base64 回传；不写上游 photo 事件、不进相册，
-  失败只丢配图、文字照发。
+  `bridge.reportImage()`），拿同一套场景描述生成一张图、base64 回传；不写上游 photo 事件、
+  不进相册，失败只丢配图、文字照发。
+  **配图不要求开自拍**：`selfie_enabled` 开着走 `generateSelfieBytes`（带参考图、编辑接口），
+  关着走 `generateSceneImageBytes`（空镜：同一套形状改写 + 空镜模板）。以前这里绑死自拍，
+  「不想每句话都塞一张自拍、但想配一张风景」直接配不出来。
+- 模板：面板上出镜只有一个 `image_prompt_template`（统一模板，默认**空**），旧的
+  `selfie_prompt` 已合并；空镜另有 `image_prompt_scene_template`。留空 = 按接口形状取内置默认
+  （通用 / Grok 编辑型）。判据 `is_builtin_prompt`（Python）与 `isBuiltInTemplate`（TS）必须一致 ——
+  老面板把默认值写进过用户配置，光看「非空」分不清是谁写的。
 - 日记：上游只提供 `journey_diary_write/read` 工具和文件存储。插件侧的 `diary_view.py`
   只读月文件/旧日文件，合并同步盘与本机目录、同一天取文件更新的那份；`/journey_note` 用它
   按日期倒序输出纯文本。`diary_write_time`（默认 23:00，她当地）到点后，若当天未写，

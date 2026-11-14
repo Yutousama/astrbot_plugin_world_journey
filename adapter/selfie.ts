@@ -1,14 +1,22 @@
 /**
- * 生图代理（自拍套壳 + 全局提示词模板 + 模型名降级）。
+ * 生图代理（**接口形状** + 自拍套壳 + 全局提示词模板 + 模型名降级）。
  *
- * 上游 `photo.ts` 只认**一个**模型 id，而且它属于只读基线，套壳不能改。
- * 所以这里在 AstrBot 侧套一层 fetch 代理，拦上游的 `POST /images/generations`：
+ * 上游 `photo.ts` 只认**一个**模型 id、只会按 OpenAI 那套字段发请求，而且它属于只读
+ * 基线，套壳不能改。所以这里在 AstrBot 侧套一层 fetch 代理，拦上游的
+ * `POST /images/generations`：
  *
  *   上游请求 /images/generations
+ *      → 按 `image_shape` 把请求改成这家服务商认的形状（见 `resolveImageShape`）
  *      → 配置了多个模型名时，按顺序逐个重发：前一个报错就换下一个
  *      → 自拍开启时，先把空镜提示词换成自拍提示词，再走参考图接口
  *      → 只开「空镜套模板」时，换提示词但不带参考图，仍走 /images/generations
  *      → 把结果包成上游认识的 {data:[{b64_json|url}]}
+ *
+ * 「接口形状」这件事必须在代理里做，不能指望上游的 400 重试阶梯：阶梯只会**删字段**，
+ * 而 Grok（xAI）要的是**换个字段**（`size` → `aspect_ratio` + `resolution`，
+ * 参考图从顶层字符串换成 `image:{url}` 对象）。形状不对时它的表现最难查 ——
+ * 有的服务商收下整个请求、把不认识的 `image_url` 丢掉，于是 HTTP 200、出图正常，
+ * 只是和参考图毫无关系。
  *
  * 「提示词模板」现在是**全局**的：不管自拍开不开，最终发给接口的这句话都由
  * `promptTemplate` + `{style}`（= 用户的「画面风格」）决定。以前模板只在自拍路径
@@ -30,16 +38,36 @@ export interface SelfieOptions {
    * 自拍模型留空时，桥接层会把「生图模型名」的整个列表传进来。
    */
   readonly model: string | readonly string[];
-  readonly mode: 'edit' | 'generation' | 'native';
   /**
-   * `edit` 模式直接发 JSON（带 data URL），跳过 multipart。
+   * 面板上的「接口形状」（`image_shape`）。`auto` / 空 / 认不出的值交给 `resolveImageShape`
+   * 按旧字段和接口地址推断。
+   */
+  readonly shape?: string;
+  /**
+   * 旧字段 `selfie_mode`（`edit` / `generation` / `native`）。只作为 `shape` 没填时的
+   * 兼容来源，新代码不要再按它分支。
+   */
+  readonly mode?: 'edit' | 'generation' | 'native' | string;
+  /**
+   * 旧字段 `selfie_edit_json`：`edit` 模式直接发 JSON（带 data URL），跳过 multipart。
    *
-   * 有些中转站/上游只认 `application/json`，multipart 直接 415/502；打开后省一轮无效请求。
+   * 有些中转站/上游只认 `application/json`，multipart 直接 415/502；等价于 `shape=relay`。
    */
   readonly editJson?: boolean;
   readonly nativeUrl?: string;
   readonly size: string;
   readonly imageField: string;
+  /**
+   * Grok 的 `quality`（`low` / `medium`）。留空不发，让服务商按默认 `auto` 走
+   * （编辑请求的 auto 已经是 `medium`）。不进面板，只从 `extra_config` 的
+   * `imageQuality` 读。
+   */
+  readonly quality?: string;
+  /**
+   * 一次生图最多等多久（毫秒）。来自 `image_timeout_sec`；留空用 120 秒。
+   * 2k 的编辑请求比生成慢得多，写死 120 秒会把还在画的请求掐掉。
+   */
+  readonly timeoutMs?: number;
   readonly subject: string;
   readonly promptTemplate: string;
   /**
@@ -68,6 +96,217 @@ export interface ImageCompatOptions {
 }
 
 /**
+ * 接口形状（= 服务商预设）。面板上的 `auto` 只是「让它去认」，解析结果里不会出现。
+ *
+ * - `grok`：xAI Grok。`/images/edits` **只收 `application/json`**，参考图必须是
+ *   嵌套对象 `image:{url}`（多图换 `images:[{url},…]`，≤5 张），没有 `size`/`watermark`
+ *   这两个字段，尺寸改由 `aspect_ratio` + `resolution` 表达。
+ * - `openai`：OpenAI 原生 `/images/edits`，multipart。
+ * - `relay`：只认 JSON 的中转站，参考图放顶层 `image_url` 的 data URL。
+ * - `generation`：把参考图当字段塞进 `/images/generations`。
+ * - `wan`：阿里百炼原生 `multimodal-generation`（`input.messages` 带 data URL）。
+ */
+export type ImageShape = 'grok' | 'openai' | 'relay' | 'generation' | 'wan';
+
+/** 这个形状是谁定的 —— 日志要能说清「这是你选的，还是我们替你认的、凭什么认的」。 */
+export type ShapeSource = 'panel' | 'legacy' | 'model' | 'host' | 'default';
+
+/** 解析形状要看的输入：面板值优先，其次旧三件套，再按模型名认，最后按接口地址认。 */
+export interface ShapeInput {
+  readonly shape?: string;
+  readonly api?: string;
+  /**
+   * 这一次要用的模型 id（给列表就取第一个）。`auto` 时**先看模型名**：中转站一个域名后面挂着
+   * 几十家模型，按地址猜等于瞎猜，而模型名直接说明「这家后端是谁」。
+   * 降级链每换一个模型都会重新认一次。
+   */
+  readonly model?: string | readonly string[];
+  /** 候选模型列表；只在没传 `model` 时取第一个（给启动日志和配错提示用）。 */
+  readonly models?: readonly string[];
+  /** 旧 `selfie_mode`。 */
+  readonly mode?: string;
+  /** 旧 `selfie_edit_json`。 */
+  readonly editJson?: boolean;
+  /** 旧 `selfie_image_field`。 */
+  readonly imageField?: string;
+}
+
+export interface ResolvedShape {
+  readonly shape: ImageShape;
+  /**
+   * `relay` / `generation` 路径上参考图放的顶层字段名（`grok` 不用它，`openai` 用 multipart）。
+   * 旧字段没填非默认值时保持 `image_url`。
+   */
+  readonly imageField: string;
+  readonly source: ShapeSource;
+  /** 不是面板选的、也不是旧字段折出来的（= 我们替用户认的）。 */
+  readonly guessed: boolean;
+}
+
+const SHAPES: readonly ImageShape[] = ['grok', 'openai', 'relay', 'generation', 'wan'];
+
+/**
+ * 模型名 → 形状。只收「形状能由模型名断定」的族，剩下的交给接口地址或默认。
+ *
+ * - `grok` / `imagine`：xAI 的编辑接口只有 JSON + `image:{url}` 一种吃法。
+ *   **实测过中转站也照收**（`ai.yutou233.cn` 上 `grok-imagine-image` 用这个形状 200 出图），
+ *   所以这条不看域名。
+ * - `dall-e` / `gpt-image` / `chatgpt-image`：OpenAI 原生 edits 就是 multipart。
+ * - **`wan*` 故意不在这里**：万相的模型名既可能配百炼原生端点（要 `wan` 形状），
+ *   也可能配中转站的 OpenAI 兼容端点（要 `openai`/`relay`）。这种歧义只能由地址决定，
+ *   所以 `wan` 只走 host 那条判断。
+ */
+const MODEL_SHAPES: ReadonlyArray<readonly [RegExp, ImageShape]> = [
+  [/grok|imagine/i, 'grok'],
+  [/^(dall-?e|gpt-image|chatgpt-image)/i, 'openai'],
+];
+
+/** 模型名能说明的形状；认不出返回空串。`auto` 的解析和「配错了要提醒」都用它，
+ * 判据只写在这一处。 */
+export function modelShapeHint(model: string): ImageShape | '' {
+  const name = (model ?? '').trim();
+  if (!name) return '';
+  for (const [pattern, shape] of MODEL_SHAPES) {
+    if (pattern.test(name)) return shape;
+  }
+  return '';
+}
+
+/** 面板/引擎里模型既可能是单个字符串，也可能是降级列表；取第一个来看形状。 */
+function firstModel(value: string | readonly string[] | undefined): string {
+  if (typeof value === 'string') return value.trim();
+  if (Array.isArray(value)) return String(value[0] ?? '').trim();
+  return '';
+}
+
+/**
+ * 把「面板值 + 旧字段 + 模型名 + 接口地址」折成一个形状。
+ *
+ * 优先级：**显式 `image_shape` > 旧 `selfie_mode`/`selfie_edit_json` > 模型名 > 接口地址 > 默认**。
+ * 显式值排第一，是因为用户明确选了就要照办；旧字段排第二，是为了升级后一个字都没改过配置的人
+ * 行为逐字不变（原来开着 `selfie_edit_json` 的仍然走 `relay`，不会突然改发 multipart）。
+ * 模型名排第三：认错了顶多是多一次失败请求，而 `grok-imagine-image` 认成 `openai` 的代价
+ * 正好是「参考图被丢掉但照样出图」，所以宁可先按模型名点名。
+ */
+export function resolveImageShape(input: ShapeInput): ResolvedShape {
+  const imageField = (input.imageField ?? '').trim() || 'image_url';
+  const found = (shape: ImageShape, source: ShapeSource): ResolvedShape => ({
+    shape,
+    imageField,
+    source,
+    guessed: source !== 'panel' && source !== 'legacy',
+  });
+  const explicit = (input.shape ?? '').trim().toLowerCase();
+  if (explicit && explicit !== 'auto' && (SHAPES as readonly string[]).includes(explicit)) {
+    return found(explicit as ImageShape, 'panel');
+  }
+  const legacy = (input.mode ?? '').trim().toLowerCase();
+  if (legacy === 'native') return found('wan', 'legacy');
+  if (legacy === 'generation') return found('generation', 'legacy');
+  if (legacy === 'edit') return found(input.editJson === true ? 'relay' : 'openai', 'legacy');
+  const model = firstModel(input.model) || firstModel(input.models);
+  const hint = modelShapeHint(model);
+  if (hint) return found(hint, 'model');
+  const host = hostOf(input.api ?? '');
+  if (/(^|\.)x\.ai$/i.test(host)) return found('grok', 'host');
+  if (/dashscope|aliyuncs|bailian/i.test(host)) return found('wan', 'host');
+  return found('openai', 'default');
+}
+
+/** 日志用的一行话：形状 + 是谁定的。认出来的必须说清凭什么，否则排查时是猜谜。 */
+export function describeShape(shape: ResolvedShape, model?: string): string {
+  switch (shape.source) {
+    case 'panel': return `${shape.shape}（面板选的）`;
+    case 'legacy': return `${shape.shape}（由旧的自拍字段折出来）`;
+    case 'model': return `${shape.shape}（按模型名${model ? ` ${model}` : ''}认出）`;
+    case 'host': return `${shape.shape}（按接口地址认出）`;
+    default: return `${shape.shape}（默认）`;
+  }
+}
+
+/** 面板值是不是「让它去认」（空、auto、以及认不出的值都按 auto 处理）。 */
+export function shapeIsAuto(value: string | undefined): boolean {
+  const raw = (value ?? '').trim().toLowerCase();
+  return !raw || raw === 'auto' || !(SHAPES as readonly string[]).includes(raw);
+}
+
+function hostOf(api: string): string {
+  try {
+    return new URL(api).hostname.toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+/** Grok 认的比例枚举（`aspect_ratio`）。顺序无所谓，吸附按数值差算。 */
+const ASPECTS: ReadonlyArray<readonly [string, number]> = [
+  ['1:1', 1], ['3:4', 0.75], ['4:3', 4 / 3], ['9:16', 9 / 16], ['16:9', 16 / 9],
+  ['2:3', 2 / 3], ['3:2', 1.5], ['9:19.5', 9 / 19.5], ['19.5:9', 19.5 / 9],
+  ['9:20', 0.45], ['20:9', 20 / 9], ['1:2', 0.5], ['2:1', 2], ['21:9', 21 / 9], ['5:2', 2.5],
+];
+
+/** 一个尺寸字符串在 Grok 上翻出来的参数；两个都可能缺（留空就都不发，交给服务商默认）。 */
+export interface GrokSize {
+  readonly aspectRatio?: string;
+  readonly resolution?: string;
+}
+
+/**
+ * 把面板里的「尺寸」翻成 Grok 的 `aspect_ratio` + `resolution`。
+ *
+ * 一个字段承载三种写法，是为了不再为 Grok 单开两个配置项：
+ * - `1664x928`（各家通用写法）→ 比例吸附到最近的枚举 + 长边推分辨率（≥1792 → `2k`、≥1152 → `1.5k`，更小的值就是默认 `1k`，不发）；
+ * - `3:4` → 只发比例；`2k` → 只发分辨率；
+ * - 空或认不出 → 什么都不发（比例跟随参考图，分辨率按默认 `1k`）。
+ *
+ * 调用方决定用不用 `aspectRatio`：单参考图编辑不能发（官方纪律），`/images/generations` 可以发。
+ */
+export function grokSizeOf(size: string): GrokSize {
+  const value = (size ?? '').trim().toLowerCase().replace('\u00d7', 'x');
+  if (!value) return {};
+  const kilo = /^(\d+(?:\.\d+)?)k$/.exec(value);
+  if (kilo) {
+    const side = Number(kilo[1]);
+    return { resolution: side >= 2 ? '2k' : side >= 1.5 ? '1.5k' : '1k' };
+  }
+  const parts = /^(\d+(?:\.\d+)?)[x:]([a-z0-9.]+)$/.exec(value);
+  if (!parts) return {};
+  const a = Number(parts[1]);
+  const b = Number(parts[2]);
+  if (!(a > 0 && b > 0)) return {};
+  const aspectRatio = nearestAspect(a / b);
+  if (value.includes(':')) return { aspectRatio };
+  const long = Math.max(a, b);
+  const resolution = long >= 1792 ? '2k' : long >= 1152 ? '1.5k' : undefined;
+  return resolution ? { aspectRatio, resolution } : { aspectRatio };
+}
+
+function nearestAspect(ratio: number): string {
+  let best = ASPECTS[0]![0];
+  let bestDiff = Number.POSITIVE_INFINITY;
+  for (const [name, value] of ASPECTS) {
+    const diff = Math.abs(value - ratio);
+    if (diff < bestDiff) { bestDiff = diff; best = name; }
+  }
+  return best;
+}
+
+/** 只有 `宽x高` 这种写法能当 `size` 发给别家；`3:4` / `2k` 是 Grok 专属。 */
+export function isWxH(size: string): boolean {
+  return /^\d{2,5}[x\u00d7]\d{2,5}$/i.test((size ?? '').trim());
+}
+
+/**
+ * 一次生图请求最多等多久。`image_timeout_sec` 留空（0）时按 120 秒。
+ *
+ * 出图比查询慢一个数量级，超时被掐掉的代价是「她明明在画，我们挂了」。
+ */
+export function selfieTimeoutMs(seconds: number | undefined): number {
+  const sec = Number(seconds);
+  return Number.isFinite(sec) && sec > 0 ? Math.round(sec * 1000) : 120_000;
+}
+
+/**
  * 空镜（没开自拍）的模板选项。
  *
  * 单独一套而不是复用自拍模板：自拍模板里有 `{subject}` 和「画面里只有她一个人」，
@@ -93,6 +332,13 @@ export interface PhotoProxyOptions {
   readonly selfie: SelfieOptions | null;
   /** 空镜模板改写；`enabled` 为假 = 空镜提示词一个字都不动。 */
   readonly scene?: SceneTemplateOptions | null;
+  /**
+   * 接口形状（`image_shape`）。作用于「空镜 / 原样重发」这条路径；自拍路径按
+   * `SelfieOptions` 自己的 `shape` + `api` 解析（自拍的接口地址可能是另一家服务商）。
+   */
+  readonly shape?: ShapeInput | null;
+  /** Grok 的 `quality`，作用于空镜重发；自拍读 `SelfieOptions.quality`。 */
+  readonly quality?: string;
   /**
    * 请求形状兼容开关：作用于「空镜 / 原样重放」这条路径的请求体
    * （自拍路径读 `SelfieOptions` 里的同名字段）。
@@ -149,6 +395,25 @@ const DEFAULT_SCENE_PROMPT = [
   '{scene}',
   '时间：{time}（{clock}）。',
   '画面里没有人物，没有文字，没有水印，没有边框。',
+].join('\n');
+
+/**
+ * 内置默认模板（Grok / xAI）。只在形状是 `grok` 且用户没填任何模板时用。
+ *
+ * 为什么不复用上面那份：xAI 的 Image Prompting Guide
+ * （https://docs.x.ai/developers/model-capabilities/images/prompting-guide）明确说编辑请求要
+ * **先说要改什么，再一句话锁定主体/机位/道具**；开头就写「keep everything」几乎不动，
+ * 而把一整份新场景描述粘进 edit 会「重排场景」（人脸漂移、道具变双、一个物体变成相似物）。
+ * 通用模板里那一长串「不要换脸、不要变成陌生人、没有文字水印边框」在它身上是负资产 ——
+ * 官方原话是长 avoid 列表很容易被忽略，还把 prompt 花在模型本来不会画的东西上。
+ * 所以这份只留一条负面，其余全部改成正面描述。
+ */
+const DEFAULT_GROK_PROMPT = [
+  '把{subject}放进这个场景：{scene}。改成手机前置镜头的近距离自拍，脸和上半身清晰，眼睛看着镜头，表情自然。',
+  '保持参考图中{subject}的五官、脸型、发型、肤色、年龄和气质完全一致，是同一个人；只重画背景和姿态，不要沿用参考图里的衣服与场景。',
+  '画风：{style}',
+  '时间：{time}（当地 {clock}），光线按这个时段来。',
+  '画面里只有{subject}一个人。',
 ].join('\n');
 
 /** 渲染提示词时要用到的最小配置（自拍和空镜共用一套规则）。 */
@@ -306,6 +571,44 @@ export const buildSelfiePrompt = renderImagePrompt;
 export const DEFAULT_SCENE_TEMPLATE = DEFAULT_SCENE_PROMPT;
 /** 出镜自拍时的默认模板；测试和跨语言一致性检查要用它。 */
 export const DEFAULT_SELFIE_TEMPLATE = DEFAULT_PROMPT;
+/**
+ * 形状为 `grok` 时的默认模板（编辑型提示词）。
+ *
+ * 和 `plugin/.../defaults.py` 的 `DEFAULT_GROK_PROMPT` 逐字一致，由测试守住。
+ */
+export const DEFAULT_GROK_TEMPLATE = DEFAULT_GROK_PROMPT;
+
+/**
+ * 旧版的内置默认模板。
+ *
+ * 它早就不生效了，但可能还躺在用户的 `selfie_prompt` / `image_prompt_template` 字段里
+ * （插件的 `_normalize_image_prompt` 认的就是这份文本）。要判断「这串字到底是不是用户自己写的」，
+ * 必须把它也算进去，否则升级过两轮的老用户会被当成「自定义过模板」，形状专属的默认永远轮不到。
+ * 与 `plugin/.../defaults.py` 的 `LEGACY_SELFIE_PROMPT` 保持一致。
+ */
+export const LEGACY_SELFIE_TEMPLATE = [
+  '一张自拍照片：{subject}在画面里，手机前置镜头近距离自拍，脸和上半身清晰，眼睛看着镜头，表情自然。',
+  '时间：{time}（{clock}）。',
+  '背景：{scene}',
+  '参考图是{subject}的长相参考：保持五官、脸型、发型、肤色、年龄和气质一致；不要换脸，不要变成陌生人，不要照搬参考图的背景和衣服。',
+  '真实手机自拍质感，自然光，轻微手持感；画面里只有{subject}一个人，没有文字、水印、边框。',
+].join('\n');
+
+/**
+ * 「这串模板文本是我们自己写进配置字段的默认值」吗？空串也算。
+ *
+ * 为什么必须认出来：`_conf_schema.json` 的默认值和插件迁移都会把通用模板**落进**
+ * `image_prompt_template`，字段于是几乎永远非空。按「非空就是用户写的」来判断，
+ * Grok 那份编辑型默认模板一次都不会生效 —— 它照样吃那串长负面清单，效果差异却没人能解释。
+ * 认成内置默认不等于改用户配置：字段里的原文一个字都不动，只是换用哪份默认。
+ */
+export function isBuiltInTemplate(value: string): boolean {
+  const text = (value ?? '').trim();
+  if (!text) return true;
+  return [DEFAULT_PROMPT, DEFAULT_GROK_PROMPT, LEGACY_SELFIE_TEMPLATE].some(
+    (template) => template.trim() === text,
+  );
+}
 
 function escapePattern(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -339,8 +642,44 @@ export function installPhotoProxy(
     : null;
   const compat = opts.compat ?? {};
   const compatActive = compat.noResponseFormat === true || compat.noSize === true;
-  // 自拍、空镜套模板、配了「第二个模型」或开了兼容开关时才需要拦请求；都没有时上游自己就发对了。
-  if (!selfie && !scene && models.length < 2 && !compatActive) return { uninstall: () => {}, fetch: fetchImpl };
+  /*
+   * 空镜这条路的形状。自拍可能指向另一家服务商（`selfie_api` 单独指云端），
+   * 所以自拍那份用自己的 `api` 再解析一次，两者不共用。
+   */
+  /*
+   * 形状按**每次尝试用的模型**解析（面板留 `auto` 时）。
+   *
+   * 为什么不按接口地址：中转站一个域名后面挂着 xAI、OpenAI、通义、豆包几十种模型，
+   * 地址什么也说明不了；模型名直接说得出这次该用哪种写法。顺带的好处是
+   * 「`grok-imagine-image` 主 + `gpt-image-*` 兜底」这种混合降级链也能各用各的形状。
+   * 面板里显式选了某个形状就全局照办，不再看模型名。
+   *
+   * 自拍与空镜分开解析：`selfie_api` 常常单独指向另一家服务商，两者的接口地址不是一个。
+   */
+  const sceneInput: ShapeInput = opts.shape ?? {};
+  const shapeFor = (input: ShapeInput, model: string): ResolvedShape =>
+    resolveImageShape(shapeIsAuto(input.shape) ? { ...input, model } : input);
+  const sceneShapes = models.length
+    ? models.map((model) => shapeFor(sceneInput, model))
+    : [shapeFor(sceneInput, '')];
+  const selfieShapes = selfie
+    ? (modelListOf(selfie.model).length ? modelListOf(selfie.model) : [''])
+      .map((model) => shapeFor(selfie, model))
+    : [];
+  // 候选里可能出现 grok 就多读几张参考图（多图形状才用得上），到每次尝试再按形状截断。
+  const referenceCap = selfie
+    ? Math.max(
+      shapeIsAuto(selfie.shape) ? MAX_GROK_REFERENCES : 1,
+      ...selfieShapes.map((s) => referenceLimit(s.shape)),
+    )
+    : 1;
+  /*
+   * 只有 `grok` 需要动空镜的请求体（`size`/`watermark` → `aspect_ratio`/`resolution`）；
+   * 其余形状下空镜就是上游本来发的那个形状，别白拦一趟。
+   */
+  const shapeActive = sceneShapes.some((s) => s.shape === 'grok');
+  // 自拍、空镜套模板、配了「第二个模型」、开了兼容开关或要改形状时才需要拦请求。
+  if (!selfie && !scene && models.length < 2 && !compatActive && !shapeActive) return { uninstall: () => {}, fetch: fetchImpl };
   if (selfie && selfie.references.length === 0) {
     log.warn('自拍已开启，但没有参考图；照片会失败而不是退回空镜。请在插件配置里上传 selfie_reference。');
   }
@@ -363,12 +702,12 @@ export function installPhotoProxy(
       ? (selfieModels.length ? selfieModels : [fallbackModel])
       : (models.length ? models : [fallbackModel]);
 
-    let reference: ReferenceImage | null = null;
+    let references: ReferenceImage[] = [];
     let clock: string | undefined;
     if (selfie || scene) {
       if (selfie) {
         try {
-          reference = await loadSelfieReference(selfie, original);
+          references = await loadSelfieReferences(selfie, referenceCap, original);
         } catch (e) {
           const message = errText(e);
           log.warn(`自拍生图失败：${message}`);
@@ -396,10 +735,16 @@ export function installPhotoProxy(
     for (const model of candidates) {
       try {
         if (selfie) {
-          const result = await generateSelfieWithModel(selfie, model, body, prompt, original, log, reference!, clock);
+          // 每换一个模型都重新认一次形状，参考图也按那个形状截断。
+          const attempt = shapeFor(selfie, model);
+          const result = await generateSelfieWithModel(
+            selfie, attempt, model, body, prompt, original, log,
+            references.slice(0, referenceLimit(attempt.shape)), clock,
+          );
           return jsonResponse({ data: [result] });
         }
         const outgoing: Record<string, unknown> = scene ? { ...body, prompt: scenePrompt } : { ...body };
+        if (shapeFor(sceneInput, model).shape === 'grok') applyGrokShape(outgoing, (opts.quality ?? '').trim());
         applyCompat(outgoing, compat);
         const res = await replayWithModel(
           original, url, init ?? {}, outgoing, model,
@@ -408,9 +753,15 @@ export function installPhotoProxy(
         const detail = await peekError(res);
         if (shouldKeepResponse(res.status, detail)) return res;
         failures.push(`${model}：HTTP ${res.status}${detail ? `：${detail}` : ''}`);
+        /*
+         * 每一次失败都要单独落一行。以前只在**全部**失败时汇总一条，于是日志里
+         * 看得到「第一个模型试过了」却看不到它为什么没过 —— 降级链越长越难倒回现场。
+         */
+        log.warn(`生图模型 ${model} 失败：HTTP ${res.status}${detail ? `：${detail}` : ''}`);
       } catch (e) {
         const why = errText(e);
         failures.push(`${model}：${why}`);
+        if (selfie) log.warn(`自拍模型 ${model} 失败：${why}`);
         // 连不上/超时不是模型的问题，换下一个也是同一个结果；交回上游按原样报错。
         if (!selfie) throw e;
       }
@@ -447,14 +798,26 @@ export async function generateSelfieBytes(
   log: SelfieLogger = { info: () => {}, warn: () => {} },
   clock?: string,
 ): Promise<{ bytes: Uint8Array; mime: string }> {
-  const reference = await loadSelfieReference(opts, fetchImpl);
   const models = modelListOf(opts.model);
   const candidates = models.length ? models : ['gpt-image-1'];
+  // 形状按候选模型逐个认（面板留 auto 时）；参考图先按最宽的那个形状读，再逐次截断。
+  const shapeForModel = (model: string): ResolvedShape =>
+    resolveImageShape(shapeIsAuto(opts.shape) ? { ...opts, model } : opts);
+  const references = await loadSelfieReferences(
+    opts,
+    Math.max(...candidates.map((m) => referenceLimit(shapeForModel(m).shape))),
+    fetchImpl,
+  );
+  const timeoutMs = opts.timeoutMs ?? 120_000;
   const failures: string[] = [];
   let result: SelfieImage | null = null;
   for (const model of candidates) {
     try {
-      result = await generateSelfieWithModel(opts, model, {}, prompt, fetchImpl, log, reference, clock);
+      const attempt = shapeForModel(model);
+      result = await generateSelfieWithModel(
+        opts, attempt, model, {}, prompt, fetchImpl, log,
+        references.slice(0, referenceLimit(attempt.shape)), clock,
+      );
       break;
     } catch (e) {
       const why = errText(e);
@@ -467,57 +830,271 @@ export async function generateSelfieBytes(
       ? `自拍所有模型都失败了（${failures.join('；')}）`
       : failures[0] ?? '自拍失败');
   }
+  return await imageBytesOf(result, fetchImpl, timeoutMs);
+}
+
+/**
+ * 把接口回来的图落成字节：`b64_json` 直接用，`url` 下载（外链是临时的，要快）。
+ *
+ * 自拍与「不带参考图的汇报配图」共用这一段 —— 两条路径只是请求形状不同。
+ */
+async function imageBytesOf(
+  result: SelfieImage,
+  fetchImpl: typeof fetch,
+  timeoutMs: number,
+): Promise<{ bytes: Uint8Array; mime: string }> {
   if (result.b64_json) {
     const bytes = new Uint8Array(Buffer.from(result.b64_json, 'base64'));
     const mime = sniffImage(bytes);
-    if (!mime) throw new Error('自拍 b64 解出来不是图片');
+    if (!mime) throw new Error('生图返回的 b64 解出来不是图片');
     return { bytes, mime };
   }
   if (result.url) {
-    const res = await fetchImpl(result.url, { signal: AbortSignal.timeout(120_000) });
-    if (!res.ok) throw new Error(`下载自拍图 HTTP ${res.status}`);
+    const res = await fetchImpl(result.url, { signal: AbortSignal.timeout(timeoutMs) });
+    if (!res.ok) throw new Error(`下载生成图 HTTP ${res.status}`);
     const bytes = new Uint8Array(await res.arrayBuffer());
     const mime = sniffImage(bytes) ?? res.headers.get('content-type')?.split(';')[0]?.trim() ?? 'image/png';
     return { bytes, mime };
   }
-  throw new Error('自拍接口没有返回图片');
+  throw new Error('生图接口没有返回图片');
+}
+
+/** 不带参考图出图（汇报配图在「自拍关着」时走这条）需要的配置。 */
+export interface SceneImageOptions {
+  readonly api: string;
+  readonly key: string;
+  /** 生图模型名列表，按顺序降级。 */
+  readonly model: string | readonly string[];
+  /** 形状解析输入（`image_shape` + 地址 + 旧字段）。 */
+  readonly shape?: ShapeInput;
+  readonly compat?: ImageCompatOptions;
+  readonly quality?: string;
+  /** `image_size`：`WxH` 直接发；`3:4`/`2k` 只有 grok 形状认。 */
+  readonly size?: string;
+  readonly timeoutMs?: number;
+  /** 空镜模板；关着「空镜套模板」就原样发上游那段场景描述。 */
+  readonly scene?: SceneTemplateOptions | null;
+}
+
+/**
+ * 不带参考图出一张空镜，返回字节。
+ *
+ * 为什么需要它：主动汇报配图以前**绑在自拍链路上**（`selfie_enabled` 关着就不配图），
+ * 于是「不想每句话都塞一张她的自拍、但想配一张她眼前的景」这种很自然的用法做不到。
+ * 配图从此不必自拍：开着自拍走 `generateSelfieBytes`，关着走这里 —— 同一套场景描述、
+ * 同一个空镜模板（守住「画面里没有人物」）、同一套形状改写。
+ */
+export async function generateSceneImageBytes(
+  originalPrompt: string,
+  opts: SceneImageOptions,
+  fetchImpl: typeof fetch = globalThis.fetch,
+  log: SelfieLogger = { info: () => {}, warn: () => {} },
+  clock?: string,
+): Promise<{ bytes: Uint8Array; mime: string }> {
+  const api = opts.api.trim().replace(/\/+$/, '');
+  if (!api) throw new Error('生图接口没填（image_api）');
+  const models = modelListOf(opts.model);
+  const candidates = models.length ? models : ['gpt-image-1'];
+  const shapeInput: ShapeInput = opts.shape ?? { api };
+  const timeoutMs = opts.timeoutMs ?? 120_000;
+  const scene = opts.scene && opts.scene.enabled === true && opts.scene.promptTemplate.trim()
+    ? opts.scene
+    : null;
+  const prompt = scene
+    ? renderImagePrompt(originalPrompt, {
+      subject: scene.subject ?? '',
+      promptTemplate: scene.promptTemplate,
+      style: scene.style,
+    }, clock)
+    : originalPrompt;
+  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  if (opts.key.trim()) headers.authorization = `Bearer ${opts.key.trim()}`;
+  const failures: string[] = [];
+  let image: SelfieImage | null = null;
+  for (const model of candidates) {
+    const shape = resolveImageShape(shapeIsAuto(shapeInput.shape) ? { ...shapeInput, model } : shapeInput);
+    const payload: Record<string, unknown> = { model, prompt, n: 1 };
+    const size = (opts.size ?? '').trim();
+    if (shape.shape === 'grok') {
+      // Grok 没有 size / watermark 这两个字段，尺寸换 aspect_ratio + resolution。
+      // 空镜没有输入图，所以比例照发（不像单图编辑那样必须跟随参考图）。
+      attachGrokSize(payload, size, false, (opts.quality ?? '').trim());
+    } else if (size) {
+      if (isWxH(size)) {
+        if (opts.compat?.noSize !== true) payload.size = size;
+      } else {
+        log.warn(`尺寸「${size}」是比例/分辨率写法，只有 grok 形状认；这次不带 size。`);
+      }
+    }
+    if (opts.compat?.noResponseFormat !== true) payload.response_format = 'b64_json';
+    // 提示词在**发出去之前**落一行：出图不对时第一个要看的就是它（跟自拍路径一致）。
+    logPrompt(log, `scene-report-${shape.shape}`, prompt);
+    try {
+      const res = await postJson(`${api}/images/generations`, headers, payload, fetchImpl, timeoutMs);
+      if (!res.ok) {
+        const detail = (await res.text()).slice(0, 500);
+        throw new Error(`生图接口 HTTP ${res.status}${detail ? `：${detail}` : ''}`);
+      }
+      image = parseImagePayload(await readJson(res, log));
+      break;
+    } catch (e) {
+      const why = errText(e);
+      failures.push(`${model}：${why}`);
+      log.warn(`生图模型 ${model} 失败：${why}`);
+    }
+  }
+  if (!image) {
+    throw new Error(candidates.length > 1
+      ? `所有生图模型都失败了（${failures.join('；')}）`
+      : failures[0] ?? '生图失败');
+  }
+  return await imageBytesOf(image, fetchImpl, timeoutMs);
+}
+/** Grok 的 `images` 最多收 5 张参考图（官方 Multi-Image Editing 文档）。 */
+const MAX_GROK_REFERENCES = 5;
+
+function dataUrlOf(ref: ReferenceImage): string {
+  return `data:${ref.mime};base64,${Buffer.from(ref.bytes).toString('base64')}`;
+}
+
+/** 只有 Grok 吃多张参考图；别的形状认第一张就够，多读几张只是白读一遍文件。 */
+function referenceLimit(shape: ImageShape): number {
+  return shape === 'grok' ? MAX_GROK_REFERENCES : 1;
+}
+
+/**
+ * 把面板里的「尺寸」翻成 Grok 认的参数挂到请求体上。
+ *
+ * `singleEdit` = 「单张参考图的编辑请求」：官方文档明确说这种情况比例总是从输入图推，
+ * **不要**设 `aspect_ratio`；只有多参考图时才需要指定（否则跟随第一张）。
+ * 不带参考图的 `/images/generations` 按 `singleEdit=false` 走，比例照发。
+ */
+function attachGrokSize(
+  payload: Record<string, unknown>,
+  size: string,
+  singleEdit: boolean,
+  quality: string,
+): void {
+  const { aspectRatio, resolution } = grokSizeOf(size);
+  if (aspectRatio && !singleEdit) payload.aspect_ratio = aspectRatio;
+  if (resolution) payload.resolution = resolution;
+  if (quality) payload.quality = quality;
+}
+
+/**
+ * 空镜（不带参考图的 generations）换成 Grok 形状。
+ *
+ * Grok 的请求体里**没有** `size`，也没有 `watermark`（那是上游为会烧「AI生成」的服务商
+ * 准备的一档）。上游的 400 阶梯只会**删**字段，学不会「换成 `aspect_ratio` + `resolution`」
+ * 这件事，所以在这里一次改对，省掉两轮注定失败的请求。
+ */
+function applyGrokShape(payload: Record<string, unknown>, quality: string): void {
+  const size = stringOf(payload.size) || stringOf(payload.image_size);
+  delete payload.size;
+  delete payload.image_size;
+  delete payload.watermark;
+  attachGrokSize(payload, size, false, quality);
+}
+
+/**
+ * 连不上云端接口时的提示。
+ *
+ * Node 的 `fetch`（undici）**不看** `HTTP(S)_PROXY`，要 `NODE_USE_ENV_PROXY=1`（Node 24+）
+ * 才走代理。这个坑不写出来，看到 `fetch failed` 的人只会去怀疑密钥和模型名。
+ */
+function proxyHint(api: string): string {
+  const host = hostOf(api);
+  if (!host || /^(localhost|127\.|10\.|192\.168\.|\[::1\])/i.test(host)) return '';
+  if (process.env.NODE_USE_ENV_PROXY) return '';
+  return '；如果根本没连上（不是接口回的错），注意 Node 的 fetch 默认不走系统代理：'
+    + '给 AstrBot 进程设 HTTPS_PROXY=http://127.0.0.1:端口 并加 NODE_USE_ENV_PROXY=1（Node 24+）';
+}
+
+/** 发 JSON；网络级错误补一句代理提示（形状类错误服务端会自己回 4xx，不用我们猜）。 */
+async function postJsonWithHint(
+  url: string,
+  headers: Record<string, string>,
+  payload: Record<string, unknown>,
+  fetchImpl: typeof fetch,
+  timeoutMs: number,
+  api: string,
+): Promise<Response> {
+  try {
+    return await postJson(url, headers, payload, fetchImpl, timeoutMs);
+  } catch (e) {
+    const hint = proxyHint(api);
+    throw hint ? new Error(`${errText(e)}${hint}`) : e;
+  }
 }
 
 /** 用一个模型生成一张自拍。失败会抛错，由调用方决定要不要换下一个模型。 */
 async function generateSelfieWithModel(
   opts: SelfieOptions,
+  shape: ResolvedShape,
   model: string,
   upstreamBody: Record<string, unknown>,
   originalPrompt: string,
   fetchImpl: typeof fetch,
   log: SelfieLogger,
-  reference: ReferenceImage,
+  references: ReferenceImage[],
   clock?: string,
 ): Promise<SelfieImage> {
   const api = opts.api.trim().replace(/\/+$/, '');
   if (!api) throw new Error('自拍生图接口没填（selfie_api / image_api）');
+  if (!references.length) throw new Error('没有参考图：请在插件配置里上传 selfie_reference');
+  const reference = references[0]!;
   const prompt = renderImagePrompt(originalPrompt, opts, clock);
-  logPrompt(log, `selfie-${opts.mode}`, prompt);
-  const size = opts.size.trim() || stringOf(upstreamBody.size) || '1024x1024';
+  logPrompt(log, `selfie-${shape.shape}`, prompt);
+  const timeoutMs = opts.timeoutMs ?? 120_000;
+  let size = opts.size.trim() || stringOf(upstreamBody.size) || '1024x1024';
+  if (shape.shape !== 'grok' && !isWxH(size)) {
+    log.warn(`尺寸「${size}」是比例/分辨率写法，只有 grok 形状认；这次不带 size，用服务商默认尺寸。`);
+    size = '';
+  }
   const headers: Record<string, string> = {};
   if (opts.key.trim()) headers.authorization = `Bearer ${opts.key.trim()}`;
 
-  if (opts.mode === 'native') {
-    return await generateNative(opts, api, model, size, prompt, reference, headers, fetchImpl, log);
+  if (shape.shape === 'wan') {
+    return await generateNative(opts, api, model, size, prompt, reference, headers, fetchImpl, log, timeoutMs);
   }
 
-  if (opts.mode === 'generation') {
-    const dataUrl = `data:${reference.mime};base64,${Buffer.from(reference.bytes).toString('base64')}`;
+  /*
+   * Grok（xAI）：`/images/edits` 只收 `application/json`，参考图必须是**对象**
+   * （单图 `image:{url}`，多图 `images:[{url},…]`，两者互斥）。顶层放 `image_url` 字符串
+   * 是 OpenAI 那一套，Grok 不认 —— 最坏的情况是它收下请求、把不认识的字段丢掉，
+   * 照样 200 出一张和参考图毫无关系的图，比直接报错难查得多。
+   *
+   * `type:"image_url"` 是官方 curl 示例里带的字段，照抄（`url` 才是 schema 里的字段）。
+   */
+  if (shape.shape === 'grok') {
+    const images = references.map((ref) => ({ url: dataUrlOf(ref), type: 'image_url' }));
+    const payload: Record<string, unknown> = { model, prompt, n: 1 };
+    if (images.length === 1) payload.image = images[0];
+    else payload.images = images;
+    attachGrokSize(payload, size, images.length === 1, (opts.quality ?? '').trim());
+    if (opts.noResponseFormat !== true) payload.response_format = 'b64_json';
+    const res = await postJsonWithHint(`${api}/images/edits`, headers, payload, fetchImpl, timeoutMs, api);
+    if (!res.ok) {
+      const detail = (await res.text()).slice(0, 500);
+      throw new Error(`自拍接口 HTTP ${res.status}${detail ? `：${detail}` : ''}${proxyHint(api)}`);
+    }
+    log.info(`自拍接口响应：HTTP ${res.status}（grok），content-length=${res.headers.get('content-length') ?? '?'}`);
+    const image = parseImagePayload(await readJson(res, log));
+    logSelfieImage(image, log);
+    return image;
+  }
+
+  if (shape.shape === 'generation') {
     const payload: Record<string, unknown> = {
       model,
       prompt,
       n: 1,
-      [opts.imageField.trim() || 'image_url']: opts.imageField.trim() === 'image'
+      [shape.imageField]: shape.imageField === 'image'
         ? Buffer.from(reference.bytes).toString('base64')
-        : dataUrl,
+        : dataUrlOf(reference),
     };
     applyCompat(payload, opts);
-    const res = await postJson(`${api}/images/generations`, headers, payload, fetchImpl);
+    const res = await postJson(`${api}/images/generations`, headers, payload, fetchImpl, timeoutMs);
     if (!res.ok) {
       const detail = (await res.text()).slice(0, 500);
       throw new Error(`自拍接口 HTTP ${res.status}${detail ? `：${detail}` : ''}`);
@@ -529,16 +1106,15 @@ async function generateSelfieWithModel(
   }
 
   /*
-   * 编辑接口的两套形状：
-   *   - multipart（OpenAI 原生 /images/edits 只认这个）；
-   *   - JSON + data URL（不少中转站/上游只认 application/json，multipart 直接 415/502）。
-   * `selfie_edit_json` 打开时直接发 JSON，省掉那一轮注定失败的 multipart；
-   * 关着时仍先发 multipart，失败再按错误内容兜底一次 JSON。
+   * 剩下两种形状都是打编辑接口：
+   *   - `openai`：multipart（OpenAI 原生 /images/edits 只认这个），失败再按错误内容兜底一次 JSON；
+   *   - `relay`：直接 JSON + data URL（不少中转站/上游只认 application/json，multipart 直接 415/502），
+   *     省掉那一轮注定失败的 multipart。`relay` 就是旧的 `selfie_edit_json=开`。
    */
-  const editField = opts.imageField.trim() || 'image_url';
+  const editField = shape.imageField;
   const editImage = editField === 'image'
     ? Buffer.from(reference.bytes).toString('base64')
-    : `data:${reference.mime};base64,${Buffer.from(reference.bytes).toString('base64')}`;
+    : dataUrlOf(reference);
   const editJsonBody = (): Record<string, unknown> => {
     const jsonBody: Record<string, unknown> = {
       model,
@@ -546,22 +1122,22 @@ async function generateSelfieWithModel(
       n: 1,
       [editField]: editImage,
     };
-    if (opts.noSize !== true) jsonBody.size = size;
+    if (size && opts.noSize !== true) jsonBody.size = size;
     if (opts.noResponseFormat !== true) jsonBody.response_format = 'b64_json';
     return jsonBody;
   };
   const postEditJson = (): Promise<Response> =>
-    postJson(`${api}/images/edits`, headers, editJsonBody(), fetchImpl);
+    postJson(`${api}/images/edits`, headers, editJsonBody(), fetchImpl, timeoutMs);
 
   let res: Response;
-  if (opts.editJson === true) {
+  if (shape.shape === 'relay') {
     res = await postEditJson();
   } else {
     const form = new FormData();
     form.set('model', model);
     form.set('prompt', prompt);
     form.set('n', '1');
-    if (opts.noSize !== true) form.set('size', size);
+    if (size && opts.noSize !== true) form.set('size', size);
     if (opts.noResponseFormat !== true) form.set('response_format', 'b64_json');
     form.set('image', new Blob([reference.bytes], { type: reference.mime }), reference.name);
     res = await fetchImpl(`${api}/images/edits`, { method: 'POST', headers, body: form });
@@ -592,10 +1168,23 @@ async function generateSelfieWithModel(
   return image;
 }
 
-async function loadSelfieReference(opts: SelfieOptions, fetchImpl: typeof fetch): Promise<ReferenceImage> {
-  const references = opts.references.filter(Boolean);
-  if (!references.length) throw new Error('没有参考图：请在插件配置里上传 selfie_reference');
-  return loadReference(references[0]!, fetchImpl);
+/**
+ * 读参考图。
+ *
+ * 只有 `grok` 会读到多张（上限 5，见 `referenceLimit`）：它的 `images` 数组能把几张
+ * 不同角度/表情的正脸一起喂进去，这是「每次都是同一个人」最省事的办法。
+ * 其余形状照旧只吃第一张，行为不变。
+ */
+async function loadSelfieReferences(
+  opts: SelfieOptions,
+  limit: number,
+  fetchImpl: typeof fetch,
+): Promise<ReferenceImage[]> {
+  const refs = opts.references.filter(Boolean).slice(0, Math.max(1, limit));
+  if (!refs.length) throw new Error('没有参考图：请在插件配置里上传 selfie_reference');
+  const out: ReferenceImage[] = [];
+  for (const ref of refs) out.push(await loadReference(ref, fetchImpl));
+  return out;
 }
 
 /**
@@ -684,6 +1273,7 @@ async function generateNative(
   headers: Record<string, string>,
   fetchImpl: typeof fetch,
   log: SelfieLogger,
+  timeoutMs = 120_000,
 ): Promise<{ b64_json?: string; url?: string }> {
   // 阿里百炼原生万相端点。selfie_api 可以是 compatible-mode 地址，取 origin 后拼原生路径。
   const nativeUrl = (opts.nativeUrl ?? '').trim()
@@ -694,7 +1284,7 @@ async function generateNative(
     watermark: false,
     thinking_mode: false,
   };
-  if (opts.noSize !== true) parameters.size = nativeSize(size);
+  if (size && opts.noSize !== true) parameters.size = nativeSize(size);
   const payload = {
     model,
     input: {
@@ -705,7 +1295,7 @@ async function generateNative(
     },
     parameters,
   };
-  const res = await postJson(nativeUrl, headers, payload, fetchImpl);
+  const res = await postJson(nativeUrl, headers, payload, fetchImpl, timeoutMs);
   log.info(`自拍接口响应：HTTP ${res.status}（native），content-length=${res.headers.get('content-length') ?? '?'}`);
   if (!res.ok) {
     const detail = (await res.text()).slice(0, 500);
@@ -816,12 +1406,13 @@ async function postJson(
   headers: Record<string, string>,
   payload: Record<string, unknown>,
   fetchImpl: typeof fetch,
+  timeoutMs = 120_000,
 ): Promise<Response> {
   return fetchImpl(url, {
     method: 'POST',
     headers: { ...headers, 'content-type': 'application/json' },
     body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(120_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
 }
 

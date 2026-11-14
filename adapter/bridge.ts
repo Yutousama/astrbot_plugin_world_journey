@@ -22,10 +22,12 @@ import { RawHost, SILENT_LOGGER, withHostFallback, type Logger } from './host.ts
 import { LocalMediaStore } from './media.ts';
 import { buildPrompt, sanitizePlatformText } from './prompt.ts';
 import {
-  DEFAULT_SCENE_TEMPLATE, generateSelfieBytes, installPhotoProxy,
-  type SceneTemplateOptions, type SelfieOptions,
+  DEFAULT_GROK_TEMPLATE, DEFAULT_SCENE_TEMPLATE, describeShape, generateSceneImageBytes,
+  generateSelfieBytes, installPhotoProxy, isBuiltInTemplate, modelShapeHint,
+  resolveImageShape, selfieTimeoutMs,
+  type ResolvedShape, type SceneTemplateOptions, type SelfieOptions, type ShapeInput,
 } from './selfie.ts';
-import { buildScenePrompt } from './photo-prompt.ts';
+import { buildScenePrompt, type SceneConfigOptions } from './photo-prompt.ts';
 
 export interface ToolResult {
   readonly text: string;
@@ -314,25 +316,39 @@ export class RawBridge {
   capabilities(): Record<string, boolean> {
     const world = this.world as unknown as Record<string, unknown> | null;
     if (!world) return {};
-    let answerAsk = false;
-    let returnHome = false;
-    let photoSubject = false;
+    const answer: Record<string, boolean> = {};
     try {
       // answerAsk 是 world 的 private 方法（TS 层面），运行时在原型上可见，直接探。
-      answerAsk = typeof world.answerAsk === 'function';
+      answer.answerAsk = typeof world.answerAsk === 'function';
       const tools = this.tools();
+      const names = new Set(tools.map((t) => t.name));
       // returnHome 只是 ui.invoke 的路由字符串，不是 world 方法 —— 用同批引入的
       // journey_return_home 工具（0.5.19）作为能力面。
-      const names = new Set(tools.map((t) => t.name));
-      returnHome = names.has('journey_return_home');
+      answer.returnHome = names.has('journey_return_home');
       const photo = tools.find((t) => t.name === 'journey_photo');
-      const props = (photo?.parameters as { properties?: Record<string, unknown> } | undefined)?.properties;
-      photoSubject = !!props && 'subject' in props;
+      const props = (photo?.parameters as { properties?: Record<string, unknown> } | undefined)?.properties ?? {};
+      answer.photoSubject = 'subject' in props;
+      // 1.0.7 / 1.0.9：拍照的「怎么拍」(`focus`) 与「她自己写的画面」(`describe`)。
+      answer.photoFocus = 'focus' in props;
+      answer.photoDescribe = 'describe' in props;
+      // 1.x 的新工具：指令侧只需要「上游有没有这个能力」这一件事，参数细节交给上游报错。
+      answer.planChange = names.has('journey_plan_change');
+      answer.setSlot = names.has('journey_set_slot');
+      answer.eat = names.has('journey_eat');
+      answer.hotelNight = names.has('journey_hotel_night');
+      answer.spotRide = names.has('journey_spot_ride');
+      answer.rentCar = names.has('journey_rent_car');
+      answer.rest = names.has('journey_rest');
+      answer.signpost = names.has('journey_signpost');
+      // 1.11 起快照带「路上遇见的人」（/journey_mates 的数据来源）。按面板存在性判：
+      // 面板没了，说明上游那一整页不在了，快照字段也就无从谈起。
+      const ids = new Set((this.ui.panels ?? []).map((p) => p?.id).filter(Boolean));
+      answer.matesPanel = ids.has('mates');
     } catch {
       // tools() 异常时按「测不到」上报，让壳层走版本表兜底。
       return {};
     }
-    return { answerAsk, returnHome, photoSubject };
+    return answer;
   }
 
   defaultConfig(): JourneyConfigSection {
@@ -347,6 +363,29 @@ export class RawBridge {
 
   get ui(): RawWebUi {
     return this.w().webUi() as unknown as RawWebUi;
+  }
+
+  /**
+   * 「接口形状」的解析输入。
+   *
+   * 自拍和空镜要分开解析：`selfie_api` 常常指向另一家服务商（典型组合是
+   * 「本地 ComfyUI 画风景 + 云端画自拍」），两者的接口地址压根不是一个。
+   * 旧三件套在这里只是**透传**，怎么折成形状由 `selfie.ts` 一处决定。
+   *
+   * 一起带上候选模型：`auto` 时形状首先按**模型名**认（中转站一个域名后面挂着几十家模型，
+   * 地址说明不了任何事）。这里给的是第一个候选，用于启动日志与配错提示；
+   * 真正发请求时代理会按每一次实际用的模型再认一遍。
+   */
+  private shapeInput(cfg: Record<string, unknown>, api: string): ShapeInput {
+    const selfieModel = stringOf(cfg.selfieModel).trim();
+    return {
+      shape: stringOf(cfg.imageShape),
+      api,
+      models: selfieModel ? [selfieModel] : this.imageModels(),
+      mode: stringOf(cfg.selfieMode).toLowerCase(),
+      editJson: cfg.selfieEditJson === true,
+      imageField: stringOf(cfg.selfieImageField),
+    };
   }
 
   private selfieOptions(): SelfieOptions | null {
@@ -366,21 +405,28 @@ export class RawBridge {
       .map((ref) => this.resolveReference(ref.trim()));
     const modeRaw = stringOf(cfg.selfieMode).toLowerCase();
     const selfieModel = stringOf(cfg.selfieModel).trim();
+    const api = stringOf(cfg.selfieApi) || stringOf(cfg.imageApi);
+    const shape = resolveImageShape(this.shapeInput(cfg, api));
     return {
       enabled: true,
       references,
-      api: stringOf(cfg.selfieApi) || stringOf(cfg.imageApi),
+      api,
       key: stringOf(cfg.selfieKey) || stringOf(cfg.imageKey),
       // 自拍模型没单独填时，用「生图模型名」的整个列表按顺序降级。
       model: selfieModel ? [selfieModel] : this.imageModels(),
-      mode: modeRaw === 'generation' || modeRaw === 'native' ? modeRaw : 'edit',
-      // 编辑接口直接发 JSON：给只认 application/json 的中转站/上游。
+      // 新面板值 + 旧三件套一起交下去：resolveImageShape 是唯一的解析点。
+      shape: stringOf(cfg.imageShape),
+      mode: modeRaw,
+      // 编辑接口直接发 JSON：等价于形状 `relay`（旧配置里还留着这个开关）。
       editJson: cfg.selfieEditJson === true,
       nativeUrl: stringOf(cfg.selfieNativeUrl),
       size: stringOf(cfg.selfieSize),
       imageField: stringOf(cfg.selfieImageField) || 'image_url',
+      // Grok 的 quality 不进面板：默认 auto（编辑请求上就是 medium）已经够好。
+      quality: stringOf(cfg.imageQuality).trim(),
+      timeoutMs: selfieTimeoutMs(Number(cfg.imageTimeoutSec) || 0),
       subject: stringOf(cfg.selfieSubject) || '她本人',
-      promptTemplate: this.selfieTemplate(cfg),
+      promptTemplate: this.selfieTemplate(cfg, shape),
       // 画风从这条路径起也生效：模板里的 {style} 就是它。
       style: this.imageStyle(),
       // 兼容开关：有些上游不认 response_format / size，带上就 400。
@@ -390,15 +436,25 @@ export class RawBridge {
   }
 
   /**
-   * 自拍模板的取值顺序：新字段 `imagePromptTemplate` → 旧字段 `selfiePrompt` → 空串。
+   * 出镜模板的取值顺序：**统一模板** `imagePromptTemplate` → 旧字段 `selfiePrompt`
+   * （兼容读取，面板上已经合并掉了）→ 按形状给的内置默认（两处都没写过自己的内容时）。
    *
-   * 空串交给 `selfie.ts` 回落到内置默认模板；老用户只填过 `selfie_prompt` 的，
-   * 内容原样生效，不要求他重填一遍。
+   * 空串交给 `selfie.ts` 回落到通用默认模板。老用户只填过 `selfie_prompt` 的，
+   * 内容原样生效，不要求他重填一遍 —— **绝不**因为换了服务商就覆盖用户写的提示词。
+   *
+   * 「填过」的判据是 `isBuiltInTemplate`：老版本的面板默认值和插件迁移都曾把通用模板
+   * 落进这个字段，非空就当用户写过，Grok 那份编辑型默认模板就永远轮不到。
+   *
+   * 唯一按形状换默认值的是 Grok：它的官方提示词纪律要求「编辑请求先说要改什么、
+   * 再一句话锁定主体」，而通用默认模板里那一长串「不要换脸、不要变成陌生人、
+   * 没有文字水印边框」正是它建议避免的写法。
    */
-  private selfieTemplate(cfg: Record<string, unknown>): string {
+  private selfieTemplate(cfg: Record<string, unknown>, shape: ResolvedShape): string {
     const fresh = stringOf(cfg.imagePromptTemplate).trim();
-    if (fresh) return fresh;
-    return stringOf(cfg.selfiePrompt).trim();
+    if (fresh && !isBuiltInTemplate(fresh)) return fresh;
+    const legacy = stringOf(cfg.selfiePrompt).trim();
+    if (legacy && !isBuiltInTemplate(legacy)) return legacy;
+    return shape.shape === 'grok' ? DEFAULT_GROK_TEMPLATE : '';
   }
 
   /** 「出镜自拍」开了、但生图协议是 ComfyUI 且没单独配 selfieApi —— 自拍/汇报配图应整体停用。 */
@@ -432,6 +488,24 @@ export class RawBridge {
   }
 
   /**
+   * 汇报配图要交给上游 `photoPrompt` 的三件配置。
+   *
+   * 上游自动拍照那一路传的是 `style / minimal / cast`（1.8.0 `world.ts` 的 `maybePhoto`）。
+   * 后两件是 1.6/1.7 加上的：`imageMinimal` = 大模型认得这地方时砍掉城市锚点，
+   * `imageCast` = 画面里出不出人。少传一件就会变成「相册按设置出图、汇报图不按设置」——
+   * 和当初「画风不生效」是同一类分裂，所以这里一次给全。
+   */
+  private sceneConfigOptions(): SceneConfigOptions {
+    const cfg = this.cfg as unknown as Record<string, unknown> | null;
+    if (!cfg) return { style: '' };
+    return {
+      style: stringOf(cfg.imageStyle).trim(),
+      minimal: cfg.imageMinimal === true,
+      cast: stringOf(cfg.imageCast).trim(),
+    };
+  }
+
+  /**
    * 「生图模型名」列表。上游只认一个字符串，所以列表由套壳维护：
    * Python 侧写成 `imageModels`，老的 `imageModel` 字符串也兼容。
    */
@@ -444,27 +518,57 @@ export class RawBridge {
   private installSelfie(): void {
     this.uninstallSelfie?.();
     this.uninstallSelfie = null;
+    const cfg = (this.cfg ?? {}) as unknown as Record<string, unknown>;
     const selfie = this.selfieOptions();
     const models = this.imageModels();
-    if (!selfie && this.cfg && this.comfySelfieBlocked(this.cfg as unknown as Record<string, unknown>)) {
+    if (!selfie && this.comfySelfieBlocked(cfg)) {
       this.log.info('生图协议是 ComfyUI：自拍套壳与主动汇报配图不生效（要用的话单独配 selfie_api 指向云端生图服务）。');
     }
     // 开了自拍就不需要再套空镜模板 —— 两条路径互斥，同一时刻只有一套模板生效。
     const scene = selfie ? null : this.sceneOptions();
     // 兼容开关是全局的：即使没开自拍/模板，也要拦下来把字段删掉再发。
-    const cfg = this.cfg as unknown as Record<string, unknown> | null;
     const compat = {
-      noResponseFormat: cfg?.imageNoResponseFormat === true,
-      noSize: cfg?.imageNoSize === true,
+      noResponseFormat: cfg.imageNoResponseFormat === true,
+      noSize: cfg.imageNoSize === true,
     };
     const compatActive = compat.noResponseFormat || compat.noSize;
-    if (!selfie && !scene && models.length === 0 && !compatActive) return;
-    const proxy = installPhotoProxy({ models, selfie, scene, compat, clock: () => this.localClock() }, this.log);
+    // 空镜这条路的形状（自拍可能指向另一家服务商，它自己再解析一次）。
+    const sceneShapeInput = this.shapeInput(cfg, stringOf(cfg.imageApi));
+    const sceneModels = models.length ? models : [''];
+    const sceneMayUseGrok = sceneModels.some(
+      (model) => resolveImageShape({ ...sceneShapeInput, model }).shape === 'grok',
+    );
+    if (!selfie && !scene && models.length === 0 && !compatActive && !sceneMayUseGrok) return;
+    const proxy = installPhotoProxy({
+      models,
+      selfie,
+      scene,
+      compat,
+      shape: sceneShapeInput,
+      quality: stringOf(cfg.imageQuality).trim(),
+      clock: () => this.localClock(),
+    }, this.log);
     this.uninstallSelfie = proxy.uninstall;
     this.proxyFetch = proxy.fetch;
+    const activeShape = selfie
+      ? resolveImageShape(selfie)
+      : resolveImageShape({ ...sceneShapeInput, model: sceneModels[0] ?? '' });
+    this.warnAboutShape(cfg, activeShape);
     if (selfie) {
+      const candidates = modelListOf(selfie.model);
+      const shapes = (candidates.length ? candidates : ['']).map(
+        (model) => resolveImageShape({ ...selfie, model }),
+      );
+      /*
+       * 降级链上每个模型可能用不同形状，所以这一行直接写成「模型→形状」的对照表 ——
+       * 出图不对时要看的第一个东西就是它，比读代码快。
+       */
+      const chain = candidates.length > 1
+        ? `降级链形状 ${candidates.map((model, i) => `${model}→${shapes[i]!.shape}`).join('、')}`
+        : describeShape(shapes[0]!, candidates[0] ?? '');
       this.log.info(
-        `自拍套壳已启用：${selfie.mode} 模式，参考图 ${selfie.references.length} 张${selfie.references.length ? '' : '（缺失，照片会失败）'}`,
+        `自拍套壳已启用：${chain}，参考图 ${selfie.references.length} 张`
+        + `${selfie.references.length ? '' : '（缺失，照片会失败）'}`,
       );
     }
     if (models.length > 1) {
@@ -474,12 +578,56 @@ export class RawBridge {
      * 把「画风从哪来」写在一行里。排查出图风格时，这行比读代码快 ——
      * 画面风格对自拍、空镜、主动汇报配图是不是真的生效，看这一行就知道。
      */
-    const templateSource = cfg && stringOf(cfg.imagePromptTemplate).trim()
+    const freshTemplate = stringOf(cfg.imagePromptTemplate).trim();
+    const legacyTemplate = stringOf(cfg.selfiePrompt).trim();
+    const templateSource = freshTemplate && !isBuiltInTemplate(freshTemplate)
       ? 'image_prompt_template'
-      : cfg && stringOf(cfg.selfiePrompt).trim() ? 'selfie_prompt（旧字段）' : '内置默认';
+      : legacyTemplate && !isBuiltInTemplate(legacyTemplate)
+        ? 'selfie_prompt（旧字段）'
+        : activeShape.shape === 'grok' ? '内置默认（grok 编辑型）' : '内置默认';
     this.log.info(
       `生图提示词：画风「${this.imageStyle() || '（留空=真实旅行照片）'}」｜模板 ${templateSource}｜空镜套模板 ${scene ? '开' : '关'}`,
     );
+  }
+
+  /**
+   * 形状配错了的两条提示。
+   *
+   * 为什么要专门 warn：Grok 这类服务端的形状错误**不一定报回来**。它可能收下整个请求、
+   * 把不认识的 `image_url` 丢掉，然后 200 出一张跟参考图毫无关系的照片 —— 用户看到的是
+   * 「她换了个人」，日志里看到的是 `HTTP 200`。等到那时候没人会去猜形状。
+   *
+   * 判据先看**模型名**（`grok-imagine-image` 这种名字比域名有说服力，中转站上尤其如此），
+   * 域名只是另一个来源。
+   */
+  private warnAboutShape(cfg: Record<string, unknown>, shape: ResolvedShape): void {
+    const api = stringOf(cfg.selfieApi) || stringOf(cfg.imageApi);
+    const models = [stringOf(cfg.selfieModel), ...this.imageModels()].filter(Boolean);
+    const grokModel = models.find((model) => modelShapeHint(model) === 'grok') ?? '';
+    /*
+     * 只在**形状被钉住**（面板显式选过，或旧 selfie_mode/selfie_edit_json 折出来的）时才 warn。
+     * `auto` 下每个候选模型各认各的形状，混用是正常配置，warn 只会变成噪音 ——
+     * 实例日志里就出过一次：降级链 `gpt-image → gpt-image → grok` 明明正常跑通并出了图，
+     * 启动却先挨一条「形状不是 grok」的警告，看着像坏了。
+     */
+    const pinned = shape.source === 'panel' || shape.source === 'legacy';
+    if (pinned && shape.shape !== 'grok' && (grokModel || /api\.x\.ai/i.test(api))) {
+      this.log.warn(
+        `${grokModel ? `生图模型名 ${grokModel} 是 Grok（xAI）` : '接口地址是 api.x.ai'}，`
+        + '但形状被钉死在别的写法上：Grok 的 /images/edits 只收 application/json，'
+        + '参考图必须是 image:{url} 对象，也没有 size 这个字段。'
+        + '最坏的情况是它收下请求、把不认识的字段丢掉，出一张和参考图毫无关系的照片。'
+        + '把「生图·接口形状」改成 grok，或留 auto 让它按模型名认。',
+      );
+      return;
+    }
+    if (shape.shape === 'grok' && !this.comfySelfieBlocked(cfg)
+      && stringOf(cfg.imageProtocol).trim().toLowerCase() !== 'comfyui'
+      && (stringOf(cfg.imageWatermark).trim().toLowerCase() || 'auto') !== 'off') {
+      this.log.info(
+        'Grok 不在图上烧「AI生成」水印：「水印处理」保持 auto 会白白裁掉每张图底部 8%（比例也跟着变），建议设成 off。',
+      );
+    }
   }
 
   /**
@@ -501,29 +649,54 @@ export class RawBridge {
 
   /**
    * 主动汇报附图：和 `/journey_photo`、自动拍照用**同一个场景描述**（上游
-   * `photoPrompt()`，含用户的「画面风格」），末尾再附一行她此刻在做什么。
+   * `photoPrompt()`，含用户的「画面风格」与极简/人物开关），末尾再附一行她此刻在做什么。
    * 不写上游 photo 事件、不进相册。
    *
-   * 以前这里直接拿汇报文本当提示词，`image_style` 一个字都不参与 —— 同一个人设，
+   * **配图不要求自拍**：开着 `selfie_enabled` 就带参考图出她的自拍；关着就出她眼前的景
+   * （走空镜模板，守住「画面里没有人物」）。以前这里绑死在自拍链路上，于是
+   * 「不想每句话都塞一张自拍、但想配一张风景」这种用法直接配不出来。
+   *
+   * 以前这里还直接拿汇报文本当提示词，`image_style` 一个字都不参与 —— 同一个人设，
    * 相册里是动漫、主动汇报里是真人照片。上游导入失败或快照缺字段时退回旧写法，
    * 汇报照发，绝不因为配图链路挂掉而丢整条消息。
    */
   async reportImage(scene?: string): Promise<Uint8Array | null> {
-    const options = this.selfieOptions();
-    if (!options) return null;
+    const cfg = (this.cfg ?? {}) as unknown as Record<string, unknown>;
+    const api = stringOf(cfg.selfieApi) || stringOf(cfg.imageApi);
+    // 没配生图接口，或 ComfyUI 又没单独指云端 —— 只发文字，不空转一次出网。
+    if (!api || this.comfySelfieBlocked(cfg)) return null;
     // 汇报文本只当「她此刻在做什么」，截一段就够：提示词越长，画风指令越容易被冲淡。
     const reportText = (scene ?? '').trim().slice(0, 120);
     const fallback = reportText ? `${reportText}\n\n此刻：${this.now()}` : this.now();
     let prompt = fallback;
     try {
-      const base = await buildScenePrompt(await this.snapshot(), this.imageStyle());
+      const base = await buildScenePrompt(await this.snapshot(), this.sceneConfigOptions());
       prompt = reportText ? `${base}\n\n她此刻：${reportText}` : base;
     } catch (e) {
       this.log.warn(`汇报配图退回旧提示词：${e instanceof Error ? e.message : String(e)}`);
     }
     try {
       const clock = await this.localClock();
-      const image = await generateSelfieBytes(prompt, options, this.proxyFetch, this.log, clock ?? undefined);
+      const selfie = this.selfieOptions();
+      if (selfie) {
+        const image = await generateSelfieBytes(prompt, selfie, this.proxyFetch, this.log, clock ?? undefined);
+        return image.bytes;
+      }
+      // 自拍关着：出空镜。同一套场景描述 + 空镜模板 + 形状改写，不再要求「必须开自拍」。
+      const image = await generateSceneImageBytes(prompt, {
+        api,
+        key: stringOf(cfg.selfieKey) || stringOf(cfg.imageKey),
+        model: this.imageModels(),
+        shape: this.shapeInput(cfg, api),
+        compat: {
+          noResponseFormat: cfg.imageNoResponseFormat === true,
+          noSize: cfg.imageNoSize === true,
+        },
+        quality: stringOf(cfg.imageQuality).trim(),
+        size: stringOf(cfg.imageSize),
+        timeoutMs: selfieTimeoutMs(Number(cfg.imageTimeoutSec) || 0),
+        scene: this.sceneOptions(),
+      }, this.proxyFetch, this.log, clock ?? undefined);
       return image.bytes;
     } catch (e) {
       this.log.warn(`汇报配图失败：${e instanceof Error ? e.message : String(e)}`);
