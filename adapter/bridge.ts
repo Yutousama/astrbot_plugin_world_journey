@@ -97,6 +97,14 @@ export class RawBridge {
   private uninstallSelfie: (() => void) | null = null;
   /** 装代理之前的 fetch；主动汇报自己发请求时用它，避免被自己的代理再拦一次。 */
   private proxyFetch: typeof fetch = globalThis.fetch;
+  /**
+   * 上一次汇报配图失败的原因（成功时清空）。
+   *
+   * 为什么留着：配图失败只发文字，用户看不见任何异常 —— 而失败的常见原因
+   * （形状不对、`size` 不被接受、密钥没权限、超时）全在这句话里。
+   * `/api/report-image` 把它一起回给 Python，聊天里就能带一句小提示。
+   */
+  lastReportImageError = '';
 
   constructor(opts: RawBridgeOptions) {
     this.opts = opts;
@@ -678,28 +686,30 @@ export class RawBridge {
     try {
       const clock = await this.localClock();
       const selfie = this.selfieOptions();
-      if (selfie) {
-        const image = await generateSelfieBytes(prompt, selfie, this.proxyFetch, this.log, clock ?? undefined);
-        return image.bytes;
-      }
-      // 自拍关着：出空镜。同一套场景描述 + 空镜模板 + 形状改写，不再要求「必须开自拍」。
-      const image = await generateSceneImageBytes(prompt, {
-        api,
-        key: stringOf(cfg.selfieKey) || stringOf(cfg.imageKey),
-        model: this.imageModels(),
-        shape: this.shapeInput(cfg, api),
-        compat: {
-          noResponseFormat: cfg.imageNoResponseFormat === true,
-          noSize: cfg.imageNoSize === true,
-        },
-        quality: stringOf(cfg.imageQuality).trim(),
-        size: stringOf(cfg.imageSize),
-        timeoutMs: selfieTimeoutMs(Number(cfg.imageTimeoutSec) || 0),
-        scene: this.sceneOptions(),
-      }, this.proxyFetch, this.log, clock ?? undefined);
+      const image = selfie
+        ? await generateSelfieBytes(prompt, selfie, this.proxyFetch, this.log, clock ?? undefined)
+        // 自拍关着：出空镜。同一套场景描述 + 空镜模板 + 形状改写，不再要求「必须开自拍」。
+        : await generateSceneImageBytes(prompt, {
+          api,
+          key: stringOf(cfg.selfieKey) || stringOf(cfg.imageKey),
+          model: this.imageModels(),
+          shape: this.shapeInput(cfg, api),
+          compat: {
+            noResponseFormat: cfg.imageNoResponseFormat === true,
+            noSize: cfg.imageNoSize === true,
+          },
+          quality: stringOf(cfg.imageQuality).trim(),
+          size: stringOf(cfg.imageSize),
+          timeoutMs: selfieTimeoutMs(Number(cfg.imageTimeoutSec) || 0),
+          scene: this.sceneOptions(),
+        }, this.proxyFetch, this.log, clock ?? undefined);
+      this.lastReportImageError = '';
       return image.bytes;
     } catch (e) {
-      this.log.warn(`汇报配图失败：${e instanceof Error ? e.message : String(e)}`);
+      const why = e instanceof Error ? e.message : String(e);
+      // 留着这句话：聊天里那句小提示要能说清「为什么没图」，而不是只说一句抱歉。
+      this.lastReportImageError = why;
+      this.log.warn(`汇报配图失败：${why}`);
       return null;
     }
   }

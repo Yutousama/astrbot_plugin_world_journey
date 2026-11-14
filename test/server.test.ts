@@ -131,10 +131,20 @@ test('sidecar 汇报配图：字节转 base64，失败时返回空图', async ()
     assert.deepEqual(Buffer.from(ok.body.image, 'base64'), Buffer.from(bytes));
 
     bridge.reportImage = async () => null;
-    const empty = await post('/api/report-image', { text: '没有配自拍' });
+    bridge.lastReportImageError = '自拍接口 HTTP 400：{"error":{"message":"images[].image_url is required"}}';
+    const empty = await post('/api/report-image', { text: '没有配图' });
     assert.equal(empty.status, 200);
     assert.equal(empty.body.ok, false);
     assert.equal(empty.body.image, null);
+    // 失败原因必须一起回给 Python：聊天里那句「配图没生成」全靠它，不然用户只能翻日志。
+    assert.match(empty.body.reason, /HTTP 400/);
+
+    bridge.reportImage = async () => bytes;
+    bridge.lastReportImageError = '上一次失败留下的';
+    const okAgain = await post('/api/report-image', { text: '今天到了大理' });
+    assert.equal(okAgain.body.ok, true);
+    // 成功后 reason 必须是空串，不能把上一次的失败原因拖过来。
+    assert.equal(okAgain.body.reason, '');
   } finally {
     await server.close();
     await bridge.stop();

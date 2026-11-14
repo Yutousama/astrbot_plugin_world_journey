@@ -1,5 +1,43 @@
 # 更新日志
 
+## 未发布 — 汇报配图失败时在文字末尾补一句原因
+
+1.0.9 之后加的一个小功能，**不动版本号**。
+
+### 行为
+
+主动汇报要配图但生图失败时，以前只是日志里一行 warning，聊天里她照常说话 ——
+看起来像「今天不想发图」，实际是接口回了 400。现在在汇报文字末尾补一句：
+
+```
+（本来想配一张自拍，生图没成功：HTTP 400：images[].image_url is required）
+```
+
+- 开着 `selfie_enabled` 说「本来想配一张自拍」，关着说「本来想配一张现场的图」——
+  措辞必须跟实际走的那条链路一致，否则排查方向直接被带偏；
+- 只有**真的试过了且失败**才有这句：`report_image_mode=off`、概率没抽中、
+  事件本身已带照片，都不补；
+- 原因取自 sidecar 的错误文本并压缩：优先取 JSON 里的 `message`，其次只留 `HTTP <码>`，
+  都没有就剥掉 `{}"[]` 后截 60 字。
+
+### 接线
+
+- `adapter/bridge.ts`：新增 `lastReportImageError`（成功时清空，别把上次的原因拖过来）；
+  `reportImage()` 两条路径（自拍 / 空镜）合并成一个 try，失败原因留在字段上。
+- `adapter/server.ts`：`/api/report-image` 响应多一个 `reason` 字段。
+- `bridge.py`：`reportImage()` 返回 `(bytes | None, reason)` —— 传输层异常仍抛
+  `BridgeError`，由调用方转成尾巴文案。
+- `event_pump.py`：`image_factory` 协议改成返回 `(图片, 小尾巴)`，`_send_event` 在无图时追加。
+- `main.py`：`_maybe_report_image` 决定措辞；新增 `_compact_image_reason()` 压原因。
+
+### 验证
+
+- `npm run check` 全绿（typecheck + **89 项测试** + 上游校验）；
+  `test/server.test.ts` 里新增两条断言：失败时 `reason` 带回来、成功后 `reason` 必须是空串；
+- `checks/check-report-note.py`：从 `main.py` 源码里原样抽出方法跑 9 组
+  （off / 概率没抽中 / 已有照片 / 成功 / 自拍措辞 / 空镜措辞 / 抛异常 / 原因压缩 / 抽中才调接口），
+  全通过 —— 判据和实现同源，不是复制一份去测。
+
 ## 1.0.9 — 2026-11-15（上游 raw 0.8.6 → 1.8.0 + Grok 参考图出片 + 面板瘦身）
 
 本版主题：**吃下上游 1.x 全段**（0.9 → 1.8.0，约 60 个发布版）。核对结论是

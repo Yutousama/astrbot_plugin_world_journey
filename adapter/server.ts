@@ -212,9 +212,11 @@ async function handle(req: IncomingMessage, res: ServerResponse, opts: ServerOpt
     const body = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
     const scene = typeof body.text === 'string' ? body.text : '';
     const bytes = await opts.bridge.reportImage(scene);
+    // reason 只在失败时有值：Python 侧靠它在汇报文字末尾补一句「为什么没图」。
     json(res, 200, {
       ok: Boolean(bytes),
       image: bytes ? Buffer.from(bytes).toString('base64') : null,
+      reason: bytes ? '' : (opts.bridge.lastReportImageError || '生图没成功'),
     });
     return;
   }
