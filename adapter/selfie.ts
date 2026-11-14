@@ -153,8 +153,7 @@ const SHAPES: readonly ImageShape[] = ['grok', 'openai', 'relay', 'generation', 
  * 模型名 → 形状。只收「形状能由模型名断定」的族，剩下的交给接口地址或默认。
  *
  * - `grok` / `imagine`：xAI 的编辑接口只有 JSON + `image:{url}` 一种吃法。
- *   **实测过中转站也照收**（`ai.yutou233.cn` 上 `grok-imagine-image` 用这个形状 200 出图），
- *   所以这条不看域名。
+ *   **走中转站同样照收**，所以这条不看域名。
  * - `dall-e` / `gpt-image` / `chatgpt-image`：OpenAI 原生 edits 就是 multipart。
  * - **`wan*` 故意不在这里**：万相的模型名既可能配百炼原生端点（要 `wan` 形状），
  *   也可能配中转站的 OpenAI 兼容端点（要 `openai`/`relay`）。这种歧义只能由地址决定，

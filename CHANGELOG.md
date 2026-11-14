@@ -259,7 +259,7 @@ Grok 的 `/v1/images/edits` 与 OpenAI 那套**不是同一个形状**（官方�
 
 ### `auto` 按**模型名**认形状（实测推翻了我最初按地址猜的方案）
 
-实测那台中转站 `ai.yutou233.cn` 一个域名后面同时挂着 `grok-imagine-image`、
+实测某中转站一个域名后面同时挂着 `grok-imagine-image`、
 `gpt-image-2.6-flare`、`qwen-image-3.0-pro`、`wan2.7-image` —— 地址毫无信息量。
 真实请求矩阵（全部实测，不是推断）：
 

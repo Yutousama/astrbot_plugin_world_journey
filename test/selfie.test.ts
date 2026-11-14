@@ -960,12 +960,12 @@ test('RawBridge：image_shape=grok 时参考图走 image 对象、模板换成�
 /*
  * `auto` 按**模型名**认形状。
  *
- * 起因是实测：中转站 `ai.yutou233.cn` 一个域名后面挂着 grok-imagine-image、gpt-image-2.6-flare、
+ * 起因是实测：中转站一个域名后面挂着 grok-imagine-image、gpt-image-2.6-flare、
  * qwen-image、wan2.7-image 几十种，按地址猜只能一律当 openai，结果 Grok 那条一直是
  * 「参考图被丢掉照样出图」。域名说明不了任何事，模型名可以。
  */
 test('auto 先看模型名：grok 系走 grok，gpt-image 系走 multipart，都不看域名', () => {
-  const relay = 'https://ai.yutou233.cn/v1';
+  const relay = 'https://relay.example.com/v1';
   const grok = resolveImageShape({ api: relay, model: 'grok-imagine-image' });
   assert.equal(grok.shape, 'grok');
   assert.equal(grok.source, 'model');
@@ -987,7 +987,7 @@ test('万相的形状只由地址定：模型名 wan* 不足以断定该走原�
     'wan',
   );
   assert.equal(
-    resolveImageShape({ api: 'https://ai.yutou233.cn/v1', model: 'wan2.7-image' }).shape,
+    resolveImageShape({ api: 'https://relay.example.com/v1', model: 'wan2.7-image' }).shape,
     'openai',
   );
 });
@@ -1002,7 +1002,7 @@ test('面板显式值和旧字段都压过模型名（用户说了算）', () =>
     'panel',
   );
   // 老配置（selfie_mode=edit）升级后行为逐字不变，不会因为模型名是 grok 就改形状。
-  const upgraded = resolveImageShape({ api: 'https://ai.yutou233.cn/v1', model: 'grok-imagine-image', mode: 'edit' });
+  const upgraded = resolveImageShape({ api: 'https://relay.example.com/v1', model: 'grok-imagine-image', mode: 'edit' });
   assert.equal(upgraded.shape, 'openai');
   assert.equal(upgraded.source, 'legacy');
   assert.equal(modelShapeHint('grok-imagine-image'), 'grok');

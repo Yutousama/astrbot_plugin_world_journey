@@ -168,9 +168,9 @@ test('接口形状：auto 不吵 —— 降级链混用 grok 与 gpt-image 是�
     nowPlaying: () => null,
     echo: false,
     initialOverrides: {
-      // 实例日志里的真实配置：中转站 + 两个 gpt-image 打头、grok 兜底。
+      // 典型配置：中转站 + 两个 gpt-image 打头、grok 兜底。
       // auto 下每个模型各认各的形状，这种混用不该在启动时挨一条「形状不对」的警告。
-      imageApi: 'https://ai.yutou233.cn/v1',
+      imageApi: 'https://relay.example.com/v1',
       imageKey: 'k',
       imageModels: ['gpt-image-2.6-flare', 'gpt-image-2.5-flare', 'grok-imagine-image'],
       selfieEnabled: true,
