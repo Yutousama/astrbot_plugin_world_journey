@@ -10,7 +10,7 @@ raw/          上游 coopani-world-journey 源码（只读基线，当前 1.8.0�
 adapter/      TypeScript 套壳：宿主、配置、事件、媒体、提示词、生图提示词、HTTP、模拟
 scripts/      构建、部署、npm 源码更新、校验
 test/         92 项测试
-docs/         架构与上游更新文档
+docs/         架构与上游更新文档（本地目录，.gitignore 排除，不提交到本仓库）
 plugin/       本地构建/联调目录（.gitignore 排除，不提交到本仓库）
 ```
 
@@ -103,7 +103,7 @@ npm run upstream:accept    # 只写 upstream.lock.json
 npm run build              # 重新生成 sidecar/update/插件 raw 副本
 ```
 
-详见 [`docs/upstream-update.md`](docs/upstream-update.md)。
+详见本地 `docs/upstream-update.md`（`docs/` 已被 `.gitignore` 排除，不入库）。
 
 ## 架构
 
