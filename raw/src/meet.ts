@@ -274,15 +274,37 @@ export interface NeighborBoard {
    * 所以别拿它说「这城一个人都没有」。
    */
   readonly here: number;
+  /**
+   * **这次到底查成了没有**（2026-11-17，zzy1053 报的）。
+   *
+   * 原来「断连」和「查到了、确实没人」返回的东西一模一样（都是空 `list`），
+   * 于是他 11-16 那天全天连不上，早上那次判定被当成「人没露面」——
+   * 他自己拿着日志都分不出来，普通用户更没戏。
+   *
+   * `false` 的含义是「不知道」，不是「没人」。**任何时候都不该把它读成「没人」。**
+   */
+  readonly ok: boolean;
 }
 
 export async function findNeighbors(
   opt: MeetOptions,
   cityId: string,
   slot: Slot,
+  /**
+   * 要几个邻居。默认 `MEET_MAX - 1`（三个）。
+   *
+   * ⚠ **服务端不读这个参数**（2026-11-17 核过 `cloud/sight-cf/src/worker.js`）：
+   * 那边是 `ORDER BY at DESC LIMIT ${MAX}`，`MAX = 3` 写死，query 里的 `limit` 被忽略。
+   * 所以这个值**只管本地再截一道**，传大了服务端也不会多给。
+   *
+   * **判定场景漏人的真原因不是条数，是时段**：服务端按 `slot` 硬过滤，
+   * 而 `matesHere()` 原来只查 `night` —— 对方在别的时段上报就永远看不到。
+   * 那边现在四个时段全查再合并，见 `matesHere` 的注释。
+   */
+  limit = MEET_MAX - 1,
 ): Promise<NeighborBoard> {
   const url = clean(opt.url);
-  if (!url || !clean(opt.uid)) return { list: [], pool: 0, here: 0 };
+  if (!url || !clean(opt.uid)) return { list: [], pool: 0, here: 0, ok: false };
   /*
    * **不再传 `date`（2026-11-10）。**
    *
@@ -295,15 +317,15 @@ export async function findNeighbors(
     city: cityId,
     slot,
     exclude: clean(opt.uid),
-    limit: String(MEET_MAX - 1),
+    limit: String(limit),
   });
   try {
     const res = await fetch(`${endpointOf(url)}?${q}`, {
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
-    if (!res.ok) return { list: [], pool: 0, here: 0 };
+    if (!res.ok) return { list: [], pool: 0, here: 0, ok: false };
     const body = (await res.json()) as { list?: unknown; pool?: unknown; here?: unknown };
-    if (!Array.isArray(body.list)) return { list: [], pool: 0, here: 0 };
+    if (!Array.isArray(body.list)) return { list: [], pool: 0, here: 0, ok: false };
     const pool = typeof body.pool === 'number' && body.pool > 0 ? Math.floor(body.pool) : 0;
     const here = typeof body.here === 'number' && body.here > 0 ? Math.floor(body.here) : 0;
     /*
@@ -317,12 +339,13 @@ export async function findNeighbors(
           && typeof (x as Neighbor).doing === 'string')
         .map((x) => ({ pet: x.pet.slice(0, 24), doing: x.doing.slice(0, 40) }))
         .filter((x) => x.pet && x.pet !== clean(opt.pet))
-        .slice(0, MEET_MAX - 1),
+        .slice(0, limit),
       pool,
       here,
+      ok: true,
     };
   } catch {
-    return { list: [], pool: 0, here: 0 };
+    return { list: [], pool: 0, here: 0, ok: false };
   }
 }
 

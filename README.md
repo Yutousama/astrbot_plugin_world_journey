@@ -1,4 +1,4 @@
-# 大肥鱼环游世界 · AstrBot 套壳（开发仓库）
+﻿# 大肥鱼环游世界 · AstrBot 套壳（开发仓库）
 
 插件发布仓库：<https://github.com/Yutousama/astrbot_plugin_world_journey_release>
 插件作者：**yutou**
@@ -6,10 +6,10 @@
 本仓库是**开发仓库**，维护：
 
 ```text
-raw/          上游 coopani-world-journey 源码（只读基线，当前 1.8.0）
+raw/          上游 coopani-world-journey 源码（只读基线，当前 1.12.18）
 adapter/      TypeScript 套壳：宿主、配置、事件、媒体、提示词、生图提示词、HTTP、模拟
 scripts/      构建、部署、npm 源码更新、校验
-test/         92 项 TS 测试 + test/python 的 profile_scope 单测
+test/         92 项 TS 测试 + test/python 的归属/会话/工具单测
 docs/         架构与上游更新文档（本地目录，.gitignore 排除，不提交到本仓库）
 plugin/       本地构建/联调目录（.gitignore 排除，不提交到本仓库）
 ```
@@ -133,7 +133,7 @@ main.py / bridge.py      AstrBot 命令、工具、提示词、主动消息、si
 | `geo/cities.ts` 的 `cityByName` | 同上，用来把路上目的地**名**反查成 city id（缺了就退化，不报错） | 少了这个只影响画面锚点/判光，不会挂 |
 | 私有 `tick`/`*Timer` 字段 | 只在 `adapter/compat/private.ts` 的模拟里（清单按对象上真实存在的 `*Timer` 逐个停） | 只影响模拟，不影响插件；测试会红 |
 
-上游 1.8.0 的面板已有 5 页（`now/album/diary/mates/settings`）、23 个工具、事件多出
+上游 1.12.18 的面板已有 5 页（`now/album/diary/mates/settings`）、25 个工具、事件多出
 `journey.car/part/ride`；工具与事件是动态透传的，**加东西不用改壳**，只有做聊天侧快捷
 指令时才动 `main.py`（现有三条：`/journey_eat`、`/journey_signpost`、`/journey_mates`）。
 `settings`（生图设置）那一页是 Coopani 专属，套壳不接——AstrBot 有自己的配置表单与热重载。
@@ -161,7 +161,7 @@ SWC/WASM loader，`raw/` 仍是磁盘上的 TS，热更新不受影响）。具�
 - `engine/photos.json` + `engine/media/`：照片
 - `engine/events.jsonl`：事件流
 - `engine-config.json`：AstrBot 配置映射结果
-- `plugin_state.json`：last_seq / last_umo / event_log_id / owner_profile（所属 AstrBot 配置文件）
+- `plugin_state.json`：last_seq / last_umo / last_umo_owner / event_log_id / owner_profile（所属 AstrBot 配置文件）
 - `logs/sidecar.log`：sidecar 日志
 
 `memory_dir` 留空时日记/记忆在 `engine/diary`；填同步盘则跟人走，`state.json` 仍只在本机。

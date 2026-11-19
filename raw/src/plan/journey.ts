@@ -45,6 +45,17 @@ export interface Journey {
   readonly seatMult?: number;
   /** 直线路径上会经过的城市 id，用来给她一点「路过」的实感。 */
   readonly viaIds: readonly string[];
+  /**
+   * 这一趟的票钱（元）。**出发时就付了**（2026-11-16）。
+   *
+   * 改这一条之前是「到站才结算」，注释理由是「票是出发前买的，但花了多少到站才成事实」。
+   * 那句话在**不改签**的世界里成立；一旦要退票就崩了 —— 旧票从没记过账，
+   * 退的时候没得退，账面上却要多出一笔「退回」。
+   *
+   * 所以付款时点前移到出发那一刻（买票就是买票），这一格就是那张票的凭据。
+   * **老状态里没有这一格** —— 读不到时到站按算式补记一次，不静默吞掉。
+   */
+  readonly fare?: number;
   readonly createdAt: string;
 }
 
@@ -410,6 +421,7 @@ function usableModes(from: City, to: City, km: number): TravelMode[] {
      * 国界不看、海也不看，算出来的是一个不存在的地方。
      */
     if (GROUND_MODES.has(m.id) && !landLinked(from.country, to.country)) return false;
+    if (GROUND_MODES.has(m.id) && (from.region === '中国台湾') !== (to.region === '中国台湾')) return false;
     return true;
   });
 }
@@ -466,6 +478,8 @@ export function pickMode(
    * 不是压权 —— 没证的人不该有一成的概率「偷偷开一趟」。
    */
   noCar = false,
+  /** 有效精力（来自模拟鱼生：energy + fitness * 0.25）。低于 40 时少走少骑、偏省力方式。 */
+  effectiveEnergy?: number,
 ): TravelMode | null {
   const all = usableModes(from, to, km);
   const allowed = (noFly ? all.filter((m) => m.id !== 'plane') : all)
@@ -540,6 +554,15 @@ export function pickMode(
     // 手头紧：飞机压到原来的一成。不是禁掉 —— 跨洲还是只能飞，
     // 但国内这段距离她会开始算「这钱值不值」。
     if (poor && m.id === 'plane') w *= 0.1;
+    if (effectiveEnergy !== undefined && effectiveEnergy < 40) {
+      if (effectiveEnergy < 25 && (m.id === 'walk' || m.id === 'bike') && usable.some((u) => u.id !== 'walk' && u.id !== 'bike')) {
+        return 0;
+      }
+      if (m.id === 'walk') w *= 0.2;
+      else if (m.id === 'bike') w *= 0.3;
+      else if (m.id === 'motorcycle') w *= 0.5;
+      else if (m.id === 'car' || m.id === 'train' || m.id === 'plane') w *= 1.4;
+    }
     // 慢得离谱的再压一道，防止短途段里出现「摩托车横穿八百公里」。
     return w * (1 - slowness * 0.35);
   };

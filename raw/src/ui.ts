@@ -192,6 +192,8 @@ export interface UiSnapshot {
    * 这座城还有几个、有没有人在找伴、她跟谁约好了还剩几天。
    */
   readonly social: {
+    /** 碰面服务器最近一次是否连上（false = 没连上，不能当成没人）。 */
+    readonly online?: boolean;
     /** 同城、同时段还有几个人。0 = 没人（不是坏了）。 */
     readonly nearby: number;
     /** 同城有几个人在找伴走一段。 */

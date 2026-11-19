@@ -74,8 +74,10 @@ if (nonTypeImports.length) {
   console.log('[upstream] 没有运行时 cortico import。');
 }
 
-const worldPath = join(rawDir, 'src', 'world.ts');
-const world = existsSync(worldPath) ? readFileSync(worldPath, 'utf8') : '';
+const allSourceFiles = listFiles(join(rawDir, 'src')).filter((p) => p.endsWith('.ts'));
+// 1.12.18 起 JourneyWorld 的方法拆到 world-*.ts 混入，再把原型 Object.assign 回去；
+// 静态契约不能只看 world.ts，否则 webUi/envPromptVars/invoke 会被误判为消失。
+const world = allSourceFiles.map((path) => readFileSync(path, 'utf8')).join('\n');
 const required = [
   ['start', /async start\s*\(/],
   ['stop', /async stop\s*\(/],
@@ -86,7 +88,7 @@ const required = [
 ];
 for (const [name, re] of required) {
   if (!re.test(world)) {
-    console.error(`[upstream] world.ts 里找不到公开面「${name}」；可能需要更新 adapter/raw.ts。`);
+    console.error(`[upstream] src/*.ts 里找不到公开面「${name}」；可能需要更新 adapter/raw.ts。`);
     failed = true;
   }
 }

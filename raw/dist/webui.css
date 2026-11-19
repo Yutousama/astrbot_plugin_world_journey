@@ -73,11 +73,28 @@
   color: var(--jr-soft);
   margin-bottom: 6px !important;
 }
+.jr-city-row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+}
 .jr-city {
   font-family: ui-serif, "Noto Serif SC", "Songti SC", serif;
   font-size: clamp(26px, 4vw, 38px);
   font-weight: 500;
   letter-spacing: .06em;
+}
+.jr-city-weather {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border: 1px solid var(--jr-line);
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--jr-soft);
+  background: var(--jr-card);
+  white-space: nowrap;
 }
 .jr-sub { color: var(--jr-soft); font-size: 12.5px; margin-top: 4px !important; }
 .jr-head-right { text-align: right; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
@@ -687,6 +704,58 @@
   background: var(--jr-accent-soft);
   padding: 3px 8px;
   border-radius: 6px;
+}
+
+/*
+ * 「灯怎么看」。默认折叠。
+ *
+ * 颜色全部走 `--jr-*` 变量 —— 这一页「暗色只改变量，不改结构」，
+ * 硬编码一个 #c0392b 在暗色下会糊。
+ *
+ * 唯一补的是 `--jr-bad`：journey 原来只有 `--jr-ok`（绿），没有红。
+ * **只在这个作用域里补**，不动 `.jr-app` 那一套，免得影响别处。
+ */
+.jr-help {
+  --jr-bad: #b4533a;
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--jr-line);
+}
+.jr-help summary {
+  cursor: pointer;
+  font-size: 12.5px;
+  color: var(--jr-accent);
+  list-style: none;
+}
+.jr-help summary::-webkit-details-marker { display: none; }
+.jr-help summary::before { content: '▸ '; }
+.jr-help[open] summary::before { content: '▾ '; }
+.jr-help summary:hover { text-decoration: underline; }
+.jr-help ul {
+  margin: 10px 0 0;
+  padding-left: 2px;
+  list-style: none;
+  font-size: 12.5px;
+  line-height: 2.05;
+  color: var(--jr-soft);
+}
+.jr-help li b { color: var(--jr-ink); font-weight: 600; }
+.jr-help-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 7px;
+  vertical-align: middle;
+}
+.jr-help-which {
+  margin: 10px 0 0 !important;
+  font-size: 12px;
+  line-height: 1.8;
+  color: var(--jr-soft);
+}
+@media (prefers-color-scheme: dark) {
+  .jr-help { --jr-bad: #e08b6f; }
 }
 
 .jr-fb {

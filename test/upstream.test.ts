@@ -2,10 +2,18 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { hashOfFiles, fileHashes, readJson } from '../scripts/lib/upstream.mjs';
+import { hashOfFiles, fileHashes, listFiles, readJson } from '../scripts/lib/upstream.mjs';
 import { readUpstreamInfo } from '../adapter/contract.ts';
 
 const root = process.cwd();
+
+/** 1.12.18 起公开面拆进 world-*.ts 混入；静态检查扫整个 src。 */
+function sourceText(): string {
+  return listFiles(join(root, 'raw', 'src'))
+    .filter((path) => path.endsWith('.ts'))
+    .map((path) => readFileSync(path, 'utf8'))
+    .join('\n');
+}
 
 test('raw/ 与 upstream.lock.json 一致', () => {
   const pkg = readJson(join(root, 'raw', 'package.json')) as { version?: string };
@@ -46,25 +54,24 @@ function toolNames(world: string): string[] {
 }
 
 test('上游工具清单：必需项与 1.x 新增项都还在', () => {
-  const world = readFileSync(join(root, 'raw', 'src', 'world.ts'), 'utf8');
-  const names = new Set(toolNames(world));
+  const names = new Set(toolNames(sourceText()));
   // 套壳契约必需的 5 个（adapter/contract.ts REQUIRED_TOOL_NAMES）。
   for (const need of ['journey_now', 'journey_diary_write', 'journey_diary_read', 'journey_stats', 'journey_draw_to']) {
     assert.ok(names.has(need), `必需工具 ${need} 不见了`);
   }
-  // 0.8.7 → 1.8.0 陆续加上的 8 个：壳层的指令与能力实测按名字认它们。
+  // 0.8.7 → 1.12.18 陆续加上的 10 个：壳层的指令与能力实测按名字认它们。
   for (const added of [
     'journey_rent_car', 'journey_plan_change', 'journey_hotel_night', 'journey_spot_ride',
     'journey_set_slot', 'journey_eat', 'journey_rest', 'journey_signpost',
+    'journey_give_up', 'journey_stay',
   ]) {
     assert.ok(names.has(added), `1.x 工具 ${added} 不见了`);
   }
-  assert.equal(names.size, 23, `工具数 ${names.size} 与 1.8.0 的 23 个不符；核对 describe.json 与 capabilities()`);
+  assert.equal(names.size, 25, `工具数 ${names.size} 与 1.12.18 的 25 个不符；核对 describe.json 与 capabilities()`);
 });
 
 test('上游面板清单：契约要的 now/album 在，1.x 新增的 mates/settings 也在', () => {
-  const world = readFileSync(join(root, 'raw', 'src', 'world.ts'), 'utf8');
-  const panels = [...world.matchAll(/id:\s*'([a-z]+)',\s*title:/g)].map((m) => m[1]!);
+  const panels = [...sourceText().matchAll(/id:\s*'([a-z]+)',\s*title:/g)].map((m) => m[1]!);
   for (const need of ['now', 'album', 'diary']) {
     assert.ok(panels.includes(need), `面板 ${need} 不见了（adapter/contract.ts assertWebUiShape 会拦）`);
   }

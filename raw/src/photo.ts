@@ -1036,6 +1036,35 @@ function nightSeason(text: string): string {
 }
 
 /**
+ * 季节句进城（2026-11-15）。
+ *
+ * 季节模板是按**地区**写的，不是按城写的：西北十一月那条
+ * 「地面是干土，尘土浮在鞋面上」在敦煌城外成立，在兰州市区的滨河路上不成立 ——
+ * 那儿铺的是沥青，鞋上不该有土。
+ *
+ * 只换这一处，不建全量对照表：**替换一条能说清来由的，比编一张映射表可靠。**
+ * 白天和夜里分两句，因为夜里的规范是「灯下认得出」，不是「看得见尘土」。
+ */
+function citySeason(text: string, daylit: boolean): string {
+  if (!text) return '';
+  const city = daylit ? '路面干，道牙和墙根积着一层灰' : '路面干，灯下是一层薄灰';
+  return text.replace('地面是干土，尘土浮在鞋面上', city);
+}
+
+/**
+ * 展厅里的光（2026-11-15）。
+ *
+ * 判成室内（`spotIndoor`）的点不能走户外灯句 —— 站在展厅里看不见「路灯和楼窗」。
+ * 也不能走 `lightLine({ indoor: true })`：那一支是食物特写用的
+ * 「一盏暖黄的灯从上方罩下来，桌面反光」，套在展柜上会变成一张餐桌。
+ */
+function hallLight(sun: SceneSun): string {
+  if (sun.whiteNight) return '顶灯和射灯照着展柜，外面那层光还没退干净';
+  if (sun.daylit) return '光从高窗落下来，展柜玻璃上有一块反光';
+  return '顶灯和射灯照着展柜，展柜以外的地方暗下去';
+}
+
+/**
  * 节日那张的光。
  *
  * 这一类画面是**一堆东西挤在一起**，要的是「颜色浓、层次少」，不是精确的影子长度。
@@ -1367,6 +1396,19 @@ export interface LightInput {
    * 而那一刻窗外还看得清房子。**白夜不是夜。**
    */
   readonly whiteNight?: boolean;
+  /**
+   * 这一张在**城里**（2026-11-15）。
+   *
+   * 起因：Mr.Q 发来一张兰州夜景 —— 满天星、几处窗灯、对岸黄土坡、低矮平房，
+   * 是黄土高原的村子，而他家在城关区。查下来提示词是
+   * 「只有几处窗灯和路灯，照不亮周围」—— `night` 档一直只有这一句，
+   * 那是**郊野**的语言。城里夜里路灯连成线、桥上有灯、楼里的窗还亮着，
+   * 一句「几处」就把整座城抹成了村。
+   *
+   * 判据同 §17：**按「这是什么地方」给，不按「长什么样」猜。**
+   * 拍整座城（无 `spot`）、在家、景点判为 `urban` → 城里。
+   */
+  readonly urban?: boolean;
 }
 
 /**
@@ -1377,7 +1419,7 @@ export interface LightInput {
  * 两边都写天空，就会出现「黄昏的金色光线」和「灰白低云」同时成立的段子。
  */
 export function lightLine(input: LightInput): string {
-  const { phase, overcast, indoor, whiteNight } = input;
+  const { phase, overcast, indoor, whiteNight, urban } = input;
 
   if (whiteNight) {
     return indoor
@@ -1409,7 +1451,24 @@ export function lightLine(input: LightInput): string {
     case 'afterglow': return '太阳刚落，地面已经暗下来，影子没有了';
     case 'blue': return '物体只剩下轮廓，窗灯刚亮';
     case 'twilight': return '几乎全黑，只看得清近处物体的轮廓';
-    default: return '没有别处的光，只有几处窗灯和路灯，照不亮周围';
+    /*
+     * 夜里这一档要分城里和野外（2026-11-15）。
+     *
+     * 原来只有野外那一句 —— 城里也照它画，「几处窗灯」就把整座城抹成了村。
+     *
+     * **只写每座城、每个景点都有的东西。** 第一版写的是「桥上的灯、楼里的窗」——
+     * 兰州有桥、喀什老城的窄巷没有；城市有楼、兵马俑坑边没有。
+     * 写成这样，模型会替喀什造一座桥、给坑道配一排居民楼。
+     * 路灯是唯一处处成立的：路面被打亮、往远处连成线，这一条就够把「城」立住。
+     *
+     * **没做「野外再分荒野」那一档**：试过用 `spotProfile().setting === 'wild'`
+     * 判无人区（戈壁、雪山没有窗灯），被 `photo-subject` 打了回来 ——
+     * 「婺源的江岭」判成 mountain/wild，可那是有人住的梯田村。
+     * `wild` 只说明「不在市区」，说明不了「有没有人住」。判不出就别猜，走老路。
+     */
+    default: return urban
+      ? '路灯一盏接一盏，把地面照出一片一片的亮，远处连成一条'
+      : '没有别处的光，只有几处窗灯和路灯，照不亮周围';
   }
 }
 
@@ -1419,7 +1478,7 @@ export function lightLine(input: LightInput): string {
  * 和 `lightLine` 的分工是硬线：那边管「地面被什么照着」，这边管「抬头看见什么颜色」。
  */
 export function skyLine(
-  phase: SunPhase, overcast: boolean, precip = '', whiteNight = false,
+  phase: SunPhase, overcast: boolean, precip = '', whiteNight = false, urban = false,
 ): string {
   if (whiteNight) {
     return overcast || /雨|雪/.test(precip)
@@ -1428,7 +1487,15 @@ export function skyLine(
   }
   /* 夜里看不见云是什么颜色 —— 阴和晴在半夜长得一模一样。 */
   if (phase === 'night' || phase === 'twilight') {
-    return phase === 'night' ? '头顶是黑的，星星看得清' : '天边只剩一线灰蓝，上面已经黑';
+    if (phase !== 'night') return '天边只剩一线灰蓝，上面已经黑';
+    /*
+     * 城里看不见这么密的星（2026-11-15）。光污染把暗星全吃掉，
+     * 只剩最亮的一两颗，天本身也不是纯黑，是被灯映成深灰。
+     * 一句「星星看得清」在市区是假的，而且它会把这幅画推向野外。
+     */
+    return urban
+      ? '天是深灰的，被底下的灯映亮，只看得见一两颗星'
+      : '头顶是黑的，星星看得清';
   }
   /*
    * 蓝调也要看天。阴天的蓝调时刻不是「饱和的深蓝」——
@@ -1860,6 +1927,27 @@ export function photoPrompt(scene: PhotoScene): string {
     && !spotLook(scene.cityId, scene.spot)
     && spotProfile(scene.spot).indoor;
 
+  /**
+   * 这个点是不是在城区（只看地点本身，不看题材）—— 2026-11-15。
+   *
+   * 无 `spot` 时按「拍整座城」算，所以是城里；有 `spot` 时问类型；
+   * 判不出（`setting === ''`）返回 `null`，调用方一律走老行为，**不猜**。
+   */
+  const spotSetting = scene.spot ? spotProfile(scene.spot).setting : '';
+  const spotUrban: boolean | null = scene.spot
+    ? (spotSetting === 'urban' ? true : spotSetting === 'wild' ? false : null)
+    : true;
+  /**
+   * 这一张在城里还是野外 —— 见 `LightInput.urban`。
+   *
+   * 只给 `ground` 用：街景、食物、节日各有自己的模板，
+   * 那些模板的照明句这次一个字没动（改动面要能一句话说清）。
+   *
+   * **室内不算城里。** 判成室内的点（博物馆展厅这类）站在屋里看不见
+   * 「路面和楼里的窗」，套城市灯句只会更假 —— 这一支本就不该走到户外灯句上。
+   */
+  const urban = !sky && !scene.onRoad && !spotIndoor && spotUrban === true;
+
   const seasonText = (() => {
     if (closeup || sky || scene.onRoad || spotIndoor) return '';
     const full = trimScene(seasonLine(scene.cityId ? cityById(scene.cityId) : null, scene.month ?? 1));
@@ -1873,7 +1961,14 @@ export function photoPrompt(scene: PhotoScene): string {
      * …垂柳只剩细枝…」—— 「冰板 + 枯荷」正是这个季节最有辨识的一笔，恰好在第五段。
      * 砍段数就是砍辨识。**长度问题是真问题，但裁法不能靠段号。**
      */
-    return sun.daylit ? full : nightSeason(full);
+    const base = sun.daylit ? full : nightSeason(full);
+    /*
+     * 城里要把「只有土路才成立」的那半句换掉（2026-11-15）。
+     *
+     * 西北十一月那条是「地面是干土，尘土浮在鞋面上」—— 兰州市区走在滨河路上，
+     * 鞋上不该有土，路面也不是土的。这句写的是城外。
+     */
+    return urban ? citySeason(base, sun.daylit) : base;
   })();
   const withSeason = (base: string): string => {
     if (!seasonText) return base;
@@ -2177,10 +2272,13 @@ export function photoPrompt(scene: PhotoScene): string {
   const light = sky
     /* 抬头那张的画面里没有地面照明可讲，天黑没黑由 `skyOf` 说。 */
     ? ''
-    : lightLine({
-      phase: sun.phase, overcast: sun.overcast, precip: sun.precip,
-      indoor: false, whiteNight: sun.whiteNight,
-    });
+    /* 展厅有自己的一句（2026-11-15）—— 室内点走到户外灯句上，等于让博物馆配路灯。 */
+    : spotIndoor
+      ? hallLight(sun)
+      : lightLine({
+        phase: sun.phase, overcast: sun.overcast, precip: sun.precip,
+        indoor: false, whiteNight: sun.whiteNight, urban,
+      });
   /** 天空那一句。特写没有天，抬头那张由 `skyOf` 说 —— 这里只管「地面以上的颜色」。 */
   /*
    * **室内不写天。** `spotIndoor` 这一条是 2026-11-14 加的：
@@ -2189,7 +2287,7 @@ export function photoPrompt(scene: PhotoScene): string {
    */
   const skyTold = sky || closeup || spotIndoor
     ? ''
-    : skyLine(sun.phase, sun.overcast, sun.precip, sun.whiteNight);
+    : skyLine(sun.phase, sun.overcast, sun.precip, sun.whiteNight, urban);
   const lightFinal = light;
 
   /*
@@ -2227,7 +2325,15 @@ export function photoPrompt(scene: PhotoScene): string {
    * 抬头那张得先交代天上是什么。不交代的话，模型拿「城市名 + 夜色」会自己编一片星海，
    * 天阴着也照样画满天星——那就成了许愿，不是她抬头看见的东西。
    */
-  const skyInfo = sky ? skyOf(scene.hour, scene.weather ?? '', latNow, scene.month ?? 0) : null;
+  /*
+   * **经度和时区必须传进去**（2026-11-15）。不传的话 `skyOf` 按钟点算，
+   * 而这一段的 `night` 是 `sceneSun()` 按太阳高度算的 —— 两套判据并存，
+   * 喀什夏晚会出现「头顶满天星」和「胶片颗粒，轻微过曝」写在同一段里。
+   */
+  const skyInfo = sky
+    ? skyOf(scene.hour, scene.weather ?? '', latNow, scene.month ?? 0,
+        nowCity?.lon, nowCity?.tz, !scene.onRoad && spotUrban === true)
+    : null;
 
   /*
    * 这个时节、这个地方，画面该是什么样（2026-11-07）。
@@ -2287,10 +2393,20 @@ export function photoPrompt(scene: PhotoScene): string {
      *
      * 这一句只补**形体**：颜色没了、只剩轮廓。不再重复「照不亮周围」——
      * 那是 `lightLine` 已经说过的话，说两遍不会更暗，只会让模型觉得这段在啰嗦。
+     *
+     * **展厅不写这句**（2026-11-15）：`skyTold` 在室内本来就被退掉，
+     * 条件是恒真的，于是 `hallLight` 刚说完「顶灯和射灯照着展柜」，
+     * 下一句就补「只剩轮廓」—— 两句正面打架。
      */
-    night && !sky && !skyTold && !describeNow ? '其余部分看不出颜色，只剩轮廓。' : '',
+    night && !sky && !skyTold && !describeNow && !spotIndoor
+      ? '其余部分看不出颜色，只剩轮廓。' : '',
     season ? `${season.replace(/。+$/, '')}。` : '',
-    sun.precip ? `${weatherLine(sun.precip, sun.phase)}。` : '',
+    /*
+     * **展厅里不写天气的后果**（2026-11-15）。
+     * 「雪片在光里看得见，地上积了一层」是在街上说的；展厅里只有窗玻璃上的水。
+     * 季节句和天空句都过了这道检查，这句原来漏了。
+     */
+    sun.precip && !spotIndoor ? `${weatherLine(sun.precip, sun.phase)}。` : '',
     /* 她正在做的事（2026-11-08）。先定场景，再说人。 */
     doingNow ? `正在发生的事：${doingNow.replace(/。+$/, '')}。` : '',
     cast ? `画面里有一个人：${cast}。` : '',
@@ -2304,9 +2420,19 @@ export function photoPrompt(scene: PhotoScene): string {
      * `feel` 以句号结尾（`体感句。`），后面再拼「，画面能看出这一点」就成了「。，」——
      * 2026-11-09 在成都那张的提示词里实拍到了这个断句。模型不会因为一个逗号画错，
      * 但读的人一眼就知道这是拼接缝。
+     *
+     * ## 「画面能看出这一点」有个前提：体感得有视觉对应（2026-11-17，读者报的）
+     *
+     * 那位在哈尔滨想看雪，照片是一片枯黄平原。查下来不是 `bodyFeeling` 写死「冷」的问题 ——
+     * `cold` 档那句「吸一口气鼻腔里就疼」本身没错，错在这句后面缀了「**画面能看出这一点**」：
+     * 「干」有视觉对应（嘴唇、风），「潮」有（衣服、被子），**「冷」的视觉对应只有雪和白霜**。
+     * 于是「冷」被单独翻译成「必须画冷的东西」，而那天天气是晴 —— 模型画了冬天却没雪，就是枯黄。
+     *
+     * 有天气数据时，画面该由天气决定，体感只是她的感受；没有天气才退到体感。
      */
     scene.feel
-      ? `${String(scene.feel).replace(/[。．.！!？?，,；;、\s]+$/, '')}，画面能看出这一点。`
+      ? `${String(scene.feel).replace(/[。．.！!？?，,；;、\s]+$/, '')}，`
+        + (scene.weather ? '这是她的体感，画面里的天气以上面那句为准。' : '画面能看出这一点。')
       : '',
     /*
      * 机位压短（2026-11-11）。「视角自然随意，略微不完美，有生活感」十七个字，
@@ -2317,16 +2443,18 @@ export function photoPrompt(scene: PhotoScene): string {
       /*
        * **尾句不再出现「自然光」。**（2026-11-12）
        *
-       * 原来白天那支写的是「胶片质感，自然光，景深自然」——
-       * 「自然光」是个总体判断词，权重又排在最后，会把前面精心算出来的
-       * 深夜、黄昏、蓝调全部推翻。夜里那支早就换掉了，白天那支一直留着，
-       * 于是「晚上拍得跟白天一样」总也断不了根。
+       * 「自然光」是个总体判断词，权重又排在最后，会把前面算出来的
+       * 深夜、黄昏、蓝调全部推翻。现在只留质感。
        *
-       * 现在只留质感：白天说颗粒和一点过曝，夜里说噪点和暗部。
+       * **拍了星的那张不能写「手机夜拍、噪点明显」**（2026-11-15）。
+       * 同一段前面刚说「满天星，银河斜过天顶」，末尾却说手持噪点、暗部没细节 ——
+       * 银河会被糊成一片灰。长曝是星空唯一拍得出来的方式。
        */
-      ? (sun.whiteNight
-          ? '胶片颗粒，光偏白，暗部还看得清。'
-          : sun.daylit ? '胶片颗粒，轻微过曝。' : '手机夜拍，噪点明显，暗部没有细节。')
+      ? (sky && skyInfo?.stars
+          ? '三脚架长曝，星点很实，暗部干净。'
+          : sun.whiteNight
+            ? '胶片颗粒，光偏白，暗部还看得清。'
+            : sun.daylit ? '胶片颗粒，轻微过曝。' : '手机夜拍，噪点明显，暗部没有细节。')
       : '',
     // 有人和没人，这两句不能并存 —— 同一段提示词里既说有人又说没人，出图会飘。
     /*
@@ -2335,6 +2463,16 @@ export function photoPrompt(scene: PhotoScene): string {
      */
     cast ? '画面里只有这一个人，不要出现其他人。'
       : sky ? `${NO_PEOPLE}。`
+      /*
+       * 展厅里的人叫观众，不叫行人（2026-11-15）。
+       * 「远处散着几个很小的行人」是在街上说的 —— 套进展厅，模型会顺手给展柜配一条街。
+       */
+      : spotIndoor ? '远处有几个观众，背对着镜头，看不清脸。'
+      /*
+       * **试过给 `wild` 也配「没有人」，被 `photo-subject` 打了回来**：
+       * 婺源的江岭判成 mountain / wild，可那是有人住的梯田村。
+       * 「不在市区」推不出「没有人」，这条判据撑不住 —— 宁可留着人气。
+       */
       : `${FAR_PEOPLE}。`,
     '没有文字，没有水印，没有边框。',
   ];
@@ -2357,6 +2495,14 @@ export interface SkyView {
  */
 export function skyOf(
   hour: number, weather: string, lat = 0, month = 0, lon?: number, tz?: string,
+  /**
+   * 这一眼是在城里抬的（2026-11-15）。判据同 `LightInput.urban`。
+   *
+   * 光污染把暗星全吃掉：市区晴夜看不到银河，只剩最亮的一两颗。
+   * 不判这一条，兰州城关、上海、东京的晴夜全给「满天星」，回执还会跟着说
+   * 「拍到了星空」—— 那是**两头都在撒谎**：图上没有，话里说有。
+   */
+  urban = false,
 ): SkyView {
   const h = ((hour % 24) + 24) % 24;
   const m = month > 0 ? month : 1;
@@ -2403,8 +2549,14 @@ export function skyOf(
   switch (sunPhase(altNow)) {
     case 'night':
       if (heavy) return { told: '夜里，云层压得很低，一颗星都不透', stars: false };
-      if (partly) return { told: '夜里，云占了大半，云缝里漏出几颗亮的', stars: true };
-      return { told: '夜里，满天星，银河斜过天顶，暗处都看得清', stars: true };
+      if (partly) return { told: '夜里，云占了大半，云缝里漏出几颗亮的', stars: partly && !urban };
+      /*
+       * 城里那一版同时把 `stars` 改成 false —— 回执拿它说「拍到了星空」，
+       * 只看得到一两颗的夜空不算星空。**图和话必须一起改**，只改图是半修。
+       */
+      return urban
+        ? { told: '夜里，天是深灰的，被底下的灯映亮，只看得见一两颗星', stars: false }
+        : { told: '夜里，满天星，银河斜过天顶，暗处都看得清', stars: true };
     case 'twilight':
       if (heavy) return { told: '天边只剩一线灰蓝，被云压得更暗了', stars: false };
       return { told: '天边只剩一线灰蓝，上面已经黑，先出来几颗亮的', stars: true };

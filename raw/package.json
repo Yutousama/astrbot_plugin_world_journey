@@ -1,20 +1,20 @@
 {
   "name": "coopani-world-journey",
-  "version": "1.8.0",
+  "version": "1.12.18",
   "type": "module",
-  "description": "让桌宠真的出门旅行：一百八十六座城、每座都有真地标，她自己挑去哪、怎么去，路上真耗那些时间；到站按当地时间吃饭、看日出、住店、写日记，月底出一页手账。填个公共地址能和别人的宠物碰面；装了音乐或打车扩展，她还会跟着歌走、把别人叫的车记进自己的账；一起走过的那几天，还能互留一句话和号，散了也找得回。需 Coopani 0.2.17 以上。",
+  "description": "大肥鱼环游世界 · 让桌宠真的出门去旅行：走遍 193 座城市，路上耗着真实时间、按当地作息吃饭看日出、写旅行日记，还能在城里偶遇别人的宠物、月底生成一份手账。（需 Coopani 0.2.17+）",
   "author": {
     "name": "Mr.Q"
   },
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/fateSSD/coopani-world-journey.git"
+    "url": "git+https://github.com/fateSSD/coopani-world-journey-v2.git"
   },
   "bugs": {
-    "url": "https://github.com/fateSSD/coopani-world-journey/issues"
+    "url": "https://github.com/fateSSD/coopani-world-journey-v2/issues"
   },
-  "homepage": "https://github.com/fateSSD/coopani-world-journey#readme",
+  "homepage": "https://github.com/fateSSD/coopani-world-journey-v2#readme",
   "keywords": [
     "cortico-world",
     "cortico",
@@ -52,11 +52,11 @@
     "locales": {
       "zh": {
         "displayName": "大肥鱼环游世界",
-        "description": "让桌宠真的出门旅行，不是在地图上跳一下。（需 Coopani 0.2.17 以上）\n\n- **她自己走**：从你家出发，自己挑去哪、怎么去；你点名也照办。\n- **城里是真的**：一百八十六座城，每座六到十个真地标，路线连着走、不走回头路。\n- **日子也是真的**：按当地时间吃饭、看日出、住店、写日记，月底出一页手账。\n- **会遇上别人**：填一个公共地址，和别人的宠物约在下一站碰面。\n\n**和别的扩展一起用**\n\n- **听歌上路**：装了音乐扩展，她放歌时会记住歌里的地名，写进「想去」，合适的时候真的去。\n- **别人叫的车也记她的账**：装了「鱼鱼出行」这类打车扩展，城里的车就交给它 —— 车费进旅行总花销、写进当天日记，首页多一张「正在打车」。景区里的索道、观光车、自行车仍归她自己管。没装就完全不受影响。\n- **碰面**：和别人的宠物约在同一座城，一起过的那几天，三餐、白天逛的地方、夜里的活动都会写到对方；关系深了说话的口气也变。\n\n- **散了还找得回**：一起走过的那几天，能互留一句话、一个号；还有一张名片，只有真一起走过的鱼看得见。都留 30 天，不续就自己收回去。"
+        "description": "让桌宠背上包，真的出门去旅行，而不是只在地图上瞬移。（需要 Coopani 0.2.17+）\n\n- **自己决定去哪、怎么走**：从你所在城市出发，自己选目的地和交通方式；你点名想去哪座城，她也会听。\n- **真地标与真时间**：内置 193 座城市和当地真地标，坐火车或飞机真的会花相应的时间，到站后按当地时间看天气、吃饭、找酒店、看日出并写下旅行日记，月底还会整理成一页手账。\n- **路上偶遇新朋友**：填上公共服务器地址，就能在旅途中和别人的宠物约在同一座城碰面、一起打卡吃饭，临别前还能互留名片和联系方式。\n\n**和其他扩展一起玩**\n\n- **听歌联动**：装了「一起听歌」时，你放的歌里带地名（比如《成都》），她会悄悄记进「想去」清单里，说不定下一站就出发去那儿。\n- **打车联动**：装了「鱼鱼出行」时，城里的打车和包车费用会自动记入她的旅行账本和日记。\n- **过日子联动**：装了「模拟鱼生」时，两边的城市位置、旅途花销与日记会自动对接。"
       },
       "en": {
         "displayName": "Big Fish World Tour",
-        "description": "She actually travels, instead of hopping around a map. Needs Coopani 0.2.17+\n\n- **She picks the way**: from your home she chooses where to go and how; tell her and she obeys.\n- **The cities are real**: 185 of them, 6-10 real landmarks each, routed as one line without backtracking.\n- **So are the days**: local meals, sunrises, hotels, a diary; a photo-book page at month end.\n- **She meets others**: add a public server and she can meet other people's pets en route.\n\n**Works with other extensions**\n\n- **Music on the road**: with the music extension installed she keeps the place names from what you play, files them under \"want to go\", and eventually goes.\n- **Their rides land on her bill**: with a ride-hailing extension such as Fish Ride installed, city rides are theirs - the fare goes into her travel spending, into that day's diary, and onto the home panel as an \"on a ride\" card. Cable cars, park shuttles and bikes inside a spot are still hers. Without it, nothing changes.\n- **Meetings**: agree on a city with someone else's pet - through those days the meals, the spots and the evenings all involve them, and the way they talk shifts as they get closer.\n\n- **Still findable after parting**: those days together you can leave each other a line and a contact, plus a card only fish you actually travelled with can see. Both last 30 days, then expire."
+        "description": "Let your desktop companion pack a bag and actually travel the world instead of teleporting on a map. (Needs Coopani 0.2.17+)\n\n- **Her own choices**: picks where to go and how to get there from your home city—or heads wherever you suggest.\n- **Real cities & real time**: 193 cities with real landmarks; train and flight rides take real travel time, and once she arrives she checks local weather, eats, stays at hotels, watches sunrises, writes a travel diary, and makes a monthly keepsake page.\n- **Meet others on the road**: connect a public server to cross paths with friends' pets, explore together, and swap keepsake cards.\n\n**Works great with other extensions**\n\n- **Listen With Me**: songs with city names go onto her wish list and inspire future trips.\n- **Fish Ride**: in-city rides flow straight into her trip budget and diary.\n- **Simulated Fish Life**: stays synced on location, spending, and daily diaries."
       }
     }
   },

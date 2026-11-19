@@ -37,6 +37,18 @@ export interface MonthlyPhoto {
   readonly spot?: string;
   /** 城市 id。用来认出路上的那张（`road` 不是地方）。 */
   readonly cityId?: string;
+  /**
+   * 这张图的 `src` 覆盖值（2026-11-15）。
+   *
+   * 报告搬进日记目录之后，绝大多数图走 `../media/<文件名>` 就够 —— 那是她自己的
+   * 照片副本。但**历史照片未必有副本**（副本是从 2026-11-12 修了那条守卫之后
+   * 才开始写的），而宿主又没有「读附件字节」的口子，补不回来。
+   *
+   * 所以由调用方逐张判断：副本在就留空（走相对路径、能跟着同步盘走），
+   * 不在就填一个 `file:///` 绝对路径 —— 本机照样看得见，只是换台机器看不到。
+   * **这比静默裂图好，也比悄悄换成宿主库路径好。**
+   */
+  readonly src?: string;
 }
 
 /** 一张封面的元信息。图片文件已经落盘，这里只管排版。 */
@@ -226,7 +238,7 @@ export function monthlyReport(input: MonthlyInput): string {
 
   const photoCards = photos.map((p) => `
       <figure class="ph">
-        <img src="${esc(prefix + mediaFile(p.handle))}" alt="${esc(p.title)}" loading="lazy">
+        <img src="${esc(p.src ?? (prefix + mediaFile(p.handle)))}" alt="${esc(p.title)}" loading="lazy">
         <figcaption><span class="d">${esc(p.dateKey.slice(5))}</span>${esc(p.title)}</figcaption>
       </figure>`).join('');
 
@@ -277,7 +289,7 @@ export function monthlyReport(input: MonthlyInput): string {
     const line = lineByDay.get(p.dateKey) || '';
     return `
       <figure class="plog${i % 2 ? ' tilt' : ''}">
-        <img src="${esc(prefix + mediaFile(p.handle))}" alt="${esc(p.title)}" loading="lazy">
+        <img src="${esc(p.src ?? (prefix + mediaFile(p.handle)))}" alt="${esc(p.title)}" loading="lazy">
         <figcaption>
           <span class="stamp">${esc(p.dateKey.slice(5).replace('-', '.'))}</span>
           <span class="where">${esc(p.cityName)}</span>
@@ -728,7 +740,7 @@ export function notebookHtml(input: MonthlyInput): string {
         ${dfChips ? `<p class="feat day-feat">${dfChips}</p>` : ''}
       </div>
       ${p ? `<figure class="pic">
-        <img src="${esc(prefix + mediaFile(p.handle))}" alt="${esc(p.title)}" loading="lazy">
+        <img src="${esc(p.src ?? (prefix + mediaFile(p.handle)))}" alt="${esc(p.title)}" loading="lazy">
         <span class="tape tape--${tape}"></span>
         <figcaption>${esc(p.title)}</figcaption>
       </figure>` : '<div class="pic blank"></div>'}

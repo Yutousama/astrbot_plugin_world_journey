@@ -24,6 +24,7 @@ test('buildPrompt 变量齐全时没有 missing', () => {
   for (const key of [
     'journey.version', 'journey.status', 'journey.now', 'journey.withUser',
     'journey.beatGap', 'journey.home', 'journey.homeFeel', 'journey.diary',
+    'journey.imageLang',
   ]) vars[key] = `[${key}]`;
   const prompt = buildPrompt(vars);
   assert.deepEqual(prompt.missing, []);

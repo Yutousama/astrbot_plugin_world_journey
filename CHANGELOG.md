@@ -1,14 +1,82 @@
 # 更新日志
 
-## 未发布 — 修复 AstrBot 多配置文件越权（版本号不动）
+## 1.0.10 — 2026-11-19（AstrBot 多配置文件隔离 + 会话级权限补漏 + raw 1.12.18）
 
-### 症状
+本次发布合并 1.0.9 之后的两组改动：
+
+| 组 | 内容 | 用户能看见的变化 |
+|---|---|---|
+| 上游 raw | `coopani-world-journey` 1.8.0 → 1.12.18：193 城（台湾 5 城）、25 个工具（+`journey_give_up` / `journey_stay`）、工具/事件文案第二人称、跨台湾海峡交通边界 | 新城市与景点、新的叙事口吻；插件随包即最新上游 |
+| 多配置文件隔离 | 一个 AstrBot 进程只服务一份归属配置文件；归属外的配置不注入、不响应、不主动发消息 | 多配置不再串旅行；配置页【基本】新增归属配置文件下拉 |
+| 权限补漏 | unique_session、会话级自定义规则、空 UMO、管理员工具、发送前复核 | 禁用插件后不再偷偷注入/发消息；会话级禁用生效；管理员门槛覆盖工具 |
+
+### 随包上游 raw：1.8.0 → 1.12.18
+
+- `raw/` 更新到 npm 最新 **1.12.18**，`upstream.lock.json` 同步到新基线（76 个文件）。
+- 套壳适配：
+  - `JourneyWorld` 公开面从 `world.ts` 拆进 `world-*.ts` 混入、再由 `Object.assign` 合成；
+    `scripts/upstream-check.mjs` 与 `test/upstream.test.ts` 改为扫描整个 `raw/src`，避免误判
+    `webUi` / `envPromptVars` / `invoke` 消失。
+  - 上游新增提示词变量 `journey.imageLang`：`test/prompt.test.ts` 补齐。
+  - 1.12.18 的夜景描述改为「天是深灰的…一两颗星」：`test/photo-prompt.test.ts` 的光照断言跟着新文案。
+  - 工具数 23 → 25（新增 `journey_give_up` / `journey_stay`，动态透传，壳层无需新增指令）；
+    升/降级链、面板、定时器、配置映射仍由现有契约测试守着。
+- 用户可见：新增台湾地区 5 座城市（台北/台中/台南/高雄/花莲）与隔海禁地面交通；
+  工具/事件文案改为第二人称（上游 1.12.14 修复）；生图提示词语言可按上游默认英文或切中文。
+
+详见下面各节。
+
+### 复查补漏：会话级规则、unique_session、管理员工具
+
+多配置文件归属修复之后，继续按「壳层是否还有类似越权」复查，补了四处：
+
+| 问题 | 类型 | 修复 |
+|---|---|---|
+| 开启 `platform_settings.unique_session` 后，AstrBot 会改写事件 UMO；插件用改写后的 UMO 查配置文件，owner 可能落到另一份配置 | 越权/误判 | 新增 `profile_umo()`：从 `message_obj.session_id` 还原原始 UMO 解析配置文件；`access_scope` 同时认原始/隔离 UMO |
+| AstrBot「自定义规则」按会话禁用插件时，只过滤命令；hook/工具/主动消息/日记仍会工作 | 会话级越权 | 新增 `SessionPolicy`，hook、工具、主动消息、日记推送统一走会话规则；读取失败 fail closed |
+| 空 UMO 的合成 LLM 请求在 owner=默认配置时仍可能被注入 | 上下文泄漏 | 空 session UMO 一律拒绝，不认领、不注入、不执行工具 |
+| `admin_only_controls` 只拦命令，不拦模型工具；非管理员可让模型触发去某地/回来/接邀约/拍照/去吃/留路标 | 授权不一致 | 六个控制类工具从非管理员请求里移除，handler 再兜底；关掉开关后不限制 |
+| `_drop_journey_tools` 按 `journey_` 前缀清理，可能误删别的插件工具 | 副作用 | 改为只删本插件 `_tool_names` |
+| `_send_plain` / 拍照后台发送没有再次校验归属/会话规则 | 加固 | 发送前复核 owner、目标配置、会话规则 |
+
+配套：
+
+- `/journey_debug` 在 `unique_session` 下同时显示原始会话和隔离会话。
+- README 增加「会话级禁用与 unique_session」；配置项 `admin_only_controls` 的 hint 更新。
+- 这些改动随 1.0.10 发布；随包 `raw/` 另行更新到 1.12.18（见上一节）。
+
+#### 交付校验
+
+- Python：`profile_scope` / `session_policy` / `tool_policy` 单测共 45 项通过
+  （`python -m unittest discover -s test/python -p "test_*.py"`）；插件全部 `.py` `py_compile` 通过。
+- TS：`npm run check` 退出 0（typecheck + 92 项测试 0 失败 + `upstream:check` 与锁一致 1.12.18 / 76 个文件）。
+- 真实配置进程内验证（本机 `abconf_mapping` / `umop_config_routing`）：
+  - `unique_session` 模拟：原始 `Sion:GroupMessage:891655174` + 隔离 `...:12345_891655174`
+    → owner 正确为 `Sion`，`access_scope=all` 允许；旧实现会按 `Sion_public` 误判；
+  - 隔离 UMO 属于 `Sion_public` 的群 → `other_profile` 拒绝；
+  - `event.plugins_name` 不含本插件、空 UMO → 拒绝；
+  - fake `SessionPluginManager` 禁用/启用 → `SessionPolicy` 分别 False/True；
+  - 非管理员调用 `journey_photo` 工具 → 返回需管理员；
+  - 工具清理只删本插件名字，保留别的插件的 `journey_*`；
+  - 权限门实测：`enabled=false` 或归属配置 `plugin_set` 不含本插件时，
+    `_owner_ready`/`_access_ok` 均为 False，`_deliver`/`_send_plain` 零发送、
+    日记推送返回 False、hook 只删本插件工具且 `extra_user_content_parts` 不增加；
+    正常归属下 `_deliver` 正常发送。
+- 本机 AstrBot 已部署发布包并重载：**v1.0.10** 加载成功，sidecar 就绪，25 个工具；
+  日志显示归属配置文件 = `Sion`，上游 = **1.12.18**。
+- 发布仓库 `raw/` 已通过 `npm run upstream:update` 更新（非手改），`upstream.lock.json` 1.12.18；
+  `npm run build` 重建 sidecar/update 并注入 `bridgeVersion=1.0.10`。
+- 版本号：`package.json` / `metadata.yaml` / `engine/upstream.json` 均为 1.0.10。
+
+### 多配置文件越权修复 + 归属配置文件下拉（1.0.10 同批）
+
+#### 症状
 
 AstrBot WebUI 可以有多份「配置文件」（`data/config/abconf_*.json`，例如 `Sion`、`Sion_public`）。
 多配置下，本插件的旅行动态会被注入到所有配置，且在某个配置里禁用本插件也不生效 ——
 所有配置共享同一个旅行状态。
 
-### 根因
+#### 根因
 
 | # | 根因 | 位置 |
 |---|---|---|
@@ -20,7 +88,7 @@ AstrBot WebUI 可以有多份「配置文件」（`data/config/abconf_*.json`，
 补充：AstrBot 4.29.4 的 `call_event_hook` 会按 `event.plugins_name` 过滤 hook，但该字段在
 `plugin_set == ["*"]` 时为 None，且旧版本/旁路不保证过滤；插件不能把自己的隔离完全建立在宿主过滤上。
 
-### 修复
+#### 修复
 
 - 新增 `plugin/astrbot_plugin_world_journey/profile_scope.py`：按
   `bound_profile` → `event_target` 所在配置 → 已记住的 owner → 第一个合格会话认领 的顺序，
@@ -37,7 +105,7 @@ AstrBot WebUI 可以有多份「配置文件」（`data/config/abconf_*.json`，
 - 自动日记改用 owner 配置的 LLM provider（传 owner 的 UMO），不再用默认配置的模型/人格。
 - `/journey_debug` 增加当前配置文件、插件归属配置文件、归属来源、`plugin_set` 是否启用、`bound_profile`。
 
-### 升级须知
+#### 升级须知
 
 - **行为变化**：`access_scope=all` 从「所有配置的所有会话」收窄为「owner 配置文件内的所有会话」。
 - 配了 `event_target` 就会把 owner 固定到该会话所在配置；没有 `event_target`/`bound_profile` 时，
@@ -46,9 +114,9 @@ AstrBot WebUI 可以有多份「配置文件」（`data/config/abconf_*.json`，
 - `plugin_state.json` 新增 `owner_profile` 键；旧文件读取为空，零迁移；旧版本代码会忽略这个多出来的键。
 - 不碰 `raw/`，不改命令名/工具名，不升 `package.json` / `metadata.yaml` 版本。
 
-### 交付校验
+#### 交付校验
 
-- Python：`profile_scope` 单测 26 项通过（`python -m unittest discover -s test/python -p "test_*.py"`）；
+- Python：`profile_scope` 单测 26 项通过（当时；加上后续会话/工具补漏总计 45 项）；
   插件全部 `.py` 文件 `python -m py_compile` 通过。
 - TS：`npm run check` 退出 0（typecheck + 92 项测试 0 失败 + `upstream:check`）。
 - 真实配置验证：从本机 `abconf_mapping` / `umop_config_routing` 读取 Sion / Sion_public / 默认配置，进程内验证：
@@ -57,11 +125,11 @@ AstrBot WebUI 可以有多份「配置文件」（`data/config/abconf_*.json`，
   - `Sion_public` / 默认配置的会话 → `other_profile` 拒绝，不触发注入；
   - `bound_profile` 写不存在 → `bound_unresolved` fail closed；
   - 未配 `event_target`/`bound_profile` → 第一个合格会话认领 Sion 并写入 `owner_profile`。
-- `git diff -- raw` 为空（开发仓库与发布仓库都没有 `raw/` 改动）。
-- 本机 AstrBot 已通过 API 重载插件：v1.0.9 加载成功，sidecar 就绪，25 个工具注册；
+- 当时 `raw/` 未改；本次发布另按官方更新器把 `raw/` 升到 1.12.18（见上一节）。
+- 本机 AstrBot 已通过 API 重载插件：当时 v1.0.9 加载成功，sidecar 就绪，25 个工具注册；
   日志显示归属配置文件 = `Sion`。配置接口实测 `bound_profile` 位于 `enabled` 之后（【基本】组），
   返回 10 个下拉项（自动 / 重新自动判定 + 8 个 AstrBot 配置文件），配置文件里已插入默认空值。
-  本机实例的 `raw/` 仍是 `/journey_update` 升过的 1.12.16，未被本次安装覆盖。
+  本次发布已把本机插件与 `raw/` 一起升到 v1.0.10 / 1.12.18。
 
 ## v1.0.9 修订 — 2026-11-15（四处改动，版本号按用户要求不动）
 

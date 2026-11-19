@@ -14,11 +14,15 @@ from pathlib import Path
 PLUGIN_DIR = Path(__file__).resolve().parents[2] / "plugin" / "astrbot_plugin_world_journey"
 sys.path.insert(0, str(PLUGIN_DIR))
 
+from types import SimpleNamespace
+
 from profile_scope import (  # noqa: E402
     ProfileScope,
     decide_access,
+    event_plugin_allowed,
     is_auto_profile,
     owner_ready,
+    profile_umo,
     target_allowed,
 )
 
@@ -260,8 +264,10 @@ class DecideAccessTests(unittest.TestCase):
     def setUp(self) -> None:
         self.scope = make_scope()
 
-    def decide(self, cfg, persisted, umo, access_ok=always_ok):
-        return decide_access(self.scope, cfg, persisted, umo, access_ok)
+    def decide(self, cfg, persisted, umo, access_ok=always_ok, session_umo=None):
+        return decide_access(
+            self.scope, cfg, persisted, umo, access_ok, session_umo=session_umo
+        )
 
     def test_claim_on_first_owner(self) -> None:
         decision = self.decide({}, "", "Sion:FriendMessage:1")
@@ -336,6 +342,16 @@ class DecideAccessTests(unittest.TestCase):
         self.assertFalse(decision.allowed)
         self.assertEqual(decision.reason, "access_scope")
 
+    def test_profile_umo_used_for_owner_not_session_umo(self) -> None:
+        decision = self.decide(
+            {},
+            "abconf_sion.json",
+            "Sion:GroupMessage:2",
+            session_umo="Sion:FriendMessage:1",
+        )
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.reason, "other_profile")
+
     def test_empty_umo_never_claims(self) -> None:
         decision = self.decide({}, "", "")
         self.assertFalse(decision.allowed)
@@ -386,6 +402,114 @@ class OwnerReadyAndTargetTests(unittest.TestCase):
         self.assertTrue(
             target_allowed(ProfileScope(object(), PLUGIN), cfg, persisted, "anything")
         )
+
+
+class EventIdentityTests(unittest.TestCase):
+    @staticmethod
+    def event(unified, *, plugins=None, isolated=False, original=None):
+        parts = unified.split(":", 2)
+        return SimpleNamespace(
+            unified_msg_origin=unified,
+            plugins_name=plugins,
+            message_obj=(
+                SimpleNamespace(session_id=original) if original is not None else None
+            ),
+            session=SimpleNamespace(
+                platform_id=parts[0],
+                message_type=SimpleNamespace(value=parts[1]),
+            ),
+            _extras={"_session_isolated": isolated},
+            get_extra=lambda key, default=None: (
+                {("_session_isolated"): isolated}.get(key, default)
+            ),
+        )
+
+    def test_profile_umo_non_isolated(self):
+        event = self.event("Sion:GroupMessage:123")
+        self.assertEqual(profile_umo(event), "Sion:GroupMessage:123")
+
+    def test_profile_umo_isolated_restores_original(self):
+        event = self.event(
+            "Sion:GroupMessage:12345_891655174",
+            isolated=True,
+            original="891655174",
+        )
+        self.assertEqual(profile_umo(event), "Sion:GroupMessage:891655174")
+
+    def test_profile_umo_isolated_without_original_falls_back(self):
+        event = self.event(
+            "Sion:GroupMessage:12345_891655174", isolated=True, original=None
+        )
+        self.assertEqual(
+            profile_umo(event), "Sion:GroupMessage:12345_891655174"
+        )
+
+    def test_profile_umo_isolated_without_session_falls_back(self):
+        event = self.event("Sion:GroupMessage:123", isolated=True, original="123")
+        event.session = None
+        self.assertEqual(profile_umo(event), "Sion:GroupMessage:123")
+
+    def test_event_plugin_allowed(self):
+        self.assertTrue(event_plugin_allowed(SimpleNamespace(plugins_name=None), PLUGIN))
+        self.assertTrue(event_plugin_allowed(SimpleNamespace(plugins_name=["*"]), PLUGIN))
+        self.assertTrue(
+            event_plugin_allowed(SimpleNamespace(plugins_name=[PLUGIN]), PLUGIN)
+        )
+        self.assertFalse(
+            event_plugin_allowed(SimpleNamespace(plugins_name=[]), PLUGIN)
+        )
+        self.assertFalse(
+            event_plugin_allowed(SimpleNamespace(plugins_name=["other"]), PLUGIN)
+        )
+        self.assertTrue(event_plugin_allowed(SimpleNamespace(), PLUGIN))
+
+
+class SessionUmoDecideTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.scope = make_scope()
+
+    def test_access_uses_session_umo_not_profile_umo(self):
+        seen: list[str] = []
+
+        def access(umo: str) -> bool:
+            seen.append(umo)
+            return True
+
+        decision = decide_access(
+            self.scope,
+            {},
+            "abconf_sion.json",
+            "Sion:FriendMessage:1",
+            access,
+            session_umo="Sion:GroupMessage:12345_891655174",
+        )
+        self.assertTrue(decision.allowed)
+        self.assertEqual(seen, ["Sion:GroupMessage:12345_891655174"])
+
+    def test_empty_session_denied_even_with_owner(self):
+        decision = decide_access(
+            self.scope,
+            {},
+            "abconf_sion.json",
+            "Sion:FriendMessage:1",
+            always_ok,
+            session_umo="",
+        )
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.reason, "no_umo")
+
+    def test_claim_uses_profile_umo(self):
+        decision = decide_access(
+            self.scope,
+            {},
+            "",
+            "Sion:FriendMessage:1",
+            always_ok,
+            session_umo="Sion:FriendMessage:1",
+        )
+        self.assertTrue(decision.allowed)
+        self.assertEqual(decision.claim, "abconf_sion.json")
+        self.assertEqual(decision.reason, "claimed")
 
 
 if __name__ == "__main__":

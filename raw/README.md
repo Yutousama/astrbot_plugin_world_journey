@@ -411,3 +411,24 @@ node "<Coopanion>/resources/app/node_modules/tsx/dist/cli.mjs" test/sim.mts 30 2
 node "<Coopanion>/resources/app/node_modules/tsx/dist/cli.mjs" \
      "<skill>/scripts/verify-world.mjs" .
 ```
+
+## 提交即推送（`.githooks`）
+
+`.githooks/post-commit` 会在每次 commit 之后，把 `sync` 分支推到 `origin/main` ——
+**只认这一条映射**，`master` / `public` 一律不自动推（`public` 是公开镜像，推错代价太大）。
+
+**新 clone 要手动配一次**，否则钩子不生效：
+
+```sh
+git config core.hooksPath .githooks
+```
+
+`.githooks/` 本身是被版本库跟踪的，但 `core.hooksPath` 这个**配置**不进版本库 ——
+所以每个新 clone 都得配一次，这是它唯一的坑。
+
+行为约定：
+
+- 推送失败**不会挡住 commit**（提交已经成功），只在终端提示，并写 `.git/push.log`。
+- 远程领先本地时跳过推送并提示先 `git pull --rebase`，不硬推、不留 rebase 中间态。
+- 对账：`git fetch -q origin && git rev-list --left-right --count HEAD...origin/main`，
+  输出 `0 0` 就是同步了。

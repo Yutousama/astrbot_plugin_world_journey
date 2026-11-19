@@ -395,6 +395,7 @@ export interface PublicInput {
   };
   readonly diary: { readonly enabled: boolean; readonly dir: string };
   readonly applied: readonly RideApplied[];
+  readonly hotelTier?: string;
   /**
    * **她接下来要去哪儿**（2026-11-11，鱼鱼出行作者提的接口申请）。
    *
@@ -437,6 +438,7 @@ export function publicSnapshot(input: PublicInput): Record<string, unknown> {
       speed: input.speed,
     },
     phase: input.phase,
+    hotelTier: input.hotelTier || undefined,
     city: { id: input.city.id, name: input.city.name, timezone: input.city.tz },
     leg: input.leg
       ? {

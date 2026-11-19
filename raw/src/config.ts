@@ -80,6 +80,19 @@ export interface JourneyConfigSection extends WorldSection {
    */
   moneyEnabled: boolean;
   /**
+   * 这趟谁出钱（2026-11-15 Mr.Q）。
+   *
+   * 默认 **false = 你请**：旅行不花她的钱。这正是「journey 没开钱」那种用法的说法 ——
+   * 不是「不记账」，是「这笔我出」。
+   *
+   * 打开 = 每笔路费房费从**她那本账**里扣。前提是装了「模拟鱼生」（`life-state.json` 在场）：
+   * 没有那本账就没有可扣的地方，这时退回本扩展自己的 `budget`。
+   *
+   * ⚠ 账本只有一个写者：journey **不写** `life-state.json`，只往 `life-spend/<id>.json`
+   * 递条子，life 下次 tick 自己扣（见 `references/20-跨扩展联动.md` 的三条铁律）。
+   */
+  payFromLife: boolean;
+  /**
    * 预算。0 = 不限。
    *
    * 只在记账打开时有效。钱见底时她会**自己降级**（住便宜的、少坐飞机），
@@ -221,6 +234,28 @@ export interface JourneyConfigSection extends WorldSection {
    */
   imageCast: string;
   /**
+   * **有人出镜那几张，用另一套风格**（2026-11-17，读者「左圳杰」问的）。
+   *
+   * 他想要的场景：风景照写实、自拍二次元 —— 而 `imageStyle` 是全局单值，做不到。
+   *
+   * 留空 = 回退到 `imageStyle`（老行为一个字不变）。填了之后：
+   * 有人出镜的照片用它，没人的照片仍用 `imageStyle`。
+   *
+   * 为什么要和 `imageCast` 分开：**风格是风格，有没有人是另一回事**。
+   * 有人 + 写实（她站在风景里）和 有人 + 二次元（画出来的她）都是合理需求，
+   * 用两个字段把这两件事拆开，不用逼用户在「全写实」和「全二次元」之间二选一。
+   */
+  imageStyleCast: string;
+  /**
+   * 有人的照片占几成（0–1）。**默认 1 = 每张都有**（老行为）。
+   *
+   * 填 0.3 就是「三成有她、七成是景」。判定按 `dateKey + 场景` 播种，
+   * 所以同一张重拍不会一会儿有人一会儿没人 —— 看到的照片是稳定的。
+   *
+   * 只在 `imageCast` 填了的时候有意义。
+   */
+  imageCastChance: number;
+  /**
    * 出图尺寸，`宽x高`，如 `1664x928`。留空 = `1024x1024`（老行为）。
    *
    * 2026-11-04 Mr.Q：「画布写死的正方形，手机拍出来的照片基本是竖的 3:4、
@@ -255,6 +290,18 @@ export interface JourneyConfigSection extends WorldSection {
    */
   imageModel: string;
   /**
+   * **画面描述（`describe`）用哪种语言写**（2026-11-18，zzy1053 报的）。
+   *
+   * 原来工具说明里写死「必须英文」，理由是本地的 SDXL CLIP 读不了中文。
+   * 那个理由**只对 CLIP 系成立**：用 Qwen-Image / Kolors 这类中文原生模型的人，
+   * 被逼着写英文，反而在丢细节 —— 而且 `describe` 有 60 字符上限，
+   * 英文很容易断在单词中间（他实测三张，三张都正好 60 字符砍断）。
+   * 中文信息密度高得多，「雪花落在路灯和房檐上，暖黄灯光」十几个字就说完了。
+   *
+   * `en` = 老行为（默认，不动任何人）；`zh` = 中文优先。
+   */
+  imagePromptLang: 'en' | 'zh';
+  /**
    * 面板底部「说两句」那一栏发给谁。**空 = 整块不显示。**
    *
    * 默认是作者自己的地址：这个扩展就是给谁用、反馈就发给谁，
@@ -279,7 +326,23 @@ export const JOURNEY_DEFAULTS = (): JourneyConfigSection => ({
   maxTripWeeks: 26,
   meetUrl: '',
   withUser: false,
-  moneyEnabled: false,
+  /*
+   * 记账默认**开**（2026-11-17）。
+   *
+   * 关着的时候「想去洛杉矶」和「想在家门口转」在她账上没差别 ——
+   * 而 Mr.Q 要的是「想去哪儿就得先赚出那笔钱」。记账是这条因果的地基：
+   * 不记，她永远不知道自己走不起。
+   * 没装「模拟鱼生」的人不受影响：`purseLeft()` 拿不到生活层余额、预算又是 0，
+   * 一律按「不记账」处理，不替任何人省钱。
+   */
+  moneyEnabled: true,
+  /*
+   * 花她的钱也默认**开**（2026-11-17）。
+   *
+   * 和记账是两个开关（一个记、一个扣），但只有两个都开，「出门要花钱」才成立。
+   * 递条子有保护：`life-state.json` 不在就不写，所以只装旅行的人什么都不会发生。
+   */
+  payFromLife: true,
   budget: 0,
   bridgeSpend: true,
   bridgeDiary: true,
@@ -310,10 +373,16 @@ export const JOURNEY_DEFAULTS = (): JourneyConfigSection => ({
   imageMinimal: false,
   imageStyle: '',
   imageCast: '',
+  /* 留空 = 跟着 `imageStyle`（老行为）。 */
+  imageStyleCast: '',
+  /* 1 = 每张都有她。填了 `imageCast` 才生效。 */
+  imageCastChance: 1,
   imageSize: '',
   imageWatermark: 'auto',
   imageKey: '',
   imageModel: '',
+  /* 默认英文 = 老行为，一个字节都不变。中文系的本地模型由用户自己切到 `zh`。 */
+  imagePromptLang: 'en',
   /*
    * 作者本人收反馈的地址。写成字面量而不是读 package.json 的 author 字段：
    * `author` 里是名字不是邮箱，而这里要的就是一个能发信的地方。
@@ -419,6 +488,13 @@ export function journeyConfigGroups(): ConfigGroup[] {
             title: '她有驾照',
             description: '关掉之后她永远不会自驾，也不会租车 —— 城际和城里都只坐公共交通。',
           },
+          'worlds.journey.payFromLife': {
+            type: 'boolean',
+            title: '旅行花她的钱',
+            description: '打开（默认）= 路费房费每笔从她那本账里扣，想去远处就得先赚出那笔钱。'
+              + '关掉 = 这趟你请：不算进她的钱包，「这趟花了多少」照记。'
+              + '要装了「模拟鱼生」才生效；没装就走这里自己的预算。',
+          },
           'worlds.journey.budget': {
             type: 'integer',
             title: '预算（可留空）',
@@ -502,6 +578,31 @@ export function journeyConfigGroups(): ConfigGroup[] {
              */
             description: '两台电脑共用同一份：填同一个同步盘子目录，两台填完全一样的路径。注意别两台同时开着（会互相覆盖）。留空＝只在这台机器上。',
             'x-path': { kind: 'directory' },
+          },
+        },
+      },
+    },
+    {
+      /*
+       * **单独一组放「照片」**（2026-11-18）。生图那十几项都搬去面板的「生图设置」了，
+       * 这一项破例留在配置页：它不需要面板，而且改了立刻能看出差别，放在配置页反而好找。
+       */
+      id: 'journey.image',
+      owner: `world:${JOURNEY_ID}`,
+      schema: {
+        type: 'object',
+        title: '照片',
+        description: '只影响她自己写的那句画面描述。地点、时段、天气这些事实仍由程序定，改这里不会让照片偏离她真看到的。',
+        properties: {
+          'worlds.journey.imagePromptLang': {
+            type: 'string',
+            title: '画面描述用哪种语言',
+            description: '中文系的本地模型（Qwen-Image / Kolors）选中文 —— 中文信息密度高，'
+              + '60 字的描述能写完整；英文被逼到 60 个字符很容易断在单词中间。'
+              + 'SDXL / SD1.5 / Flux 这类 CLIP 系必须英文，写中文会出乱码和画笔字水印。'
+              + '不确定就保持英文。',
+            enum: ['en', 'zh'],
+            default: 'en',
           },
         },
       },

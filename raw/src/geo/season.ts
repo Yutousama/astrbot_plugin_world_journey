@@ -105,7 +105,7 @@ const BY_PROVINCE: Record<string, SeasonRegion> = {
   四川: 'sichuan', 重庆: 'sichuan', 贵州: 'sichuan',
   云南: 'yunnan',
   广东: 'south', 广西: 'south', 海南: 'south', 福建: 'south',
-  中国香港: 'south', 中国澳门: 'south',
+  中国香港: 'south', 中国澳门: 'south', 中国台湾: 'south',
   西藏: 'plateau',
 };
 
@@ -314,6 +314,14 @@ const CLIMATE: Record<string, SeasonRegion> = {
 const BY_CITY: Record<string, SeasonRegion> = {
   jiuzhaigou: 'plateau',
   xianggelila: 'plateau',
+  /*
+   * 汉中（2026-11-15）：按省一刀切会把它归进 `northwest`，于是十一月给它
+   * 「胡杨和杨树落成光杆、地面是干土，尘土浮在鞋面上」—— 而汉中是秦岭以南的
+   * 北亚热带，年降水八百到一千毫米，十一月银杏正黄、竹子还是深绿、地面是潮的。
+   * 同一份数据里它自己的视觉锚点写着「水田连片，春季油菜花铺成明黄」。
+   * 归 `sichuan`（盆地气候那一条）比归西北准确。
+   */
+  hanzhong: 'sichuan',
 };
 
 /**

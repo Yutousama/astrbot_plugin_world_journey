@@ -950,6 +950,10 @@ export function planDay(args: {
    * 不传就沿用 `comfortable`，行为跟老版本一致。
    */
   spotRideOk?: boolean;
+  /** 高体质时跳过「脚酸 / 走不动」类抱怨。 */
+  highFitness?: boolean;
+  /** 低精力时在景区更倾向坐缆车、观光车、打车。 */
+  lowEnergy?: boolean;
   /**
    * 手头宽不宽（余钱够不够放松花）。影响景点里买不买讲解/观光车 ——
    * 不传 = 不宽，她自己走。
@@ -1402,7 +1406,7 @@ export function planDay(args: {
      * 挂在 `act` 里而不是 `commute` 里：讲解和观光车是**景点内**的消费，
      * 跟怎么来的没有关系。她也不是每次都买 —— 余钱紧就自己走。
      */
-    const extra = pickSpotExtra(spot, kmSeed, args.spotRideOk ?? richThisDay);
+    const extra = pickSpotExtra(spot, kmSeed, (args.spotRideOk ?? richThisDay) || Boolean(args.lowEnergy && (args.spotRideOk ?? true)));
     if (extra) {
       extraItems.push(extra.item);
       extraCost += extra.price;
@@ -1433,7 +1437,9 @@ export function planDay(args: {
        */
       const rideOpts = spotRideOptions(spot).filter((o) => o.how !== 'walk' && o.how !== 'guide');
       if (rideOpts.length) {
-        push(at + 0.2, 'beat', `这儿能坐${rideOpts.map((o) => o.label).join('、')}，走不动可以坐一段。`);
+        push(at + 0.2, 'beat', args.highFitness
+          ? `这儿能坐${rideOpts.map((o) => o.label).join('、')}，想省点脚力可以坐一段。`
+          : `这儿能坐${rideOpts.map((o) => o.label).join('、')}，走不动可以坐一段。`);
       }
     }
     /*
@@ -1476,9 +1482,12 @@ export function planDay(args: {
      * 一天两个景点时**只挂前一个**：两个中段都带人，这一天就只剩「他们」了。
      * 挂哪个由 `slots.mid` 定，挂过就置位。
      */
+    const rawMid = MID_LINES[seed % MID_LINES.length].replace('{spot}', spot);
     const midText = mateCall && slots.mid && !midUsed
       ? (midUsed = true, midWith(mateCall, spot, seed, args.warmth ?? 0))
-      : MID_LINES[seed % MID_LINES.length].replace('{spot}', spot);
+      : (args.highFitness && rawMid.includes('脚有点酸')
+        ? `在${spot}里绕到第二圈，步子还算轻快`
+        : rawMid);
     push(mid, 'activity', midText, null, spot);
   };
 

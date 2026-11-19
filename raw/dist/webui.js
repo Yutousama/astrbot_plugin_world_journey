@@ -81,6 +81,7 @@ const TEXT = {
     meetHint: '下面这个是我这边一直开着的，填进设置里的「碰面地址」就能用：',
     meetCopy: '复制地址',
     nearbyNone: '这段时间没别人',
+    nearbyOffline: '碰面服务器没连上',
     nearbyN: '{n} 个也在这一带',
     invites: '找伴',
     invitesN: '{n} 个在找伴',
@@ -180,6 +181,14 @@ const TEXT = {
     albumRegenFreshHint: '框里留空 = 按现在的规则重新生成一张；写点什么就用你写的这段。',
     albumPromptNote: '框里是这张当初用的提示词。想按现在的规则重新生成，把它清空再点。',
     /* ---- 反馈 ---- */
+    helpTitle: '扩展名旁边那四盏灯怎么看？',
+    helpOn: '绿',
+    helpOnDesc: '上一次是好的，正常。',
+    helpOff: '灰',
+    helpOffDesc: '没启用，不是坏了 —— 比如没装听歌扩展。不用管。',
+    helpErr: '红',
+    helpErrDesc: '配好了但用不了，要去处理。原因和怎么办，鼠标停在灯上能看到。',
+    helpWhich: '四盏灯分别是：天气（查得到天气吗）、日记（写得进去吗）、照片（拍得出来吗）、听歌（在放什么）。',
     fbLead: '有 bug，或者想让她去一个地方？',
     fbBug: '报个 bug',
     fbPlace: '想加个地点',
@@ -251,6 +260,7 @@ const TEXT = {
     meetHint: 'This one is always on — paste it into the "meet server" setting:',
     meetCopy: 'Copy address',
     nearbyNone: 'nobody else right now',
+    nearbyOffline: 'meet server unreachable',
     nearbyN: '{n} others nearby',
     invites: 'Company',
     invitesN: '{n} looking for company',
@@ -348,6 +358,14 @@ const TEXT = {
     albumRegenFreshHint: 'Leave the box empty to regenerate with the current rules; type anything to use your own wording.',
     albumPromptNote: 'This is the prompt this photo was made with. Clear the box and press the button to regenerate with the current rules.',
     /* ---- feedback ---- */
+    helpTitle: 'What do the four dots next to the extension name mean?',
+    helpOn: 'Green',
+    helpOnDesc: 'last time worked. Normal.',
+    helpOff: 'Grey',
+    helpOffDesc: 'not enabled — that is not a fault. Nothing to do.',
+    helpErr: 'Red',
+    helpErrDesc: 'configured but not working. Hover the dot for the reason and the fix.',
+    helpWhich: 'The four are: weather (can it fetch a forecast), journal (can it write), photos (can it take one), music (what is playing).',
     fbLead: 'A bug, or a place you want her to go?',
     fbBug: 'Report a bug',
     fbPlace: 'Suggest a place',
@@ -482,6 +500,10 @@ const SET = {
     styleHint: '留空＝真实旅行照片（胶片、自然光）。接二次元底模时写「anime style, cel shading」；写 none＝不指定，交给底模。',
     cast: '照片里出不出人',
     castHint: '留空＝画面里没有人，拍的是她眼前的风景。想让她出现，写一段外貌描述，越具体越稳。',
+    styleCast: '有人那张用什么风格',
+    styleCastHint: '留空＝跟上面那个一样。想让风景写实、自拍二次元，就这里填二次元那套前缀 —— 只有她在画面里的照片用它。',
+    castChance: '几成照片有她',
+    castChanceHint: '0 到 1。1＝每张都有（默认）；填 0.3 就是三成有她、七成纯风景。留空或填 1 行为不变。',
     watermark: '去掉「AI生成」水印',
     watermarkHint: '服务商出图后盖上去的那一条，提示词压不掉。auto＝云端裁底边、本地不动；off＝一律不裁；crop＝一律裁掉底部 8%。',
     watermarks: { auto: '自动', off: '不裁', crop: '都裁' },
@@ -536,6 +558,10 @@ const SET = {
     styleHint: 'Empty = real travel photo (film, natural light). For anime base models write “anime style, cel shading”; “none” = leave it to the model.',
     cast: 'Anyone in frame',
     castHint: 'Empty = empty scenery. To include her, describe her appearance — the more specific the steadier.',
+    styleCast: 'Style when she is in frame',
+    styleCastHint: 'Empty = same as the style above. Set this to keep scenery photoreal while portraits are anime — only photos with her in them use it.',
+    castChance: 'Chance a photo includes her',
+    castChanceHint: '0 to 1. 1 = always (default); 0.3 = three in ten. Empty or 1 keeps the old behaviour.',
     watermark: 'Remove the “AI generated” mark',
     watermarkHint: 'added by the provider after generation; a prompt cannot remove it. auto = crop on cloud only; off = never; crop = always (bottom 8%).',
     watermarks: { auto: 'Auto', off: 'Never', crop: 'Always' },
@@ -599,6 +625,36 @@ function rich(node, s) {
  * 1. 没配邮箱就整块不显示 —— 一个点了没反应的按钮比没有更糟。
  * 2. 地址必须明文露出来。宿主连 mailto 都不放行，用户手里总得有能复制的字符串。
  */
+/**
+ * 「灯怎么看」。
+ *
+ * 灯是宿主画在**扩展名旁边**的，不在这个面板里 —— 所以用户看到灰点、想知道
+ * 是什么意思时，得有个地方能查。而 hint 只在鼠标悬停时出现，**没人知道要悬停**。
+ *
+ * 默认折叠：一次看懂就够了，天天摆着占地方。
+ *
+ * 三个圆点是**图例**，不是真实状态，所以颜色可以固定。
+ */
+function lampsHelp(T) {
+  const box = el('details', 'jr-help');
+  box.append(el('summary', null, T.helpTitle));
+
+  const ul = el('ul');
+  for (const [color, k, d] of [
+    ['var(--jr-ok)', 'helpOn', 'helpOnDesc'],
+    ['var(--jr-soft)', 'helpOff', 'helpOffDesc'],
+    ['var(--jr-bad)', 'helpErr', 'helpErrDesc'],
+  ]) {
+    const li = el('li');
+    const dot = el('span', 'jr-help-dot');
+    dot.style.background = color;
+    li.append(dot, el('b', null, T[k]), document.createTextNode('　' + T[d]));
+    ul.append(li);
+  }
+  box.append(ul, el('p', 'jr-help-which', T.helpWhich));
+  return box;
+}
+
 function feedbackSection(T, s, ctx) {
   const mail = String(s.feedbackEmail || '').trim();
   if (!mail) return null;
@@ -692,9 +748,13 @@ export default {
          */
         const ver = el('span', 'jr-ver-tag', '');
         eyebrow.append(ver);
+        const cityRow = el('div', 'jr-city-row');
         const city = el('h1', 'jr-city', '—');
+        const cityWeather = el('span', 'jr-city-weather', '');
+        cityWeather.hidden = true;
+        cityRow.append(city, cityWeather);
         const sub = el('p', 'jr-sub', '');
-        left.append(eyebrow, city, sub);
+        left.append(eyebrow, cityRow, sub);
         const right = el('div', 'jr-head-right');
         const status = el('span', 'jr-pill', '');
         const clock = el('div', 'jr-clock', '--:--');
@@ -730,8 +790,10 @@ export default {
         // 反馈那一栏单独一个插槽：配了邮箱才有内容，没配就是空的，
         // 不留一个点了没反应的按钮在那儿。
         const fbSlot = el('div', 'jr-fb-slot');
+        /* 灯说明放在最底下 —— 用户是「看到灰点、滚下来找答案」才需要它。 */
+        const helpBox = lampsHelp(T);
 
-        app.append(head, askBox, homeBox, rideBox, guide, legBox, facts, meetBox, nextBox, foot, fbSlot);
+        app.append(head, askBox, homeBox, rideBox, guide, legBox, facts, meetBox, nextBox, helpBox, foot, fbSlot);
 
         const render = (s) => {
           app.dataset.mode = s.mode;
@@ -751,6 +813,16 @@ export default {
           /* title 里也有占位符，要一起替换 —— 直接塞 `T.verHint` 出来是「本机 {v}」。 */
           ver.title = hasNew ? fmt2(T.verHint, s.version, s.latestVersion) : '';
           city.textContent = s.place.name;
+          if (s.weather) {
+            cityWeather.textContent = s.weather.trim().replace(/^天气：/, '');
+            cityWeather.hidden = false;
+          } else if (s.weatherOutOfRange) {
+            cityWeather.textContent = T.weatherOut;
+            cityWeather.hidden = false;
+          } else {
+            cityWeather.textContent = '';
+            cityWeather.hidden = true;
+          }
           // 「兰州 · 家在石家庄」是对的，「兰州 · 从石家庄出发」读起来就是矛盾 ——
           // 前者说的是「她人在哪儿 + 家在哪」，后者听起来像「她从石家庄走过来」。
           sub.textContent = [s.place.region, fmt(T.homeAt, s.home), fmt(T.speed, s.speed)]
@@ -1066,7 +1138,7 @@ export default {
              * 池子活着，只是这一带没人。总数是 0 才说明服务器没回话或真的空了。
              */
             if (so.pool > 0) chips.push([T.pool, fill(T.poolN, { n: so.pool })]);
-            chips.push([T.nearby, so.nearby > 0 ? fill(T.nearbyN, { n: so.nearby }) : T.nearbyNone]);
+            chips.push([T.nearby, so.online === false ? T.nearbyOffline : (so.nearby > 0 ? fill(T.nearbyN, { n: so.nearby }) : T.nearbyNone)]);
             if (so.invites > 0) chips.push([T.invites, fill(T.invitesN, { n: so.invites })]);
             if (so.pledge) {
               const pg = so.pledge;
@@ -1913,6 +1985,8 @@ export default {
           minimal: false,
           style: '',
           cast: '',
+          styleCast: '',
+          castChance: '',
           watermark: 'auto',
           timeoutSec: 0,
           photoDir: '',
@@ -2134,6 +2208,12 @@ export default {
           otherBox.append(checkRow(S.minimal, S.minimalHint, draft.minimal, (v) => { draft.minimal = v; }));
           otherBox.append(field(S.style, S.styleHint, draft.style, (v) => { draft.style = v; }, ''));
           otherBox.append(field(S.cast, S.castHint, draft.cast, (v) => { draft.cast = v; }, ''));
+          /*
+           * 有人那张另用一套风格 + 有人的比例（2026-11-17）。
+           * 这两格只在 `cast` 填了的时候有意义 —— 没填就没人出镜，风格和比例都用不上。
+           */
+          otherBox.append(field(S.styleCast, S.styleCastHint, draft.styleCast, (v) => { draft.styleCast = v; }, ''));
+          otherBox.append(field(S.castChance, S.castChanceHint, draft.castChance, (v) => { draft.castChance = v; }, ''));
           otherBox.append(chipRow(
             S.watermark, S.watermarkHint,
             [
@@ -2199,6 +2279,8 @@ export default {
           draft.minimal = Boolean(data.minimal);
           draft.style = data.style || '';
           draft.cast = data.cast || '';
+          draft.styleCast = data.styleCast || '';
+          draft.castChance = typeof data.castChance === 'number' ? String(data.castChance) : '';
           draft.watermark = data.watermark || 'auto';
           draft.timeoutSec = Number(data.timeoutSec) || 0;
           draft.photoDir = data.photoDir || '';
@@ -2258,6 +2340,15 @@ export default {
           values.imageMinimal = draft.minimal;
           values.imageStyle = draft.style.trim();
           values.imageCast = draft.cast.trim();
+          values.imageStyleCast = draft.styleCast.trim();
+          /*
+           * 比例是**数字**，而且 0 是合法值（一张都不要）。
+           * 所以不能用 `|| 1` —— 那会把「填 0」变成「每张都有」。
+           */
+          if (draft.castChance.trim() !== '') {
+            const n = Number(draft.castChance);
+            if (Number.isFinite(n)) values.imageCastChance = Math.min(1, Math.max(0, n));
+          }
           values.imageWatermark = draft.watermark;
           values.imageTimeoutSec = draft.timeoutSec;
           values.photoDir = draft.photoDir.trim();

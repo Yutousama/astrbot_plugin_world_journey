@@ -86,7 +86,7 @@ test('跨经度的路：判光跟着目的地走，不是按赤道算', async ()
 test('小时按四舍五入判光（18:40 算 19 点）', async () => {
   const prompt = await buildScenePrompt(snapshot({ clock: '18:40' }), '');
   // 上游 photoSceneNow 用 Math.round(decimal)：18:40 是 19 点，十一月夜里的武汉没有日光。
-  assert.match(prompt, /头顶是黑的|星星/);
+  assert.match(prompt, /天是深灰的|头顶是黑的|星星/);
 });
 
 test('抠不出景点就只写城市，不拿「早饭」当地点', async () => {

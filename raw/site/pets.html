@@ -118,6 +118,42 @@
   .ops button[data-kind="ban"] { color: var(--bad); border-color: #f0cfcb; }
   .ops button[data-kind="rename"] { color: var(--warn); border-color: #ecd9b6; }
   .empty { color: var(--dim); font-size: 14px; padding: 18px 2px; }
+  /*
+   * 「本城」那张表单。
+   *
+   * 它和上面那两块不一样：上面是**看数据**，这里是**改设定**。
+   * 所以给它更松的行距、更明显的分组，让人看得出「这一屏是要动手的」，
+   * 而不是又一张只读清单。
+   */
+  .grid2 { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
+  .grid2 .field { flex: 1 1 240px; }
+  .field textarea {
+    width: 100%; padding: 8px 10px; border: 1px solid var(--line);
+    border-radius: 7px; font: inherit; background: #fbfcfd; resize: vertical;
+    line-height: 1.6;
+  }
+  .field.narrow { max-width: 260px; margin-bottom: 12px; }
+  .group { margin: 14px 0 4px; }
+  .group > label { display: block; font-size: 12px; color: var(--dim); margin-bottom: 6px; }
+  .group .slots { display: flex; flex-wrap: wrap; gap: 8px; }
+  .group .slots input {
+    flex: 1 1 168px; padding: 7px 10px; border: 1px solid var(--line);
+    border-radius: 7px; font: inherit; background: #fbfcfd;
+  }
+  /*
+   * 空的槽位画成虚线 —— 一眼看出「这三条是填了的，这两个是空的」。
+   * 不这样标，五个框长得一样，人会以为必须要填满。
+   */
+  .group .slots input:placeholder-shown { border-style: dashed; background: #fdfdfe; }
+  .townfoot { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line);
+              display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .townfoot .msg { margin: 0; min-height: 0; }
+  .warnbox {
+    margin: 0 0 14px; padding: 10px 12px; border-radius: 8px;
+    background: #fdf8ec; border: 1px solid #ecd9b6; color: #7a5b1c;
+    font-size: 12.5px; line-height: 1.7;
+  }
+  .warnbox b { color: #6b4d13; }
   footer { color: var(--dim); font-size: 12.5px; line-height: 1.8; margin-top: 22px; }
   code { background: #f1f2f4; padding: 1px 5px; border-radius: 4px; font-size: 12.5px; }
 </style>
@@ -172,6 +208,7 @@
   <div class="tabs">
     <button id="tabLive" class="tab on" data-view="live" type="button">此刻</button>
     <button id="tabAll" class="tab" data-view="all" type="button">在册（累计）</button>
+    <button id="tabTown" class="tab" data-view="town" type="button">本城</button>
   </div>
 
   <section class="box view" data-view="live">
@@ -214,10 +251,72 @@
     </div>
   </section>
 
+  <!--
+    本城设定（2026-11-15）。
+
+    为什么这一屏在「管理」页面里，而别的都在设置里：
+    池子里别的东西都是**每只鱼自己的**（名字、名片、行踪），
+    唯独「这座城叫什么、有哪几条街、守哪几条城规」是**这台服务器的**。
+    它没有主人以外的读者 —— 谁拿着 ADMIN_KEY，谁就是它。
+
+    三个字段的约束不一样，界面上要分开说：
+      城名  随便起，给人看的
+      城 id 有格式（`[a-z0-9_-]`），因为它会被当成 journey 的 `city` 写进上报
+      街名  1–5 条，空的不算
+  -->
+  <section class="box view" data-view="town" hidden>
+    <h2>本城 <small id="townNote">连上之后才能改</small></h2>
+    <p class="viewhint">
+      这一屏写给**服务器主**：这台服务器是她的哪一座城。改完点保存，立刻生效 ——
+      她下一次开口就会用新的城名。
+    </p>
+
+    <div class="warnbox">
+      <b>城 id 别随手改。</b>它会被当成 journey 的 <code>city</code> 写进上报（别名开着的时候）。
+      改了它，等于把出发地换成了另一个名字 —— <b>已经写进日记和足迹的那些记录不会跟着改</b>，
+      而足迹是永久数据，洗不掉。改城名不用动 id。
+    </div>
+
+    <div class="grid2">
+      <div class="field">
+        <label for="townName">城名</label>
+        <input id="townName" type="text" maxlength="24" placeholder="浅水埠">
+      </div>
+      <div class="field">
+        <label for="townId">城 id（<code>[a-z0-9_-]</code>，不是中文名）</label>
+        <input id="townId" type="text" maxlength="40" spellcheck="false" placeholder="qianshui">
+      </div>
+    </div>
+
+    <div class="field">
+      <label for="townOrigin">来历（她讲得出来的那种，不是宣传文案）</label>
+      <textarea id="townOrigin" rows="3" maxlength="400"
+        placeholder="早年这儿是河海交界的一片浅滩……"></textarea>
+    </div>
+
+    <div class="group">
+      <label>有哪几条街 —— 她住其中一条。空着的不算，至少留一条</label>
+      <div class="slots" id="townStreets"></div>
+    </div>
+
+    <div class="group">
+      <label>守哪几条城规 —— 这三条各自对应一条机制，改文案可以，别改意思</label>
+      <div class="slots" id="townRules"></div>
+    </div>
+
+    <div class="townfoot">
+      <button id="townSave" class="primary">保存</button>
+      <button id="townRevert">撤销修改</button>
+      <span class="msg" id="townMsg"></span>
+    </div>
+  </section>
+
   <footer>
     <b>封禁不是删除。</b>封掉之后她报不上来，池子里立刻没有她；数据一行没动，
     点「解除」就回来了。<br>
     <b>三个操作都会写一条备注</b>（时间、当时看到的名字），事后能对上是谁、为什么。<br>
+    <b>「本城」那页改的是服务器，不是某只鱼。</b>城名和街名所有鱼共用；
+    改完她下一次开口就用新的。<br>
     密钥只存在这台浏览器里；地址和密钥都不会发到第三方。
   </footer>
 
@@ -239,7 +338,7 @@
    * 但面板是给人看的 —— 显示 `jiuzhaigou` 等于没显示。
    * 这份表从 `src/geo/cities.ts` 的 CITIES 导出来，127 座，改城市时记得重导。
    */
-  var CITY = {"lanzhou":"兰州","xining":"西宁","yinchuan":"银川","xian":"西安","hanzhong":"汉中","yanan":"延安","huashan":"华山","tianshui":"天水","zhangye":"张掖","jiayuguan":"嘉峪关","dunhuang":"敦煌","geermu":"格尔木","aletai":"阿勒泰","wulumuqi":"乌鲁木齐","kashi":"喀什","lasa":"拉萨","linzhi":"林芝","beijing":"北京","tianjin":"天津","shijiazhuang":"石家庄","qinhuangdao":"秦皇岛","chengde":"承德","datong":"大同","taiyuan":"太原","pingyao":"平遥","huhehaote":"呼和浩特","hailaer":"呼伦贝尔","shenyang":"沈阳","dalian":"大连","changchun":"长春","haerbin":"哈尔滨","mohe":"漠河","shanghai":"上海","nanjing":"南京","xuzhou":"徐州","suzhou":"苏州","wuxi":"无锡","changshu":"常熟","yangzhou":"扬州","hangzhou":"杭州","shaoxing":"绍兴","ningbo":"宁波","zhoushan":"舟山","wenzhou":"温州","hefei":"合肥","huangshan":"黄山","fuzhou":"福州","xiamen":"厦门","quanzhou":"泉州","nanchang":"南昌","jingdezhen":"景德镇","ganzhou":"赣州","wuyuan":"婺源","jinan":"济南","qingdao":"青岛","yantai":"烟台","weihai":"威海","qufu":"曲阜","taian":"泰安","zhengzhou":"郑州","xinxiang":"新乡","luoyang":"洛阳","wuhan":"武汉","yichang":"宜昌","xiangyang":"襄阳","changsha":"长沙","zhangjiajie":"张家界","yueyang":"岳阳","guangzhou":"广州","foshan":"佛山","shenzhen":"深圳","zhuhai":"珠海","shaoguan":"韶关","zhanjiang":"湛江","nanning":"南宁","guilin":"桂林","liuzhou":"柳州","beihai":"北海","haikou":"海口","sanya":"三亚","chengdu":"成都","chongqing":"重庆","jiuzhaigou":"九寨沟","daochengyading":"稻城亚丁","kunming":"昆明","dali":"大理","lijiang":"丽江","xianggelila":"香格里拉","jinghong":"西双版纳","guiyang":"贵阳","xianggang":"中国香港","aomen":"中国澳门","tokyo":"东京","osaka":"大阪","seoul":"首尔","bangkok":"曼谷","singapore":"新加坡","hanoi":"河内","paris":"巴黎","london":"伦敦","rome":"罗马","moscow":"莫斯科","newyork":"纽约","losangeles":"洛杉矶","sydney":"悉尼","auckland":"奥克兰","dubai":"迪拜","istanbul":"伊斯坦布尔","honolulu":"檀香山","sapporo":"札幌","kyoto":"京都","rio":"里约热内卢","buenosaires":"布宜诺斯艾利斯","iguazu":"伊瓜苏","elcalafate":"埃尔卡拉法特","ushuaia":"乌斯怀亚","sanfrancisco":"旧金山","santabarbara":"圣巴巴拉","monterey":"蒙特雷","yosemite":"优胜美地","lasvegas":"拉斯维加斯","grandcanyon":"大峡谷","toronto":"多伦多","vancouver":"温哥华","montreal":"蒙特利尔","mexicocity":"墨西哥城","guanajuato":"瓜纳华托","cancun":"坎昆","merida":"梅里达","petersburg":"圣彼得堡","kazan":"喀山","irkutsk":"伊尔库茨克","vladivostok":"符拉迪沃斯托克","yekaterinburg":"叶卡捷琳堡","murmansk":"摩尔曼斯克","sochi":"索契","kaliningrad":"加里宁格勒","suzdal":"苏兹达尔","nizhnynovgorod":"下诺夫哥罗德","warsaw":"华沙","krakow":"克拉科夫","gdansk":"格但斯克","wroclaw":"弗罗茨瓦夫","poznan":"波兹南","lodz":"罗兹","torun":"托伦","zakopane":"扎科帕内","berlin":"柏林","munich":"慕尼黑","hamburg":"汉堡","cologne":"科隆","dresden":"德累斯顿","heidelberg":"海德堡","nuremberg":"纽伦堡","vienna":"维也纳","salzburg":"萨尔茨堡","hallstatt":"哈尔施塔特","zurich":"苏黎世","interlaken":"因特拉肯","lucerne":"卢塞恩","lyon":"里昂","marseille":"马赛","nice":"尼斯","bordeaux":"波尔多","strasbourg":"斯特拉斯堡","avignon":"阿维尼翁","edinburgh":"爱丁堡","bath":"巴斯","york":"约克","manchester":"曼彻斯特","oxford":"牛津","dublin":"都柏林","galway":"戈尔韦","amsterdam":"阿姆斯特丹","rotterdam":"鹿特丹","thehague":"海牙","bruges":"布鲁日","brussels":"布鲁塞尔","ghent":"根特","prague":"布拉格","krumlov":"克鲁姆洛夫","kutnahora":"库特纳霍拉","budapest":"布达佩斯","eger":"埃格尔","shanwei":"汕尾","changde":"常德"};
+  var CITY = {"lanzhou":"兰州","xining":"西宁","yinchuan":"银川","xian":"西安","hanzhong":"汉中","yanan":"延安","huashan":"华山","tianshui":"天水","zhangye":"张掖","jiayuguan":"嘉峪关","dunhuang":"敦煌","geermu":"格尔木","aletai":"阿勒泰","wulumuqi":"乌鲁木齐","kashi":"喀什","lasa":"拉萨","linzhi":"林芝","beijing":"北京","tianjin":"天津","shijiazhuang":"石家庄","qinhuangdao":"秦皇岛","chengde":"承德","datong":"大同","taiyuan":"太原","pingyao":"平遥","huhehaote":"呼和浩特","hailaer":"呼伦贝尔","shenyang":"沈阳","dalian":"大连","changchun":"长春","haerbin":"哈尔滨","mohe":"漠河","shanghai":"上海","nanjing":"南京","xuzhou":"徐州","suzhou":"苏州","wuxi":"无锡","changshu":"常熟","yangzhou":"扬州","hangzhou":"杭州","shaoxing":"绍兴","ningbo":"宁波","zhoushan":"舟山","wenzhou":"温州","hefei":"合肥","huangshan":"黄山","fuzhou":"福州","xiamen":"厦门","quanzhou":"泉州","nanchang":"南昌","jingdezhen":"景德镇","ganzhou":"赣州","wuyuan":"婺源","jinan":"济南","qingdao":"青岛","yantai":"烟台","weihai":"威海","qufu":"曲阜","taian":"泰安","zhengzhou":"郑州","xinxiang":"新乡","luoyang":"洛阳","wuhan":"武汉","xiaogan":"孝感","yichang":"宜昌","xiangyang":"襄阳","changsha":"长沙","zhangjiajie":"张家界","yueyang":"岳阳","guangzhou":"广州","foshan":"佛山","shenzhen":"深圳","dongguan":"东莞","zhuhai":"珠海","shaoguan":"韶关","zhanjiang":"湛江","nanning":"南宁","guilin":"桂林","liuzhou":"柳州","beihai":"北海","haikou":"海口","sanya":"三亚","chengdu":"成都","chongqing":"重庆","jiuzhaigou":"九寨沟","daochengyading":"稻城亚丁","kunming":"昆明","dali":"大理","lijiang":"丽江","xianggelila":"香格里拉","jinghong":"西双版纳","guiyang":"贵阳","xianggang":"中国香港","aomen":"中国澳门","taibei":"台北","taizhong":"台中","tainan":"台南","gaoxiong":"高雄","hualian":"花莲","tokyo":"东京","osaka":"大阪","seoul":"首尔","bangkok":"曼谷","singapore":"新加坡","hanoi":"河内","paris":"巴黎","london":"伦敦","rome":"罗马","moscow":"莫斯科","newyork":"纽约","losangeles":"洛杉矶","sydney":"悉尼","auckland":"奥克兰","dubai":"迪拜","istanbul":"伊斯坦布尔","honolulu":"檀香山","sapporo":"札幌","kyoto":"京都","rio":"里约热内卢","buenosaires":"布宜诺斯艾利斯","iguazu":"伊瓜苏","elcalafate":"埃尔卡拉法特","ushuaia":"乌斯怀亚","sanfrancisco":"旧金山","santabarbara":"圣巴巴拉","monterey":"蒙特雷","yosemite":"优胜美地","lasvegas":"拉斯维加斯","grandcanyon":"大峡谷","toronto":"多伦多","vancouver":"温哥华","montreal":"蒙特利尔","mexicocity":"墨西哥城","guanajuato":"瓜纳华托","cancun":"坎昆","merida":"梅里达","petersburg":"圣彼得堡","kazan":"喀山","irkutsk":"伊尔库茨克","vladivostok":"符拉迪沃斯托克","yekaterinburg":"叶卡捷琳堡","murmansk":"摩尔曼斯克","sochi":"索契","kaliningrad":"加里宁格勒","suzdal":"苏兹达尔","nizhnynovgorod":"下诺夫哥罗德","warsaw":"华沙","krakow":"克拉科夫","gdansk":"格但斯克","wroclaw":"弗罗茨瓦夫","poznan":"波兹南","lodz":"罗兹","torun":"托伦","zakopane":"扎科帕内","berlin":"柏林","munich":"慕尼黑","hamburg":"汉堡","cologne":"科隆","dresden":"德累斯顿","heidelberg":"海德堡","nuremberg":"纽伦堡","vienna":"维也纳","salzburg":"萨尔茨堡","hallstatt":"哈尔施塔特","zurich":"苏黎世","interlaken":"因特拉肯","lucerne":"卢塞恩","lyon":"里昂","marseille":"马赛","nice":"尼斯","bordeaux":"波尔多","strasbourg":"斯特拉斯堡","avignon":"阿维尼翁","edinburgh":"爱丁堡","bath":"巴斯","york":"约克","manchester":"曼彻斯特","oxford":"牛津","dublin":"都柏林","galway":"戈尔韦","amsterdam":"阿姆斯特丹","rotterdam":"鹿特丹","thehague":"海牙","bruges":"布鲁日","brussels":"布鲁塞尔","ghent":"根特","prague":"布拉格","krumlov":"克鲁姆洛夫","kutnahora":"库特纳霍拉","budapest":"布达佩斯","eger":"埃格尔","shanwei":"汕尾","changde":"常德"};
   function cityName(id) {
     if (!id) return '—';
     return CITY[id] || id;
@@ -528,30 +627,47 @@
    * 切换用 `history.replaceState` 不重载页面：现在每次切页签都要重输一遍密钥，
    * 那是「分成两页」最容易做歪的地方。
    */
-  var view = /\/all\/?$/.test(location.pathname) ? 'all' : 'live';
+  /*
+   * 三页（2026-11-15 加「本城」）。
+   *
+   * 地址定页的老规矩不变：`/pets` 此刻、`/pets/all` 在册、`/pets/town` 本城。
+   * 三张表放在同一个对象里，是为了加第四页时只改这一处 ——
+   * 上一版是散在 `paint` / `go` / `loadView` 三处各写一遍三元表达式的。
+   */
+  var PATHS = { live: '/pets', all: '/pets/all', town: '/pets/town' };
+  var TITLES = { live: '此刻', all: '在册', town: '本城' };
+  var tabOf = { live: 'tabLive', all: 'tabAll', town: 'tabTown' };
+
+  var view = /\/all\/?$/.test(location.pathname) ? 'all'
+    : /\/town\/?$/.test(location.pathname) ? 'town'
+      : 'live';
 
   function paint() {
     var boxes = document.querySelectorAll('.view');
     for (var i = 0; i < boxes.length; i++) {
       boxes[i].hidden = boxes[i].getAttribute('data-view') !== view;
     }
-    $('tabLive').classList.toggle('on', view === 'live');
-    $('tabAll').classList.toggle('on', view === 'all');
-    document.title = (view === 'live' ? '此刻' : '在册') + ' · 池子里的鱼';
+    for (var k in tabOf) {
+      var el = $(tabOf[k]);
+      if (el) el.classList.toggle('on', k === view);
+    }
+    document.title = (TITLES[view] || '此刻') + ' · 池子里的鱼';
   }
 
   /** 当前这页该拉哪个接口。连上、切页签、点刷新都走它。 */
   function loadView() {
-    return view === 'live' ? loadLive() : load();
+    if (view === 'all') return load();
+    if (view === 'town') return loadTown();
+    return loadLive();
   }
 
   function go(v) {
     if (v === view) return;
     view = v;
-    try { history.replaceState(null, '', v === 'live' ? '/pets' : '/pets/all'); } catch (e) {}
+    try { history.replaceState(null, '', PATHS[v] || '/pets'); } catch (e) {}
     paint();
     if (base) loadView();
-    /* 自动刷新只属于「此刻」那页；切到在册就把它停掉。 */
+    /* 自动刷新只属于「此刻」那页；切走就把它停掉。 */
     schedule();
   }
 
@@ -616,6 +732,152 @@
     });
   }
 
+  /* ------------------------------------------------------------------
+   * 本城（2026-11-15）
+   *
+   * 五个槽位固定渲染，不用「加一条」按钮 —— 城规和街名本来就是几条就几条，
+   * 动态增删行会让这一屏变成一个小表单编辑器，而它只需要改几行字。
+   * 空槽位不提交，服务端会丢掉空串（它自己也会再过滤一遍，两边都拦）。
+   * ------------------------------------------------------------------ */
+
+  /* 每类最多几条。服务端也是 5，两边必须一致 —— 不一致时多的那条会被静默吞掉。 */
+  var SLOTS = 5;
+
+  function slotsHTML(rootId, cls, ph, maxlen) {
+    var box = $(rootId);
+    if (!box) return;
+    var html = '';
+    for (var i = 0; i < SLOTS; i++) {
+      html += '<input class="' + cls + '" type="text" maxlength="' + maxlen
+        + '" placeholder="' + esc(ph) + '">';
+    }
+    box.innerHTML = html;
+  }
+
+  /** 把一份设定填进表单。 */
+  function fillTown(t) {
+    if (!t) return;
+    $('townName').value = t.name || '';
+    $('townId').value = t.id || '';
+    $('townOrigin').value = t.origin || '';
+    fillSlots('townStreets', '.street', t.streets || []);
+    fillSlots('townRules', '.rule', t.rules || []);
+    /*
+     * 没设过的时候要说清楚「这是默认值」。
+     * 不说的话，人会以为早就存过了 —— 然后改城名时以为自己只改了一个字，
+     * 其实把整份默认设定一起落库了。
+     */
+    $('townNote').textContent = t.custom
+      ? '这台服务器设过　·　最后改于 ' + fmtTime(t.at)
+      : '还在用默认值（浅水埠）　·　改完点保存才算设过';
+    $('townMsg').className = 'msg';
+    $('townMsg').textContent = '';
+  }
+
+  function fillSlots(rootId, sel, list) {
+    var box = $(rootId);
+    if (!box) return;
+    var inputs = box.querySelectorAll(sel);
+    for (var i = 0; i < inputs.length; i++) {
+      inputs[i].value = list[i] == null ? '' : String(list[i]);
+    }
+  }
+
+  function readSlots(rootId, sel) {
+    var box = $(rootId);
+    if (!box) return [];
+    var inputs = box.querySelectorAll(sel);
+    var out = [];
+    for (var i = 0; i < inputs.length; i++) {
+      var v = String(inputs[i].value || '').trim();
+      if (v) out.push(v);
+    }
+    return out;
+  }
+
+  function townMsg(kind, text) {
+    var el = $('townMsg');
+    el.className = 'msg ' + (kind || '');
+    el.textContent = text || '';
+  }
+
+  function loadTown() {
+    if (!base) {
+      $('townNote').textContent = '还没连上 —— 点上面的「连上」';
+      return Promise.resolve();
+    }
+    return fetch(base + '/town', { headers: hdr, cache: 'no-store' })
+      .then(function (res) {
+        if (res.status === 401) { showMsg('bad', '密钥不对。'); setMode(false); return null; }
+        if (res.status === 404) {
+          /* 老版 Worker 没有这个口。要说得具体：他需要重新部署，不是重填密钥。 */
+          showMsg('bad', '服务端没有 /admin/town 这个口（404）—— Worker 还是旧版，'
+            + '需要部署带「本城」这一版。');
+          setMode(false);
+          return null;
+        }
+        if (res.status !== 200) { showMsg('bad', '服务返回了 ' + res.status + '。'); setMode(false); return null; }
+        return res.json();
+      })
+      .then(function (data) {
+        if (!data) return;
+        fillTown(data.town);
+        setMode(true);
+        showMsg('ok', '');
+      })
+      .catch(function (err) {
+        var m = err && err.message ? err.message : '请求被浏览器拦下';
+        showMsg('bad', '连不上 ' + base + '：' + m);
+        setMode(false);
+      });
+  }
+
+  function saveTown() {
+    if (!base) { showMsg('bad', '先连上。'); return; }
+    var id = String($('townId').value || '').trim();
+    var name = String($('townName').value || '').trim();
+    var origin = String($('townOrigin').value || '').trim();
+    var streets = readSlots('townStreets', '.street');
+    var rules = readSlots('townRules', '.rule');
+
+    /*
+     * 前端先拦一遍，不是因为不信服务端，是为了**说得出哪里不对**。
+     * 服务端只会回 `bad id` / `bad lists`，那三个字看不出该改什么。
+     */
+    if (!name) { townMsg('bad', '城名不能空。'); return; }
+    if (!/^[a-z0-9_-]{1,40}$/i.test(id)) {
+      townMsg('bad', '城 id 只能用 a-z 0-9 _ -，1–40 位。中文名填在「城名」那一栏。');
+      return;
+    }
+    if (!streets.length) { townMsg('bad', '至少要留一条街 —— 不然她没地方住。'); return; }
+    if (!rules.length) { townMsg('bad', '至少要留一条城规。'); return; }
+
+    var btn = $('townSave');
+    btn.disabled = true; btn.textContent = '存…';
+    fetch(base + '/town', {
+      method: 'POST',
+      headers: Object.assign({ 'content-type': 'application/json' }, hdr),
+      body: JSON.stringify({ id: id, name: name, origin: origin, streets: streets, rules: rules })
+    }).then(function (res) {
+      return res.json().then(function (j) { return { ok: res.ok, status: res.status, body: j }; });
+    }).then(function (r) {
+      if (!r.ok) {
+        throw new Error((r.body && r.body.error) ? r.body.error : String(r.status));
+      }
+      /*
+       * **存完立刻回填一次服务端的结果**，不用本地那份。
+       * 服务端会清洗（脏字、超长、空项），本地认为存进去的和服务端真存下来的
+       * 可能不是同一份 —— 回填一次，屏幕上就是他真正改成的样子。
+       */
+      fillTown(r.body.town);
+      townMsg('ok', '存好了。她下一次开口就用新的城名。');
+    }).catch(function (e) {
+      townMsg('bad', '没存上：' + e.message);
+    }).then(function () {
+      btn.disabled = false; btn.textContent = '保存';
+    });
+  }
+
   function flag(uid, pet, kind) {
     var label = kind === 'ban' ? '封禁' : kind === 'ok' ? '解除' : '请她改名';
     var why = kind === 'ban'
@@ -659,6 +921,14 @@
   $('reload').addEventListener('click', function () { loadView(); });
   $('tabLive').addEventListener('click', function () { go('live'); });
   $('tabAll').addEventListener('click', function () { go('all'); });
+  $('tabTown').addEventListener('click', function () { go('town'); });
+  $('townSave').addEventListener('click', saveTown);
+  /*
+   * 「撤销修改」= 重新拉一次服务端那份。
+   * 不做「填回默认值」：那需要前端再存一份默认值，而默认值只该有服务端那一份 ——
+   * 两份默认值迟早会不一样，然后没人知道哪份才算数。
+   */
+  $('townRevert').addEventListener('click', function () { loadTown(); });
   $('auto').addEventListener('change', schedule);
   keyIn.addEventListener('keydown', function (e) { if (e.key === 'Enter') connect(); });
   if (findIn) findIn.addEventListener('input', function () { render(allPets); });
@@ -682,7 +952,11 @@
    */
   if (!urlIn.value && /^https?:/.test(location.protocol)) urlIn.value = location.origin;
 
-  /* 进来先按地址定页：`/pets/all` 直接落在「在册」上。 */
+  /* 五个槽位先建出来，内容等连上之后由 fillTown 填。 */
+  slotsHTML('townStreets', 'street', '街名（空的不用）', 12);
+  slotsHTML('townRules', 'rule', '城规（空的不用）', 60);
+
+  /* 进来先按地址定页：`/pets/all` 落在「在册」、`/pets/town` 落在「本城」。 */
   paint();
 })();
 </script>

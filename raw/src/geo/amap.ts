@@ -63,6 +63,15 @@ const CACHE_TTL_MS = 3 * 3_600_000;
 const MIN_GAP_MS = 1_100;
 /** 单次请求超时。天气查不到不值得让旅行等一下。 */
 const TIMEOUT_MS = 6_000;
+/**
+ * Open-Meteo 单独一套超时，**比高德宽一倍**（2026-11-17 实测）。
+ *
+ * 裸连一次 `api.open-meteo.com` 在国内要 3.7 秒左右；宿主那边的 fetch 走系统代理
+ * （日志里能看到 `PROXY 127.0.0.1:7897`），叠上去很容易顶穿 6 秒。
+ * 顶穿的表现不是报错，是**静默返回 null** —— 于是「不填 key 也该有天气」这句话
+ * 在用户机器上从来没有兑现过，而日志里一个字都没有。
+ */
+const OM_TIMEOUT_MS = 12_000;
 
 const WEATHER_URL = 'https://restapi.amap.com/v3/weather/weatherInfo';
 
@@ -167,8 +176,24 @@ export class AmapWeather {
       }
     }
     const fresh = await this.fetchCity(city);
-    if (!fresh) return null;
-    return exactOrNull(fresh, dateKey, city, () => this.noteOutOfRange());
+    const exact = fresh?.find((c) => c.dateKey === dateKey) ?? null;
+    if (exact) return exact;
+    /*
+     * **有 key 不等于有天气**（2026-11-17 修）。
+     *
+     * 原来这里只有 `if (!fresh) return null` —— 高德限流（CUQPS）、城市名查不到、
+     * 网络抽风、或者窗口里没有这一天，全都直接判死。而 `disabledReason` 只在
+     * 「key 无效」时才置位，限流不置 —— 于是每一轮巡检都先撞一次高德、每次失败、
+     * 永远轮不到 Open-Meteo。用户看到的就是「填了 key 反而没天气」。
+     *
+     * 现在：高德这条路这一次没给出答案，就立刻落到 Open-Meteo 再试一次。
+     * 两条都空才认输（「查不到」比「拿错日子的天气」诚实，见 `exactOrNull`）。
+     */
+    const alt = await this.viaOpenMeteo(city, dateKey).catch(() => null);
+    if (alt) return alt;
+    /* 高德确实回了数据、只是没有这一天 → 这才叫超窗。 */
+    if (fresh) this.noteOutOfRange();
+    return null;
   }
 
   private fetchCity(city: City): Promise<readonly Forecast[] | null> {
@@ -250,8 +275,17 @@ export class AmapWeather {
         return null;
       }
     }
-    const casts = await this.throttle(async () => fetchOpenMeteo(city));
-    if (!casts) return null;
+    const casts = await this.throttle(async () => fetchOpenMeteo(city, OM_TIMEOUT_MS));
+    if (!casts) {
+      /*
+       * **不能静默**（2026-11-17）。这条路上失败原来是 `catch { return null }`，
+       * 于是「没天气」在日志里没有任何痕迹 —— 面板那盏灯只能笼统说「上次没查到」，
+       * 而真正的原因（超时 / 被代理挡住 / DNS）全丢了。
+       * 一次失败一行，不刷屏：本来三小时才查一次。
+       */
+      this.log('warn', 'Open-Meteo 这次没查回来（超时 / 没网 / 被代理挡住），这次按未知处理。');
+      return null;
+    }
     this.cache.set(key, { cityName: city.name, fetchedAt: Date.now(), casts });
     this.saveCache();
     return exactOrNull(casts, dateKey, city, () => this.noteOutOfRange());
@@ -390,17 +424,28 @@ const OPEN_METEO_URL = 'https://api.open-meteo.com/v1/forecast';
  * 免费额度是每月三十万次（非商业），这个扩展一天最多查几次，
  * 一辈子也用不完。但仍然走缓存：同一城市三小时内只查一次。
  */
-export async function fetchOpenMeteo(city: City): Promise<readonly Forecast[] | null> {
+export async function fetchOpenMeteo(
+  city: City,
+  timeoutMs = OM_TIMEOUT_MS,
+): Promise<readonly Forecast[] | null> {
   const params = new URLSearchParams({
     latitude: String(city.lat),
     longitude: String(city.lon),
     daily: 'weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,wind_speed_10m_max',
     timezone: 'auto',
-    forecast_days: '4',
+    /*
+     * 16 天是 Open-Meteo 免费档的上限（2026-11-17 由 4 改）。
+     *
+     * 4 天太窄：世界时钟在倍速下跑得比真实快，缓存三小时内只查一次，
+     * 一次跨两三天就出了窗口 —— 表现是「昨天还有天气，今天忽然没了」，
+     * 而面板上那句解释（超窗）看着像在怪用户调了倍速。给满上限，同样的缓存
+     * 策略能盖住四倍的天数。
+     */
+    forecast_days: '16',
   });
   try {
     const res = await fetch(`${OPEN_METEO_URL}?${params}`, {
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
       headers: { 'User-Agent': 'coopani-world-journey (desktop companion)' },
     });
     if (!res.ok) return null;
