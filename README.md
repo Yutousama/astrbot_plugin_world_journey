@@ -9,7 +9,7 @@
 raw/          上游 coopani-world-journey 源码（只读基线，当前 1.8.0）
 adapter/      TypeScript 套壳：宿主、配置、事件、媒体、提示词、生图提示词、HTTP、模拟
 scripts/      构建、部署、npm 源码更新、校验
-test/         92 项测试
+test/         92 项 TS 测试 + test/python 的 profile_scope 单测
 docs/         架构与上游更新文档（本地目录，.gitignore 排除，不提交到本仓库）
 plugin/       本地构建/联调目录（.gitignore 排除，不提交到本仓库）
 ```
@@ -39,6 +39,7 @@ git clone https://github.com/Yutousama/astrbot_plugin_world_journey_release.git 
   plugin/astrbot_plugin_world_journey
 npm install
 npm run check
+npm run test:py       # profile_scope 归属判断单测（Python 3.10+，不依赖 AstrBot）
 npm run build
 ```
 
@@ -160,7 +161,7 @@ SWC/WASM loader，`raw/` 仍是磁盘上的 TS，热更新不受影响）。具�
 - `engine/photos.json` + `engine/media/`：照片
 - `engine/events.jsonl`：事件流
 - `engine-config.json`：AstrBot 配置映射结果
-- `plugin_state.json`：last_seq / last_umo / event_log_id
+- `plugin_state.json`：last_seq / last_umo / event_log_id / owner_profile（所属 AstrBot 配置文件）
 - `logs/sidecar.log`：sidecar 日志
 
 `memory_dir` 留空时日记/记忆在 `engine/diary`；填同步盘则跟人走，`state.json` 仍只在本机。
@@ -169,6 +170,8 @@ SWC/WASM loader，`raw/` 仍是磁盘上的 TS，热更新不受影响）。具�
 
 - 需要 Node 22.7+（22.7–25.x 原生转换；26+ 自动走内置 `engine/amaro`）；没有 Node 时插件会明确报错（可配 `node_path`）。
 - 主动消息默认关闭；需要配置 `event_target` 或先和机器人说话，再打开。
+- **AstrBot 多配置文件**：一个 AstrBot 进程只跑一个旅行，只归属一份配置文件（`event_target` 所在配置，
+  或 `bound_profile` 指定）；其它配置文件不注入、不响应、不主动发消息。两个配置都要独立旅行请开两个实例。
 - `raw/` 的立绘动作/音乐扩展联动不适用于 AstrBot；提示词会剥掉动作段。
 - 上游私有 `tick` 只用于模拟；上游改了它只影响模拟，不影响插件运行。
 - 运行时更新只更新**上游源码**；本套壳/Python 代码仍随插件版本更新。

@@ -1,5 +1,68 @@
 # 更新日志
 
+## 未发布 — 修复 AstrBot 多配置文件越权（版本号不动）
+
+### 症状
+
+AstrBot WebUI 可以有多份「配置文件」（`data/config/abconf_*.json`，例如 `Sion`、`Sion_public`）。
+多配置下，本插件的旅行动态会被注入到所有配置，且在某个配置里禁用本插件也不生效 ——
+所有配置共享同一个旅行状态。
+
+### 根因
+
+| # | 根因 | 位置 |
+|---|---|---|
+| 1 | 插件在 AstrBot 进程里是单例：一份 `bridge`、一份 sidecar、一份 `plugin_state.json`、一个 `EventPump`、一个自动日记任务；配置文件只是 AstrBot 的运行配置，插件从没读过它 | `main.py` 的 `__init__` / `_start_pump` / `_diary_notify_target` |
+| 2 | `access_scope` 只比 UMO 字符串，没有「当前事件属于哪份 AstrBot 配置文件」的概念 | `main.py:_access_ok`、`access.py` |
+| 3 | AstrBot 的「在配置里禁用插件」写的是该配置的 `plugin_set`；插件没读，无法在 hook 旁路/`["*"]` 配置/旧版本上兜底 | `event.plugins_name` 仅覆盖部分路径 |
+| 4 | 配置文件保存只重建 pipeline scheduler，不重载插件；只在 `initialize` 检查一次 `enabled` 不够 | `core/dashboard/services/config_service.py` |
+
+补充：AstrBot 4.29.4 的 `call_event_hook` 会按 `event.plugins_name` 过滤 hook，但该字段在
+`plugin_set == ["*"]` 时为 None，且旧版本/旁路不保证过滤；插件不能把自己的隔离完全建立在宿主过滤上。
+
+### 修复
+
+- 新增 `plugin/astrbot_plugin_world_journey/profile_scope.py`：按
+  `bound_profile` → `event_target` 所在配置 → 已记住的 owner → 第一个合格会话认领 的顺序，
+  确定唯一 owner 配置文件；`plugin_set` 不含本插件、`bound_profile` 写错时 fail closed。
+- `main.py` 所有入口（`on_llm_request` hook、命令、LLM 工具、主动消息、自动日记、日记/汇报推送目标）
+  统一走 owner + `plugin_set` + `access_scope` 闸；归属之外的配置不注入、不响应、不发消息。
+- 新增配置项【基本】手动指定归属的 AstrBot 配置文件 (`bound_profile`，位于「启用旅行引擎」下面）：
+  - 配置页用**下拉菜单**选择当前 AstrBot 的配置文件（列表在插件加载/重载时生成，不会手填错）；
+  - 选「自动」→ 按 `event_target` / 已记住的归属判断；
+  - 选「重新自动判定」→ 清除 `plugin_state.json` 里记住的归属后重新判定；
+  - 仍支持手填配置文件名 / ID（旧配置和命令行/改文件场景）。
+- `/journey_debug` 增加「可填的配置文件」列表；归属无效时启动日志也会列出可填项。
+- `EventPump` 的 `enabled` 支持动态 callable：归属配置禁用/重新启用本插件时，不用重载插件即可停/启。
+- 自动日记改用 owner 配置的 LLM provider（传 owner 的 UMO），不再用默认配置的模型/人格。
+- `/journey_debug` 增加当前配置文件、插件归属配置文件、归属来源、`plugin_set` 是否启用、`bound_profile`。
+
+### 升级须知
+
+- **行为变化**：`access_scope=all` 从「所有配置的所有会话」收窄为「owner 配置文件内的所有会话」。
+- 配了 `event_target` 就会把 owner 固定到该会话所在配置；没有 `event_target`/`bound_profile` 时，
+  第一个通过控制范围且启用了本插件的配置会认领（日志会提示）。想固定请填 `bound_profile`。
+- 一个 AstrBot 进程仍只有一个旅行；两个配置各跑各的请用两个 AstrBot 实例（各自一份 `plugin_data`）。
+- `plugin_state.json` 新增 `owner_profile` 键；旧文件读取为空，零迁移；旧版本代码会忽略这个多出来的键。
+- 不碰 `raw/`，不改命令名/工具名，不升 `package.json` / `metadata.yaml` 版本。
+
+### 交付校验
+
+- Python：`profile_scope` 单测 26 项通过（`python -m unittest discover -s test/python -p "test_*.py"`）；
+  插件全部 `.py` 文件 `python -m py_compile` 通过。
+- TS：`npm run check` 退出 0（typecheck + 92 项测试 0 失败 + `upstream:check`）。
+- 真实配置验证：从本机 `abconf_mapping` / `umop_config_routing` 读取 Sion / Sion_public / 默认配置，进程内验证：
+  - `event_target = Sion:FriendMessage:583819556` → owner = `Sion`（`abconf_8d99....json`）；
+  - 同属 Sion 的群会话：`access_scope=target` 下拒绝、`all` 下允许；
+  - `Sion_public` / 默认配置的会话 → `other_profile` 拒绝，不触发注入；
+  - `bound_profile` 写不存在 → `bound_unresolved` fail closed；
+  - 未配 `event_target`/`bound_profile` → 第一个合格会话认领 Sion 并写入 `owner_profile`。
+- `git diff -- raw` 为空（开发仓库与发布仓库都没有 `raw/` 改动）。
+- 本机 AstrBot 已通过 API 重载插件：v1.0.9 加载成功，sidecar 就绪，25 个工具注册；
+  日志显示归属配置文件 = `Sion`。配置接口实测 `bound_profile` 位于 `enabled` 之后（【基本】组），
+  返回 10 个下拉项（自动 / 重新自动判定 + 8 个 AstrBot 配置文件），配置文件里已插入默认空值。
+  本机实例的 `raw/` 仍是 `/journey_update` 升过的 1.12.16，未被本次安装覆盖。
+
 ## v1.0.9 修订 — 2026-11-15（四处改动，版本号按用户要求不动）
 
 1.0.9 发布之后当天陆续落地的四处改动收在这里。**`package.json`、`metadata.yaml`、
